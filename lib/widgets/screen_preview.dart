@@ -3,6 +3,12 @@ import 'package:flutter/services.dart';
 import '../services/file_service.dart';
 import 'cursor_theme.dart';
 
+enum DeviceType {
+  mobile,
+  tablet,
+  web,
+}
+
 class ScreenPreview extends StatefulWidget {
   final String filePath;
 
@@ -16,6 +22,10 @@ class _ScreenPreviewState extends State<ScreenPreview> {
   String? _fileContent;
   bool _isLoading = true;
   String? _error;
+  DeviceType _deviceType = DeviceType.mobile;
+  Offset _position = const Offset(0, 0);
+  double _scale = 1.0;
+  Offset _lastPanUpdate = Offset.zero;
 
   @override
   void initState() {
@@ -40,92 +50,236 @@ class _ScreenPreviewState extends State<ScreenPreview> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(20),
-      child: Container(
-        width: MediaQuery.of(context).size.width * 0.9,
-        height: MediaQuery.of(context).size.height * 0.9,
-        decoration: BoxDecoration(
-          color: CursorTheme.surface,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: CursorTheme.explorerBackground,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(12),
-                  topRight: Radius.circular(12),
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.phone_android, color: CursorTheme.primary, size: 20),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Vista Previa: ${widget.filePath.split('/').last}',
-                      style: const TextStyle(
-                        color: CursorTheme.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
+      insetPadding: EdgeInsets.zero,
+      child: GestureDetector(
+        onTap: () {}, // Prevenir cierre al tocar fuera
+        child: Container(
+          width: screenSize.width,
+          height: screenSize.height,
+          color: Colors.black.withOpacity(0.7),
+          child: Center(
+            child: GestureDetector(
+              onTap: () {}, // Prevenir propagación
+              child: Transform.scale(
+                scale: _scale,
+                child: Transform.translate(
+                  offset: _position,
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxWidth: screenSize.width * 0.95,
+                      maxHeight: screenSize.height * 0.95,
+                    ),
+                    decoration: BoxDecoration(
+                      color: CursorTheme.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.5),
+                          blurRadius: 20,
+                          spreadRadius: 5,
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Header movible
+                        GestureDetector(
+                          onPanUpdate: (details) {
+                            setState(() {
+                              _position += details.delta;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: CursorTheme.explorerBackground,
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(12),
+                                topRight: Radius.circular(12),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.phone_android, color: CursorTheme.primary, size: 18),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'Vista Previa: ${widget.filePath.split('/').last}',
+                                    style: const TextStyle(
+                                      color: CursorTheme.textPrimary,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                // Selector de dispositivo
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  decoration: BoxDecoration(
+                                    color: CursorTheme.surface,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: CursorTheme.border),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _buildDeviceButton(DeviceType.mobile, Icons.phone_android),
+                                      _buildDeviceButton(DeviceType.tablet, Icons.tablet),
+                                      _buildDeviceButton(DeviceType.web, Icons.laptop),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                // Botones de zoom
+                                IconButton(
+                                  icon: const Icon(Icons.zoom_out, size: 16),
+                                  color: CursorTheme.textSecondary,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                  onPressed: () {
+                                    setState(() {
+                                      _scale = (_scale - 0.1).clamp(0.5, 2.0);
+                                    });
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.zoom_in, size: 16),
+                                  color: CursorTheme.textSecondary,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                  onPressed: () {
+                                    setState(() {
+                                      _scale = (_scale + 0.1).clamp(0.5, 2.0);
+                                    });
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.close, size: 18),
+                                  color: CursorTheme.textSecondary,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                  onPressed: () => Navigator.of(context).pop(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Content
+                        Flexible(
+                          child: Container(
+                            constraints: BoxConstraints(
+                              maxWidth: _getDeviceWidth(),
+                              maxHeight: _getDeviceHeight(),
+                            ),
+                            child: _isLoading
+                                ? const Center(child: CircularProgressIndicator())
+                                : _error != null
+                                    ? Center(
+                                        child: Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                                            const SizedBox(height: 16),
+                                            const Text(
+                                              'Error al cargar archivo',
+                                              style: TextStyle(color: CursorTheme.textPrimary, fontSize: 16),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              _error!,
+                                              style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : _buildPreview(),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20),
-                    color: CursorTheme.textSecondary,
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
+                ),
               ),
             ),
-            // Content
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _error != null
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                              const SizedBox(height: 16),
-                              Text(
-                                'Error al cargar archivo',
-                                style: const TextStyle(color: CursorTheme.textPrimary, fontSize: 16),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _error!,
-                                style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        )
-                      : _buildPreview(),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
+  Widget _buildDeviceButton(DeviceType type, IconData icon) {
+    final isSelected = _deviceType == type;
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _deviceType = type;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: isSelected ? CursorTheme.primary.withOpacity(0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(
+          icon,
+          size: 16,
+          color: isSelected ? CursorTheme.primary : CursorTheme.textSecondary,
+        ),
+      ),
+    );
+  }
+
+  double _getDeviceWidth() {
+    switch (_deviceType) {
+      case DeviceType.mobile:
+        return 375;
+      case DeviceType.tablet:
+        return 768;
+      case DeviceType.web:
+        return 1200;
+    }
+  }
+
+  double _getDeviceHeight() {
+    switch (_deviceType) {
+      case DeviceType.mobile:
+        return 812;
+      case DeviceType.tablet:
+        return 1024;
+      case DeviceType.web:
+        return 800;
+    }
+  }
+
   Widget _buildPreview() {
-    // Frame de dispositivo móvil
+    final deviceWidth = _getDeviceWidth();
+    final deviceHeight = _getDeviceHeight();
+    
+    // Frame de dispositivo
     return Center(
       child: Container(
-        width: 400,
-        height: 800,
+        width: deviceWidth,
+        height: deviceHeight,
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1E1E),
-          borderRadius: BorderRadius.circular(40),
-          border: Border.all(color: Colors.grey[800]!, width: 12),
+          color: _deviceType == DeviceType.mobile 
+              ? const Color(0xFF1E1E1E)
+              : const Color(0xFF2D2D2D),
+          borderRadius: _deviceType == DeviceType.mobile
+              ? BorderRadius.circular(40)
+              : BorderRadius.circular(12),
+          border: Border.all(
+            color: _deviceType == DeviceType.mobile 
+                ? Colors.grey[800]! 
+                : Colors.grey[700]!,
+            width: _deviceType == DeviceType.mobile ? 12 : 2,
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.5),
@@ -135,9 +289,11 @@ class _ScreenPreviewState extends State<ScreenPreview> {
           ],
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: _deviceType == DeviceType.mobile
+              ? BorderRadius.circular(28)
+              : BorderRadius.circular(10),
           child: Container(
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               color: Colors.white,
             ),
             child: _buildScreenContent(),
