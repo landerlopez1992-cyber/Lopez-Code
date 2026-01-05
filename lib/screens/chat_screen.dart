@@ -382,6 +382,14 @@ $projectContext
     );
   }
 
+  void _runForPlatform(String platform) {
+    // Mostrar panel de consola
+    setState(() {
+      _showRunDebugPanel = true;
+    });
+    // El panel manejará la ejecución cuando el usuario presione "Ejecutar"
+  }
+
   Future<void> _onFileDelete(String path) async {
     try {
       final file = File(path);
@@ -735,8 +743,8 @@ $projectContext
             ),
           ],
           Expanded(
-                  child: Column(
-                    children: [
+            child: Column(
+              children: [
                 Expanded(
                   child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
                 ),
@@ -745,14 +753,14 @@ $projectContext
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     color: CursorTheme.surface,
                     child: Row(
-                          children: [
-                            if (_selectedImages.isNotEmpty)
+                      children: [
+                        if (_selectedImages.isNotEmpty)
                           Text('${_selectedImages.length} imagen(es)', style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                            if (_selectedFilePath != null)
+                        if (_selectedFilePath != null)
                           Text(_selectedFilePath!.split('/').last, style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                                  ],
-                                ),
-                              ),
+                      ],
+                    ),
+                  ),
                 CursorChatInput(
                   controller: _messageController,
                   onSend: _sendMessage,
@@ -761,30 +769,27 @@ $projectContext
                   isLoading: _isLoading,
                   placeholder: 'Plan, @ for context, / for commands',
                 ),
-                      ],
-                    ),
-                  ),
-                if (_showRunDebugPanel) ...[
-                  Container(
-                    width: 4,
-                    color: CursorTheme.border,
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeColumn,
-                      child: GestureDetector(
-                        onHorizontalDragUpdate: (details) {
-                          // Redimensionar panel (opcional)
-                        },
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 400,
-                    child: RunDebugPanel(),
-                  ),
-                ],
               ],
             ),
           ),
+          if (_showRunDebugPanel) ...[
+            Container(
+              width: 4,
+              color: CursorTheme.border,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: GestureDetector(
+                  onHorizontalDragUpdate: (details) {
+                    // Redimensionar panel (opcional)
+                  },
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 400,
+              child: RunDebugPanel(),
+            ),
+          ],
         ],
       ),
     );
