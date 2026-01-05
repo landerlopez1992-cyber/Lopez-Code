@@ -369,52 +369,97 @@ $projectContext
             itemCount: _messages.length + (_isLoading ? 1 : 0),
             itemBuilder: (context, index) {
               if (index == _messages.length) {
-          // Tarjeta compacta para "pensando"
+                // Tarjeta compacta para "pensando" o "trabajando con archivos"
                 return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                CircleAvatar(
-                  radius: 12,
-                  backgroundColor: const Color(0xFF007ACC),
-                  child: const Icon(Icons.smart_toy, size: 14, color: Colors.white),
-                ),
-                const SizedBox(width: 8),
-                  Container(
-                  constraints: const BoxConstraints(maxWidth: 300),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                    color: CursorTheme.assistantMessageBg,
-                      borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: CursorTheme.assistantMessageBorder, width: 1),
-                  ),
+                  padding: const EdgeInsets.only(bottom: 12),
                   child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(const Color(0xFF007ACC)),
-                        ),
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      CircleAvatar(
+                        radius: 12,
+                        backgroundColor: const Color(0xFF007ACC),
+                        child: const Icon(Icons.smart_toy, size: 14, color: Colors.white),
                       ),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          _loadingStatus.isNotEmpty ? _loadingStatus : 'Pensando...',
-                          style: const TextStyle(color: CursorTheme.textPrimary, fontSize: 13),
+                      const SizedBox(width: 8),
+                      Container(
+                        constraints: const BoxConstraints(maxWidth: 400),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: CursorTheme.assistantMessageBg,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: CursorTheme.assistantMessageBorder, width: 1),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _loadingStatus.isNotEmpty ? _loadingStatus : 'Pensando...',
+                                    style: const TextStyle(color: CursorTheme.textPrimary, fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            // Mostrar operación de archivo si existe
+                            if (_currentFileOperation != null && _currentFilePath != null) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: CursorTheme.surface,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: const Color(0xFF007ACC).withOpacity(0.3), width: 1),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _currentFileOperation == 'creando' 
+                                        ? Icons.add_circle_outline 
+                                        : _currentFileOperation == 'editando'
+                                          ? Icons.edit_outlined
+                                          : Icons.description_outlined,
+                                      size: 14,
+                                      color: const Color(0xFF007ACC),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Flexible(
+                                      child: Text(
+                                        '${_currentFileOperation == 'creando' ? 'Creando' : _currentFileOperation == 'editando' ? 'Editando' : 'Leyendo'}: ${_currentFilePath!.split('/').last}',
+                                        style: const TextStyle(
+                                          color: CursorTheme.textPrimary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     ],
                   ),
-                ),
-              ],
-            ),
-          );
-        }
+                );
+              }
         return MessageBubble(message: _messages[index]);
       },
     );
