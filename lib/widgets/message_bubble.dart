@@ -230,8 +230,34 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
     final code = element.textContent;
     final language = element.attributes['class']?.replaceAll('language-', '') ?? '';
 
+    return _CompactCodeBlock(code: code, language: language);
+  }
+}
+
+class _CompactCodeBlock extends StatefulWidget {
+  final String code;
+  final String language;
+
+  const _CompactCodeBlock({
+    required this.code,
+    required this.language,
+  });
+
+  @override
+  State<_CompactCodeBlock> createState() => _CompactCodeBlockState();
+}
+
+class _CompactCodeBlockState extends State<_CompactCodeBlock> {
+  bool _isExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = widget.code.split('\n');
+    final previewLines = lines.take(3).join('\n');
+    final hasMore = lines.length > 3;
+
     return Container(
-      margin: const EdgeInsets.only(top: 12, bottom: 8),
+      margin: const EdgeInsets.only(top: 8, bottom: 8),
       decoration: BoxDecoration(
         color: CursorTheme.codeBackground,
         borderRadius: BorderRadius.circular(6),
@@ -242,11 +268,17 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Header del bloque de código
-          if (language.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          // Header compacto
+          InkWell(
+            onTap: () {
+              setState(() {
+                _isExpanded = !_isExpanded;
+              });
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: CursorTheme.surface,
                 borderRadius: const BorderRadius.only(
@@ -259,33 +291,68 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
               ),
               child: Row(
                 children: [
-                  Text(
-                    language.toUpperCase(),
-                    style: const TextStyle(
-                      color: CursorTheme.textSecondary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
+                  Icon(
+                    _isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                    size: 14,
+                    color: CursorTheme.textSecondary,
+                  ),
+                  const SizedBox(width: 6),
+                  if (widget.language.isNotEmpty)
+                    Text(
+                      widget.language.toUpperCase(),
+                      style: const TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  if (widget.language.isNotEmpty) const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${lines.length} líneas',
+                      style: const TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 10,
+                      ),
                     ),
                   ),
-                  const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.copy, size: 14),
+                    icon: const Icon(Icons.copy, size: 12),
                     color: CursorTheme.textSecondary,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                    constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                     onPressed: () {
-                      Clipboard.setData(ClipboardData(text: code));
+                      Clipboard.setData(ClipboardData(text: widget.code));
                     },
                     tooltip: 'Copiar',
                   ),
                 ],
               ),
             ),
-          // Contenido del código
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: CodeViewer(code: code, language: language),
+          ),
+          // Contenido - compacto o expandido
+          AnimatedCrossFade(
+            firstChild: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                previewLines,
+                style: const TextStyle(
+                  color: CursorTheme.codeText,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  height: 1.4,
+                ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            secondChild: Padding(
+              padding: const EdgeInsets.all(8),
+              child: CodeViewer(code: widget.code, language: widget.language),
+            ),
+            crossFadeState: _isExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 200),
           ),
         ],
       ),
