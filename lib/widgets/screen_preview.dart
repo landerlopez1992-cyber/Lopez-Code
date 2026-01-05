@@ -303,7 +303,7 @@ class _ScreenPreviewState extends State<ScreenPreview> {
       );
     }
 
-    // Analizar el código para extraer información básica
+    // Analizar el código para extraer información básica y construir preview visual
     final content = _fileContent!;
     
     // Detectar si es un StatelessWidget o StatefulWidget
@@ -317,58 +317,18 @@ class _ScreenPreviewState extends State<ScreenPreview> {
       widgetName = nameMatch.group(1);
     }
 
-    // Mostrar una vista previa simple basada en el código
+    // Construir preview visual basado en el código
     return Container(
       color: Colors.white,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Información del widget
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widgetName ?? 'Widget',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    isStateful ? 'StatefulWidget' : (isStateless ? 'StatelessWidget' : 'Widget'),
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            // Vista previa básica - mostrar elementos comunes
-            if (content.contains('Scaffold'))
-              _buildScaffoldPreview(content)
-            else if (content.contains('Container'))
-              _buildContainerPreview(content)
-            else if (content.contains('Column'))
-              _buildColumnPreview(content)
-            else if (content.contains('Row'))
-              _buildRowPreview(content)
-            else
-              _buildDefaultPreview(content),
-          ],
-        ),
-      ),
+      child: content.contains('Scaffold')
+          ? _buildScaffoldPreview(content)
+          : content.contains('Container')
+              ? _buildContainerPreview(content)
+              : content.contains('Column')
+                  ? _buildColumnPreview(content)
+                  : content.contains('Row')
+                      ? _buildRowPreview(content)
+                      : _buildDefaultPreview(content),
     );
   }
 
@@ -458,6 +418,73 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     );
   }
 
+  Widget _buildVisualPreview(String content) {
+    // Intentar extraer widgets y texto del código para mostrar una preview visual
+    final widgets = <Widget>[];
+    
+    // Buscar Text widgets
+    final textPattern = RegExp(r'Text\([\'"]([^\'"]+)[\'"]\)');
+    final textMatches = textPattern.allMatches(content);
+    for (var match in textMatches) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            match.group(1) ?? '',
+            style: const TextStyle(fontSize: 16, color: Colors.black87),
+          ),
+        ),
+      );
+    }
+    
+    // Buscar ElevatedButton/TextButton
+    final buttonPattern = RegExp(r'(ElevatedButton|TextButton)\([^)]*child:\s*Text\([\'"]([^\'"]+)[\'"]\)');
+    final buttonMatches = buttonPattern.allMatches(content);
+    for (var match in buttonMatches) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: ElevatedButton(
+            onPressed: () {},
+            child: Text(match.group(2) ?? 'Button'),
+          ),
+        ),
+      );
+    }
+    
+    // Buscar AppBar title
+    final appBarTitlePattern = RegExp(r'appBar:.*?title:\s*Text\([\'"]([^\'"]+)[\'"]\)');
+    final appBarMatch = appBarTitlePattern.firstMatch(content);
+    
+    if (widgets.isEmpty && appBarMatch == null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.phone_android, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              widget.filePath.split('/').last,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Vista previa visual',
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: widgets,
+      ),
+    );
+  }
+
   Widget _buildContainerPreview(String content) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -466,10 +493,7 @@ class _ScreenPreviewState extends State<ScreenPreview> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.grey[300]!),
       ),
-      child: const Text(
-        'Container Widget',
-        style: TextStyle(color: Colors.black87),
-      ),
+      child: _buildVisualPreview(content),
     );
   }
 
