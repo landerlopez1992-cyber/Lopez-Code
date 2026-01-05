@@ -30,6 +30,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Message> _messages = [];
   bool _isLoading = false;
   String _loadingStatus = '';
+  String? _currentFileOperation; // 'creando', 'editando', 'leyendo'
+  String? _currentFilePath;
   OpenAIService? _openAIService;
   List<String> _selectedImages = [];
   String? _selectedFilePath;
@@ -49,14 +51,16 @@ class _ChatScreenState extends State<ChatScreen> {
     // Resetear estado cuando cambia el proyecto
     final projectPath = widget.projectPath ?? await ProjectService.getProjectPath();
     if (_lastProjectPath != projectPath) {
-      setState(() {
-        _messages.clear();
-        _isLoading = false;
-        _loadingStatus = '';
-        _selectedImages.clear();
-        _selectedFilePath = null;
+    setState(() {
+      _messages.clear();
+      _isLoading = false;
+      _loadingStatus = '';
+        _currentFileOperation = null;
+        _currentFilePath = null;
+      _selectedImages.clear();
+      _selectedFilePath = null;
       });
-      _lastProjectPath = projectPath;
+    _lastProjectPath = projectPath;
     }
     
     // Cargar API key y reinicializar servicio
@@ -117,8 +121,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if ((!hasText && !hasImages) || _isLoading) return;
     
     if (_openAIService == null) {
-      try {
-        await _loadOpenAIService();
+        try {
+          await _loadOpenAIService();
         if (_openAIService == null) {
           _openSettings();
           return;
@@ -142,7 +146,7 @@ class _ChatScreenState extends State<ChatScreen> {
     
     final imagesToSend = List<String>.from(_selectedImages);
     final filePathToSend = _selectedFilePath;
-    
+
     final userMessage = _messageController.text.trim().isEmpty 
         ? (hasImages ? 'Analiza esta imagen y describe lo que ves' : '')
         : _messageController.text.trim();
@@ -198,16 +202,16 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
 
-      final conversationHistory = _messages.map((msg) {
-        return {
-          'role': msg.role,
-          'content': msg.content,
-        };
-      }).toList();
+        final conversationHistory = _messages.map((msg) {
+          return {
+            'role': msg.role,
+            'content': msg.content,
+          };
+        }).toList();
 
-      String enhancedMessage = userMessage;
-      if (projectContext.isNotEmpty) {
-        enhancedMessage = '''
+        String enhancedMessage = userMessage;
+        if (projectContext.isNotEmpty) {
+          enhancedMessage = '''
 $userMessage
 
 --- CONTEXTO DEL PROYECTO ---
@@ -218,17 +222,26 @@ $projectContext
 
 ⚠️ ACTÚA DIRECTAMENTE - Proporciona código completo cuando se solicite.
 ''';
-      }
+        }
 
       final projectPath = widget.projectPath ?? await ProjectService.getProjectPath();
       
       final response = await _openAIService!.sendMessage(
-        message: enhancedMessage,
+          message: enhancedMessage,
         imagePaths: imagesToSend.isNotEmpty ? imagesToSend : null,
-        conversationHistory: conversationHistory,
-        fileContent: fileContent,
-        systemPrompt: systemPrompt.isNotEmpty ? systemPrompt : null,
+          conversationHistory: conversationHistory,
+          fileContent: fileContent,
+          systemPrompt: systemPrompt.isNotEmpty ? systemPrompt : null,
         projectPath: projectPath, // CRÍTICO: Necesario para Function Calling
+        onFileOperation: (operation, filePath) {
+          // Actualizar estado cuando se ejecuta una operación de archivo
+          if (mounted) {
+      setState(() {
+              _currentFileOperation = operation;
+              _currentFilePath = filePath;
+      });
+          }
+        },
       );
 
       final assistantMsg = Message(
@@ -241,6 +254,8 @@ $projectContext
         _messages.add(assistantMsg);
         _isLoading = false;
         _loadingStatus = '';
+        _currentFileOperation = null;
+        _currentFilePath = null;
       });
 
       await _saveConversation();
@@ -249,6 +264,8 @@ $projectContext
       setState(() {
         _isLoading = false;
         _loadingStatus = '';
+        _currentFileOperation = null;
+        _currentFilePath = null;
       });
 
       if (mounted) {
@@ -296,7 +313,7 @@ $projectContext
     try {
       final result = await FilePicker.platform.pickFiles();
       if (result != null && result.files.single.path != null) {
-        setState(() {
+      setState(() {
           _selectedFilePath = result.files.single.path!;
         });
       }
@@ -347,35 +364,35 @@ $projectContext
     });
     
     return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(16),
-      itemCount: _messages.length + (_isLoading ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == _messages.length) {
+            controller: _scrollController,
+            padding: const EdgeInsets.all(16),
+            itemCount: _messages.length + (_isLoading ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == _messages.length) {
           // Tarjeta compacta para "pensando"
-          return Padding(
+                return Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                 CircleAvatar(
                   radius: 12,
                   backgroundColor: const Color(0xFF007ACC),
                   child: const Icon(Icons.smart_toy, size: 14, color: Colors.white),
                 ),
                 const SizedBox(width: 8),
-                Container(
+                  Container(
                   constraints: const BoxConstraints(maxWidth: 300),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
+                    decoration: BoxDecoration(
                     color: CursorTheme.assistantMessageBg,
-                    borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: CursorTheme.assistantMessageBorder, width: 1),
                   ),
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+                mainAxisSize: MainAxisSize.min,
+                children: [
                       SizedBox(
                         width: 16,
                         height: 16,
@@ -411,10 +428,10 @@ $projectContext
         backgroundColor: CursorTheme.surface,
         elevation: 0,
         title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+              mainAxisSize: MainAxisSize.min,
+              children: [
             const Text('Lopez Code', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 8),
+                    const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
@@ -423,9 +440,9 @@ $projectContext
                 border: Border.all(color: const Color(0xFF007ACC), width: 1),
               ),
               child: const Text('v1.5.1', style: TextStyle(color: Color(0xFF007ACC), fontSize: 10, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
+                    ),
+                  ],
+                ),
         actions: [
           // Toggle Project Explorer
           IconButton(
@@ -449,8 +466,8 @@ $projectContext
         ],
       ),
       body: Row(
-        children: [
-          if (_showProjectExplorer) ...[
+                  children: [
+                if (_showProjectExplorer) ...[
             Container(
               width: _explorerWidth,
               decoration: BoxDecoration(
@@ -478,8 +495,8 @@ $projectContext
             ),
           ],
           Expanded(
-            child: Column(
-              children: [
+                  child: Column(
+                    children: [
                 Expanded(
                   child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
                 ),
@@ -488,25 +505,25 @@ $projectContext
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     color: CursorTheme.surface,
                     child: Row(
-                      children: [
-                        if (_selectedImages.isNotEmpty)
+                          children: [
+                            if (_selectedImages.isNotEmpty)
                           Text('${_selectedImages.length} imagen(es)', style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                        if (_selectedFilePath != null)
+                            if (_selectedFilePath != null)
                           Text(_selectedFilePath!.split('/').last, style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                CursorChatInput(
-                  controller: _messageController,
-                  onSend: _sendMessage,
-                  onAttachImage: _pickImage,
-                  onAttachFile: _pickFile,
-                  isLoading: _isLoading,
-                  placeholder: 'Plan, @ for context, / for commands',
-                ),
-              ],
-            ),
+                                  ],
+                                ),
+                              ),
+          CursorChatInput(
+            controller: _messageController,
+            onSend: _sendMessage,
+            onAttachImage: _pickImage,
+            onAttachFile: _pickFile,
+            isLoading: _isLoading,
+            placeholder: 'Plan, @ for context, / for commands',
           ),
+                    ],
+                  ),
+            ),
         ],
       ),
     );

@@ -25,6 +25,9 @@ class OpenAIService {
     _httpClient.close();
   }
 
+  // Callback para notificar sobre operaciones de archivos
+  Function(String operation, String filePath)? onFileOperation;
+
   Future<String> sendMessage({
     required String message,
     List<String>? imagePaths,
@@ -32,7 +35,9 @@ class OpenAIService {
     String? fileContent,
     String? systemPrompt,
     String? projectPath, // Para ejecutar funciones de archivos
+    Function(String operation, String filePath)? onFileOperation, // Callback para operaciones de archivos
   }) async {
+    this.onFileOperation = onFileOperation;
     try {
       final List<Map<String, dynamic>> messages = [];
 
@@ -212,12 +217,18 @@ class OpenAIService {
             
             String? result;
             try {
+              final filePath = functionArgs['file_path'] as String? ?? '';
+              
+              // Notificar sobre la operación
               if (functionName == 'edit_file') {
-                result = await _executeEditFile(functionArgs['file_path'], functionArgs['content'], projectPath);
+                onFileOperation?.call('editando', filePath);
+                result = await _executeEditFile(filePath, functionArgs['content'], projectPath);
               } else if (functionName == 'create_file') {
-                result = await _executeCreateFile(functionArgs['file_path'], functionArgs['content'], projectPath);
+                onFileOperation?.call('creando', filePath);
+                result = await _executeCreateFile(filePath, functionArgs['content'], projectPath);
               } else if (functionName == 'read_file') {
-                result = await _executeReadFile(functionArgs['file_path'], projectPath);
+                onFileOperation?.call('leyendo', filePath);
+                result = await _executeReadFile(filePath, projectPath);
               } else {
                 result = 'Función desconocida: $functionName';
               }
