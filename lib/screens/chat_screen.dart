@@ -15,6 +15,7 @@ import '../widgets/cursor_chat_input.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/project_explorer.dart';
 import '../widgets/code_editor_panel.dart';
+import '../widgets/screen_preview.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -350,12 +351,20 @@ $projectContext
   }
 
   void _onFileViewScreen(String path) {
-    // TODO: Implementar vista previa de pantalla (como FlutterFlow)
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Vista previa de pantalla - Próximamente'),
-        duration: Duration(seconds: 2),
-      ),
+    // Mostrar vista previa de pantalla
+    if (!path.endsWith('.dart')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La vista previa solo está disponible para archivos .dart'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    
+    showDialog(
+      context: context,
+      builder: (context) => ScreenPreview(filePath: path),
     );
   }
 
