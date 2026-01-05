@@ -353,7 +353,7 @@ $projectContext
   }
 
   void _onFileViewScreen(String path) {
-    // Mostrar vista previa de pantalla (ventana independiente, no bloqueante)
+    // Mostrar vista previa de pantalla (ventana modal independiente)
     if (!path.endsWith('.dart')) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -364,11 +364,17 @@ $projectContext
       return;
     }
     
-    showDialog(
-      context: context,
-      barrierDismissible: true, // Permitir cerrar haciendo clic fuera
-      barrierColor: Colors.black.withOpacity(0.5), // Fondo semitransparente
-      builder: (context) => ScreenPreview(filePath: path),
+    // Abrir en una ruta separada (como ventana modal grande)
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.black.withOpacity(0.9),
+          body: SafeArea(
+            child: ScreenPreview(filePath: path),
+          ),
+        ),
+        fullscreenDialog: true,
+      ),
     );
   }
 
@@ -622,10 +628,9 @@ $projectContext
                 setState(() {
                   _showRunDebugPanel = !_showRunDebugPanel;
                 });
-              } else {
-                // Ejecutar para la plataforma seleccionada
-                _runForPlatform(value);
               }
+              // No ejecutar automáticamente - solo mostrar panel
+              // El usuario debe presionar "Ejecutar" en el panel
             },
             itemBuilder: (context) => [
               PopupMenuItem(
