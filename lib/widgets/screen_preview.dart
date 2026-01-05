@@ -241,8 +241,8 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     if (content.contains('backgroundColor:')) {
       final bgMatch = RegExp(r'backgroundColor:\s*Colors\.(\w+)').firstMatch(content);
       if (bgMatch != null) {
-        final colorName = bgMatch.group(1)?.toLowerCase();
-        backgroundColor = _getColorFromName(colorName ?? 'white');
+        final colorName = bgMatch.group(1)?.toLowerCase() ?? 'white';
+        backgroundColor = _getColorFromName(colorName);
       }
     }
 
