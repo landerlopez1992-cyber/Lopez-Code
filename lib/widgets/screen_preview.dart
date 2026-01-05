@@ -230,10 +230,25 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     // Detectar si tiene AppBar
     final hasAppBar = content.contains('appBar:');
     String? appBarTitle;
-    final titlePattern = RegExp(r'title:\s*Text\([\'"](.+?)[\'"]\)');
-    final titleMatch = titlePattern.firstMatch(content);
-    if (titleMatch != null) {
-      appBarTitle = titleMatch.group(1);
+    // Buscar título de forma simple
+    final titleStart = content.indexOf('title:');
+    if (titleStart != -1) {
+      final titleSection = content.substring(titleStart, titleStart + 100);
+      final quoteStart = titleSection.indexOf("'");
+      if (quoteStart == -1) {
+        final doubleQuoteStart = titleSection.indexOf('"');
+        if (doubleQuoteStart != -1) {
+          final quoteEnd = titleSection.indexOf('"', doubleQuoteStart + 1);
+          if (quoteEnd != -1) {
+            appBarTitle = titleSection.substring(doubleQuoteStart + 1, quoteEnd);
+          }
+        }
+      } else {
+        final quoteEnd = titleSection.indexOf("'", quoteStart + 1);
+        if (quoteEnd != -1) {
+          appBarTitle = titleSection.substring(quoteStart + 1, quoteEnd);
+        }
+      }
     }
 
     // Detectar color de fondo
