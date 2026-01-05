@@ -71,11 +71,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadOpenAIService() async {
     final apiKey = await SettingsService.getApiKey();
     if (apiKey != null && apiKey.isNotEmpty) {
+      final selectedModel = await SettingsService.getSelectedModel();
       _openAIService?.dispose();
       setState(() {
-        _openAIService = OpenAIService(apiKey: apiKey, model: 'gpt-4o');
+        _openAIService = OpenAIService(apiKey: apiKey, model: selectedModel);
       });
-      print('✅ OpenAI Service inicializado');
+      print('✅ OpenAI Service inicializado con modelo: $selectedModel');
     }
   }
 
@@ -219,12 +220,15 @@ $projectContext
 ''';
       }
 
+      final projectPath = widget.projectPath ?? await ProjectService.getProjectPath();
+      
       final response = await _openAIService!.sendMessage(
         message: enhancedMessage,
         imagePaths: imagesToSend.isNotEmpty ? imagesToSend : null,
         conversationHistory: conversationHistory,
         fileContent: fileContent,
         systemPrompt: systemPrompt.isNotEmpty ? systemPrompt : null,
+        projectPath: projectPath, // CRÍTICO: Necesario para Function Calling
       );
 
       final assistantMsg = Message(
@@ -418,11 +422,25 @@ $projectContext
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: const Color(0xFF007ACC), width: 1),
               ),
-              child: const Text('v1.5.0', style: TextStyle(color: Color(0xFF007ACC), fontSize: 10, fontWeight: FontWeight.bold)),
+              child: const Text('v1.5.1', style: TextStyle(color: Color(0xFF007ACC), fontSize: 10, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
         actions: [
+          // Toggle Project Explorer
+          IconButton(
+            icon: Icon(
+              _showProjectExplorer ? Icons.folder_open : Icons.folder,
+              size: 18,
+            ),
+            color: _showProjectExplorer ? CursorTheme.primary : CursorTheme.textSecondary,
+            onPressed: () {
+              setState(() {
+                _showProjectExplorer = !_showProjectExplorer;
+              });
+            },
+            tooltip: _showProjectExplorer ? 'Ocultar Explorador' : 'Mostrar Explorador',
+          ),
           IconButton(
             icon: const Icon(Icons.settings, size: 18),
             color: CursorTheme.textSecondary,

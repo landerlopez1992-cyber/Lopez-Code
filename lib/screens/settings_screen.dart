@@ -17,6 +17,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSaving = false;
   bool _apiKeySaved = false;
   bool _showApiKey = false;
+  String _selectedModel = 'gpt-4o';
 
   @override
   void initState() {
@@ -28,11 +29,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final apiKey = await SettingsService.getApiKey();
     final rules = await SettingsService.getSystemRules();
     final behavior = await SettingsService.getSystemBehavior();
+    final model = await SettingsService.getSelectedModel();
 
     setState(() {
       _apiKeyController.text = apiKey ?? '';
       _rulesController.text = rules;
       _behaviorController.text = behavior;
+      _selectedModel = model;
     });
   }
 
@@ -272,6 +275,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             foregroundColor: Colors.blue,
                           ),
             ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // Model Selection Section
+                Card(
+                  color: const Color(0xFF2D2D30),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.smart_toy, color: Colors.white70),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Modelo de IA',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          value: _selectedModel,
+                          decoration: const InputDecoration(
+                            labelText: 'Seleccionar Modelo',
+                            border: OutlineInputBorder(),
+                            filled: true,
+                            fillColor: Color(0xFF3C3C3C),
+                            labelStyle: TextStyle(color: Colors.white70),
+                          ),
+                          dropdownColor: const Color(0xFF3C3C3C),
+                          style: const TextStyle(color: Colors.white),
+                          items: const [
+                            DropdownMenuItem(value: 'gpt-4o', child: Text('GPT-4o (Recomendado)')),
+                            DropdownMenuItem(value: 'gpt-4-turbo', child: Text('GPT-4 Turbo')),
+                            DropdownMenuItem(value: 'gpt-4', child: Text('GPT-4')),
+                            DropdownMenuItem(value: 'gpt-3.5-turbo', child: Text('GPT-3.5 Turbo')),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedModel = value;
+                              });
+                              SettingsService.saveSelectedModel(value);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Nota: GPT-4o es el más reciente y recomendado. Soporta análisis de imágenes.',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: 12,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
                       ],
                     ),
                   ),
