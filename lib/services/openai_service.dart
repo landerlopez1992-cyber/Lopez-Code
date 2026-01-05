@@ -219,8 +219,19 @@ class OpenAIService {
             try {
               final filePath = functionArgs['file_path'] as String? ?? '';
               
-              // Notificar sobre la operación
+              // Para edit_file, primero leer el archivo para verificar que existe
               if (functionName == 'edit_file') {
+                // Leer archivo primero para validar que existe y no está dañado
+                try {
+                  final currentContent = await _executeReadFile(filePath, projectPath);
+                  if (currentContent.isEmpty) {
+                    result = 'Advertencia: El archivo está vacío. Asegúrate de proporcionar el contenido completo.';
+                  }
+                } catch (e) {
+                  result = 'Error: No se pudo leer el archivo antes de editarlo. Verifica que existe: $e';
+                }
+                
+                // Notificar sobre la operación
                 onFileOperation?.call('editando', filePath);
                 result = await _executeEditFile(filePath, functionArgs['content'], projectPath);
               } else if (functionName == 'create_file') {
