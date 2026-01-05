@@ -317,7 +317,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           dropdownColor: const Color(0xFF3C3C3C),
                           style: const TextStyle(color: Colors.white),
                           items: const [
-                            DropdownMenuItem(value: 'gpt-4o-mini', child: Text('GPT-4o Mini (🆓 Bajo Costo)')),
+                            DropdownMenuItem(value: 'gpt-4o-mini', child: Text('GPT-4o Mini (Bajo Costo)')),
                             DropdownMenuItem(value: 'gpt-4o', child: Text('GPT-4o (Recomendado)')),
                             DropdownMenuItem(value: 'gpt-4-turbo', child: Text('GPT-4 Turbo')),
                             DropdownMenuItem(value: 'gpt-4', child: Text('GPT-4')),
