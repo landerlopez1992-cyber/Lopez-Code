@@ -10,6 +10,7 @@ class RunDebugService {
   // Ejecutar el proyecto Flutter
   static Future<Map<String, dynamic>> runFlutterProject({
     String? mode = 'debug',
+    String? platform = 'macos', // 'macos', 'ios', 'android', 'web'
     Function(String)? onOutput,
     Function(String)? onError,
   }) async {
@@ -26,10 +27,31 @@ class RunDebugService {
       _isRunning = true;
       _currentOutput = '';
 
+      // Construir comando según plataforma
+      final List<String> args = ['run'];
+      
+      // Agregar flag de dispositivo según plataforma
+      if (platform != null) {
+        args.add('-d');
+        args.add(platform);
+      }
+      
+      // Agregar modo
+      if (mode == 'debug') {
+        args.add('--debug');
+      } else if (mode == 'release') {
+        args.add('--release');
+      } else if (mode == 'profile') {
+        args.add('--profile');
+      }
+
+      print('🚀 Ejecutando: flutter ${args.join(' ')}');
+      _currentOutput = '🚀 Ejecutando: flutter ${args.join(' ')}\n';
+
       // Ejecutar flutter run
       final process = await Process.start(
         'flutter',
-        ['run', '-d', 'macos', mode == 'debug' ? '--debug' : '--release'],
+        args,
         workingDirectory: projectPath,
         mode: ProcessStartMode.normal,
       );
@@ -48,20 +70,23 @@ class RunDebugService {
         onError?.call(data);
       });
 
-      // Esperar a que termine
-      final exitCode = await process.exitCode;
-
-      _isRunning = false;
-      _currentProcess = null;
+      // Esperar a que termine (pero no bloquear)
+      process.exitCode.then((exitCode) {
+        _isRunning = false;
+        _currentProcess = null;
+        onOutput?.call('\n\n✅ Proceso terminado con código: $exitCode\n');
+      });
 
       return {
-        'success': exitCode == 0,
-        'exitCode': exitCode,
+        'success': true,
+        'exitCode': 0,
         'output': _currentOutput ?? '',
       };
     } catch (e) {
       _isRunning = false;
       _currentProcess = null;
+      _currentOutput = (_currentOutput ?? '') + '❌ Error: $e\n';
+      onError?.call('❌ Error: $e\n');
       throw Exception('Error al ejecutar: $e');
     }
   }

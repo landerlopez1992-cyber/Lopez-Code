@@ -16,6 +16,7 @@ import '../widgets/cursor_theme.dart';
 import '../widgets/project_explorer.dart';
 import '../widgets/code_editor_panel.dart';
 import '../widgets/screen_preview.dart';
+import '../widgets/run_debug_panel.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -41,6 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _selectedFilePath;
   late String _currentSessionId;
   bool _showProjectExplorer = true;
+  bool _showRunDebugPanel = false;
   double _explorerWidth = 300.0;
   String? _lastProjectPath;
   int _explorerRefreshCounter = 0; // Para forzar refresh del explorador
@@ -351,7 +353,7 @@ $projectContext
   }
 
   void _onFileViewScreen(String path) {
-    // Mostrar vista previa de pantalla
+    // Mostrar vista previa de pantalla (ventana independiente, no bloqueante)
     if (!path.endsWith('.dart')) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -364,6 +366,8 @@ $projectContext
     
     showDialog(
       context: context,
+      barrierDismissible: true, // Permitir cerrar haciendo clic fuera
+      barrierColor: Colors.black.withOpacity(0.5), // Fondo semitransparente
       builder: (context) => ScreenPreview(filePath: path),
     );
   }
@@ -600,6 +604,82 @@ $projectContext
                   ],
                 ),
         actions: [
+          // Run and Debug button
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.play_circle_outline, size: 18),
+            color: CursorTheme.surface,
+            tooltip: 'Run and Debug',
+            onSelected: (value) {
+              if (value == 'toggle_panel') {
+                setState(() {
+                  _showRunDebugPanel = !_showRunDebugPanel;
+                });
+              } else {
+                // Ejecutar para la plataforma seleccionada
+                _runForPlatform(value);
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'toggle_panel',
+                child: Row(
+                  children: [
+                    Icon(
+                      _showRunDebugPanel ? Icons.visibility_off : Icons.visibility,
+                      size: 16,
+                      color: CursorTheme.textPrimary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _showRunDebugPanel ? 'Ocultar Consola' : 'Mostrar Consola',
+                      style: const TextStyle(color: CursorTheme.textPrimary, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'macos',
+                child: Row(
+                  children: [
+                    Icon(Icons.desktop_mac, size: 16, color: CursorTheme.textPrimary),
+                    SizedBox(width: 8),
+                    Text('macOS', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'ios',
+                child: Row(
+                  children: [
+                    Icon(Icons.phone_iphone, size: 16, color: CursorTheme.textPrimary),
+                    SizedBox(width: 8),
+                    Text('iOS', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'android',
+                child: Row(
+                  children: [
+                    Icon(Icons.phone_android, size: 16, color: CursorTheme.textPrimary),
+                    SizedBox(width: 8),
+                    Text('Android', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'web',
+                child: Row(
+                  children: [
+                    Icon(Icons.web, size: 16, color: CursorTheme.textPrimary),
+                    SizedBox(width: 8),
+                    Text('Web', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+          ),
           // Toggle Project Explorer
           IconButton(
             icon: Icon(
@@ -673,17 +753,38 @@ $projectContext
                                   ],
                                 ),
                               ),
-          CursorChatInput(
-            controller: _messageController,
-            onSend: _sendMessage,
-            onAttachImage: _pickImage,
-            onAttachFile: _pickFile,
-            isLoading: _isLoading,
-            placeholder: 'Plan, @ for context, / for commands',
-          ),
-                    ],
+                CursorChatInput(
+                  controller: _messageController,
+                  onSend: _sendMessage,
+                  onAttachImage: _pickImage,
+                  onAttachFile: _pickFile,
+                  isLoading: _isLoading,
+                  placeholder: 'Plan, @ for context, / for commands',
+                ),
+                      ],
+                    ),
                   ),
+                if (_showRunDebugPanel) ...[
+                  Container(
+                    width: 4,
+                    color: CursorTheme.border,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeColumn,
+                      child: GestureDetector(
+                        onHorizontalDragUpdate: (details) {
+                          // Redimensionar panel (opcional)
+                        },
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 400,
+                    child: RunDebugPanel(),
+                  ),
+                ],
+              ],
             ),
+          ),
         ],
       ),
     );

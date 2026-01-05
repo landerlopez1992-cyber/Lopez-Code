@@ -11,14 +11,22 @@ class RunDebugPanel extends StatefulWidget {
 
 class _RunDebugPanelState extends State<RunDebugPanel> {
   String _selectedMode = 'debug';
+  String _selectedPlatform = 'macos';
   String _output = '';
   bool _isRunning = false;
   bool _isFlutterAvailable = false;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _checkFlutter();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _checkFlutter() async {
@@ -46,26 +54,40 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
     try {
       final result = await RunDebugService.runFlutterProject(
         mode: _selectedMode,
+        platform: _selectedPlatform,
         onOutput: (output) {
           setState(() {
             _output += output;
+            // Auto-scroll al final
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (_scrollController.hasClients) {
+                _scrollController.animateTo(
+                  _scrollController.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                );
+              }
+            });
           });
         },
         onError: (error) {
           setState(() {
             _output += 'ERROR: $error\n';
+            // Auto-scroll al final
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (_scrollController.hasClients) {
+                _scrollController.animateTo(
+                  _scrollController.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                );
+              }
+            });
           });
         },
       );
 
-      setState(() {
-        _isRunning = false;
-        if (result['success'] == true) {
-          _output += '\n✅ Ejecución completada exitosamente\n';
-        } else {
-          _output += '\n❌ Ejecución falló con código: ${result['exitCode']}\n';
-        }
-      });
+      // El proceso se ejecuta en background, no esperamos que termine aquí
     } catch (e) {
       setState(() {
         _isRunning = false;
@@ -119,9 +141,84 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
                   ),
                 ),
                 const Spacer(),
+                // Selector de plataforma
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  decoration: BoxDecoration(
+                    color: CursorTheme.background,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: CursorTheme.border),
+                  ),
+                  child: DropdownButton<String>(
+                    value: _selectedPlatform,
+                    underline: const SizedBox(),
+                    iconSize: 14,
+                    style: const TextStyle(
+                      color: CursorTheme.textPrimary,
+                      fontSize: 11,
+                    ),
+                    dropdownColor: CursorTheme.surface,
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'macos',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.desktop_mac, size: 14),
+                            SizedBox(width: 4),
+                            Text('macOS'),
+                          ],
+                        ),
+                      ),
+                      DropdownMenuItem(
+                        value: 'ios',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.phone_iphone, size: 14),
+                            SizedBox(width: 4),
+                            Text('iOS'),
+                          ],
+                        ),
+                      ),
+                      DropdownMenuItem(
+                        value: 'android',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.phone_android, size: 14),
+                            SizedBox(width: 4),
+                            Text('Android'),
+                          ],
+                        ),
+                      ),
+                      DropdownMenuItem(
+                        value: 'web',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.web, size: 14),
+                            SizedBox(width: 4),
+                            Text('Web'),
+                          ],
+                        ),
+                      ),
+                    ],
+                    onChanged: _isRunning
+                        ? null
+                        : (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedPlatform = value;
+                              });
+                            }
+                          },
+                  ),
+                ),
+                const SizedBox(width: 8),
                 // Selector de modo
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                   decoration: BoxDecoration(
                     color: CursorTheme.background,
                     borderRadius: BorderRadius.circular(4),
@@ -130,16 +227,20 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
                   child: DropdownButton<String>(
                     value: _selectedMode,
                     underline: const SizedBox(),
-                    iconSize: 16,
+                    iconSize: 14,
                     style: const TextStyle(
                       color: CursorTheme.textPrimary,
-                      fontSize: 12,
+                      fontSize: 11,
                     ),
                     dropdownColor: CursorTheme.surface,
                     items: const [
                       DropdownMenuItem(
                         value: 'debug',
                         child: Text('Debug'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'profile',
+                        child: Text('Profile'),
                       ),
                       DropdownMenuItem(
                         value: 'release',
