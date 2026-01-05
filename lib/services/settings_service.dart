@@ -52,7 +52,7 @@ class SettingsService {
 
   static Future<String> getSelectedModel() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_selectedModelKey) ?? 'gpt-4o';
+    return prefs.getString(_selectedModelKey) ?? 'gpt-4o-mini'; // Por defecto el más económico
   }
 
   // Get combined system prompt

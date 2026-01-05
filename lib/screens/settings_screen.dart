@@ -317,6 +317,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           dropdownColor: const Color(0xFF3C3C3C),
                           style: const TextStyle(color: Colors.white),
                           items: const [
+                            DropdownMenuItem(value: 'gpt-4o-mini', child: Text('GPT-4o Mini (🆓 Bajo Costo)')),
                             DropdownMenuItem(value: 'gpt-4o', child: Text('GPT-4o (Recomendado)')),
                             DropdownMenuItem(value: 'gpt-4-turbo', child: Text('GPT-4 Turbo')),
                             DropdownMenuItem(value: 'gpt-4', child: Text('GPT-4')),
@@ -333,11 +334,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'Nota: GPT-4o es el más reciente y recomendado. Soporta análisis de imágenes.',
+                          'GPT-4o Mini: Muy económico (~$0.15/millón tokens). Recomendado para uso frecuente.\nGPT-4o: El más reciente y potente. Soporta análisis de imágenes.',
                           style: TextStyle(
                             color: Colors.white60,
                             fontSize: 12,
                             fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        InkWell(
+                          onTap: () {
+                            // Abrir dashboard de uso de OpenAI
+                            Clipboard.setData(const ClipboardData(text: 'https://platform.openai.com/usage'));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('URL copiada. Ve a platform.openai.com/usage para verificar tu uso y facturación'),
+                                duration: Duration(seconds: 4),
+                              ),
+                            );
+                          },
+                          child: Row(
+                            children: [
+                              const Icon(Icons.info_outline, size: 16, color: Colors.blue),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Verificar uso y facturación: platform.openai.com/usage',
+                                  style: TextStyle(
+                                    color: Colors.blue[300],
+                                    fontSize: 11,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
