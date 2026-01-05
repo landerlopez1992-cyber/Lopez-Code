@@ -230,7 +230,7 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     // Detectar si tiene AppBar
     final hasAppBar = content.contains('appBar:');
     String? appBarTitle;
-    final titlePattern = RegExp(r'title:\s*Text\([\'"]([^\'"]+)[\'"]\)');
+    final titlePattern = RegExp(r'title:\s*Text\([\'"](.+?)[\'"]\)');
     final titleMatch = titlePattern.firstMatch(content);
     if (titleMatch != null) {
       appBarTitle = titleMatch.group(1);
