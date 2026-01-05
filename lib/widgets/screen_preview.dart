@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/file_service.dart';
@@ -231,7 +230,8 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     // Detectar si tiene AppBar
     final hasAppBar = content.contains('appBar:');
     String? appBarTitle;
-    final titleMatch = RegExp(r'title:\s*Text\([\'"]?([^\'"]+)[\'"]?\)').firstMatch(content);
+    final titlePattern = RegExp(r'title:\s*Text\([\'"]([^\'"]+)[\'"]\)');
+    final titleMatch = titlePattern.firstMatch(content);
     if (titleMatch != null) {
       appBarTitle = titleMatch.group(1);
     }
