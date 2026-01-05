@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/message.dart';
@@ -12,6 +14,7 @@ import '../widgets/message_bubble.dart';
 import '../widgets/cursor_chat_input.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/project_explorer.dart';
+import '../widgets/code_editor_panel.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -39,6 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _showProjectExplorer = true;
   double _explorerWidth = 300.0;
   String? _lastProjectPath;
+  int _explorerRefreshCounter = 0; // Para forzar refresh del explorador
 
   @override
   void initState() {
@@ -256,6 +260,7 @@ $projectContext
         _loadingStatus = '';
         _currentFileOperation = null;
         _currentFilePath = null;
+        _explorerRefreshCounter++; // Forzar refresh del explorador después de crear/editar archivos
       });
 
       await _saveConversation();
@@ -336,7 +341,142 @@ $projectContext
   }
 
   void _onFileDoubleClick(String path) {
-    // Acción cuando se hace doble clic en un archivo
+    // Acción cuando se hace doble clic en un archivo - abrir código
+    _openFileEditor(path);
+  }
+
+  void _onFileViewCode(String path) {
+    _openFileEditor(path);
+  }
+
+  void _onFileViewScreen(String path) {
+    // TODO: Implementar vista previa de pantalla (como FlutterFlow)
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Vista previa de pantalla - Próximamente'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _onFileCopy(String path) {
+    Clipboard.setData(ClipboardData(text: path));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ruta copiada al portapapeles'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  Future<void> _onFileDelete(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+        setState(() {
+          _explorerRefreshCounter++; // Refrescar explorador
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Archivo eliminado: ${path.split('/').last}'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al eliminar archivo: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _openFileEditor(String path) async {
+    try {
+      final content = await FileService.readFile(path);
+      if (!mounted) return;
+      
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(20),
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.8,
+            height: MediaQuery.of(context).size.height * 0.8,
+            decoration: BoxDecoration(
+              color: CursorTheme.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: CursorTheme.explorerBackground,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(8),
+                      topRight: Radius.circular(8),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          path.split('/').last,
+                          style: const TextStyle(
+                            color: CursorTheme.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        color: CursorTheme.textSecondary,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                // Editor
+                Expanded(
+                  child: CodeEditorPanel(
+                    filePath: path,
+                    initialContent: content,
+                    onSave: (savedPath) {
+                      setState(() {
+                        _explorerRefreshCounter++; // Refrescar explorador
+                      });
+                      Navigator.of(context).pop();
+                    },
+                    onClose: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al abrir archivo: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildEmptyChatArea() {
@@ -520,9 +660,13 @@ $projectContext
                 border: Border(right: BorderSide(color: CursorTheme.border, width: 1)),
               ),
               child: ProjectExplorer(
-                key: ValueKey(widget.projectPath ?? _lastProjectPath ?? 'no-project'),
+                key: ValueKey('${widget.projectPath ?? _lastProjectPath ?? 'no-project'}_$_explorerRefreshCounter'),
                 onFileSelected: _onFileSelected,
                 onFileDoubleClick: _onFileDoubleClick,
+                onFileDelete: _onFileDelete,
+                onFileViewCode: _onFileViewCode,
+                onFileViewScreen: _onFileViewScreen,
+                onFileCopy: _onFileCopy,
               ),
             ),
             GestureDetector(

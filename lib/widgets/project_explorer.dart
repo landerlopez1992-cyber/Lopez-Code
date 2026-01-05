@@ -1,16 +1,25 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/project_service.dart';
 import 'cursor_theme.dart';
 
 class ProjectExplorer extends StatefulWidget {
   final Function(String)? onFileSelected;
   final Function(String)? onFileDoubleClick;
+  final Function(String)? onFileDelete;
+  final Function(String)? onFileViewCode;
+  final Function(String)? onFileViewScreen;
+  final Function(String)? onFileCopy;
 
   const ProjectExplorer({
     super.key,
     this.onFileSelected,
     this.onFileDoubleClick,
+    this.onFileDelete,
+    this.onFileViewCode,
+    this.onFileViewScreen,
+    this.onFileCopy,
   });
 
   @override
@@ -251,7 +260,7 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
+        GestureDetector(
           onTap: () {
             if (isDirectory) {
               _toggleExpand(path);
@@ -267,6 +276,9 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
               widget.onFileDoubleClick?.call(path);
             }
           },
+          onSecondaryTap: !isDirectory ? () {
+            _showContextMenu(context, path, name);
+          } : null,
           child: Container(
             padding: EdgeInsets.only(
               left: level * 16.0 + 8,
@@ -336,6 +348,109 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
           ],
         ],
       ],
+    );
+  }
+
+  void _showContextMenu(BuildContext context, String filePath, String fileName) {
+    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final RenderBox button = context.findRenderObject() as RenderBox;
+    final RelativeRect position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<String>(
+      context: context,
+      position: position,
+      color: CursorTheme.surface,
+      items: [
+        PopupMenuItem<String>(
+          value: 'view_code',
+          child: Row(
+            children: [
+              const Icon(Icons.code, size: 18, color: CursorTheme.textPrimary),
+              const SizedBox(width: 8),
+              const Text('Ver código', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'view_screen',
+          child: Row(
+            children: [
+              const Icon(Icons.phone_android, size: 18, color: CursorTheme.textPrimary),
+              const SizedBox(width: 8),
+              const Text('Ver pantalla', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'copy',
+          child: Row(
+            children: [
+              const Icon(Icons.copy, size: 18, color: CursorTheme.textPrimary),
+              const SizedBox(width: 8),
+              const Text('Copiar ruta', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13)),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Row(
+            children: [
+              const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+              const SizedBox(width: 8),
+              const Text('Eliminar', style: TextStyle(color: Colors.red, fontSize: 13)),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value != null) {
+        switch (value) {
+          case 'view_code':
+            widget.onFileViewCode?.call(filePath);
+            break;
+          case 'view_screen':
+            widget.onFileViewScreen?.call(filePath);
+            break;
+          case 'copy':
+            widget.onFileCopy?.call(filePath);
+            break;
+          case 'delete':
+            _confirmDelete(context, filePath, fileName);
+            break;
+        }
+      }
+    });
+  }
+
+  void _confirmDelete(BuildContext context, String filePath, String fileName) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: CursorTheme.surface,
+        title: const Text('Eliminar archivo', style: TextStyle(color: CursorTheme.textPrimary)),
+        content: Text('¿Estás seguro de que deseas eliminar "$fileName"?\n\nEsta acción no se puede deshacer.', 
+          style: const TextStyle(color: CursorTheme.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('No', style: TextStyle(color: CursorTheme.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.onFileDelete?.call(filePath);
+            },
+            child: const Text('Sí', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
     );
   }
 
