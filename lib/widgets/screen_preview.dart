@@ -423,7 +423,7 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     final widgets = <Widget>[];
     
     // Buscar Text widgets
-    final textPattern = RegExp(r'Text\([\'"]([^\'"]+)[\'"]\)');
+    final textPattern = RegExp(r'Text\(["\']([^"\']+)["\']\)');
     final textMatches = textPattern.allMatches(content);
     for (var match in textMatches) {
       widgets.add(
@@ -438,7 +438,7 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     }
     
     // Buscar ElevatedButton/TextButton
-    final buttonPattern = RegExp(r'(ElevatedButton|TextButton)\([^)]*child:\s*Text\([\'"]([^\'"]+)[\'"]\)');
+    final buttonPattern = RegExp(r'(ElevatedButton|TextButton)\([^)]*child:\s*Text\(["\']([^"\']+)["\']\)');
     final buttonMatches = buttonPattern.allMatches(content);
     for (var match in buttonMatches) {
       widgets.add(
@@ -453,7 +453,7 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     }
     
     // Buscar AppBar title
-    final appBarTitlePattern = RegExp(r'appBar:.*?title:\s*Text\([\'"]([^\'"]+)[\'"]\)');
+    final appBarTitlePattern = RegExp(r'appBar:.*?title:\s*Text\(["\']([^"\']+)["\']\)');
     final appBarMatch = appBarTitlePattern.firstMatch(content);
     
     if (widgets.isEmpty && appBarMatch == null) {
