@@ -334,7 +334,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'GPT-4o Mini: Muy económico (~$0.15/millón tokens). Recomendado para uso frecuente.\nGPT-4o: El más reciente y potente. Soporta análisis de imágenes.',
+                          'GPT-4o Mini: Muy económico (~\$0.15/millón tokens). Recomendado para uso frecuente.\nGPT-4o: El más reciente y potente. Soporta análisis de imágenes.',
                           style: TextStyle(
                             color: Colors.white60,
                             fontSize: 12,
