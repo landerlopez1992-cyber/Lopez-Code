@@ -82,6 +82,7 @@ class _CursorChatInputState extends State<CursorChatInput> {
                 currentModel: _currentModel,
                 autoMode: _autoMode,
                 onModelChanged: (model) {
+                  print('✅ Modelo seleccionado en CursorChatInput: $model');
                   setState(() {
                     _currentModel = model;
                   });

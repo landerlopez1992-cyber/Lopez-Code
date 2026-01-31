@@ -2895,12 +2895,15 @@ $documentationContext
             onStop: _stopRequest,
             placeholder: 'Plan, @ for context, / for commands',
             onModelChanged: (model) async {
+              print('🔄 ChatScreen.onModelChanged recibido: $model');
               // Actualizar el modelo en el servicio OpenAI
               if (_openAIService != null) {
                 _openAIService!.setModel(model);
                 await SettingsService.saveSelectedModel(model);
-                print('✅ Modelo cambiado a: $model');
+                print('✅ Modelo actualizado en OpenAI Service: $model');
+                print('💾 Modelo guardado en configuración: $model');
               } else {
+                print('⚠️ OpenAI Service no está inicializado. Cargando...');
                 await _loadOpenAIService();
               }
             },

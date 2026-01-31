@@ -187,11 +187,13 @@ class _ModelSelectorState extends State<ModelSelector> {
                 
                 return InkWell(
                   onTap: () {
+                    print('🎯 Modelo seleccionado en ModelSelector: ${model.id} (${model.name})');
                     setState(() {
                       _selectedModel = model.id;
                     });
                     widget.onModelChanged(model.id);
                     SettingsService.saveSelectedModel(model.id);
+                    print('💾 Modelo guardado en SettingsService: ${model.id}');
                     // No cerramos aquí, el padre lo hace
                   },
                   child: Container(

@@ -30,6 +30,7 @@ class OpenAIService {
   // Método para cambiar el modelo
   void setModel(String newModel) {
     model = newModel;
+    print('🔄 OpenAI modelo actualizado a: $newModel');
   }
   
   // Cerrar el cliente cuando ya no se necesite
