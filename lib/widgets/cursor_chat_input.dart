@@ -60,8 +60,8 @@ class _CursorChatInputState extends State<CursorChatInput> {
     final screenSize = MediaQuery.of(context).size;
 
     // Calcular posición: arriba del input, alineado a la izquierda del botón
-    final selectorWidth = 340.0;
-    final selectorHeight = _autoMode ? 180.0 : 520.0;
+    final selectorWidth = 280.0;
+    final selectorHeight = _autoMode ? 140.0 : 420.0;
     
     // Posición X: alineado con el botón (esquina izquierda del chat)
     final left = offset.dx;
