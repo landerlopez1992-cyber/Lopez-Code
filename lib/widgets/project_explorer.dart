@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/project_service.dart';
+import '../services/file_service.dart';
 import 'cursor_theme.dart';
 
 class ProjectExplorer extends StatefulWidget {
@@ -11,6 +12,7 @@ class ProjectExplorer extends StatefulWidget {
   final Function(String)? onFileViewCode;
   final Function(String)? onFileViewScreen;
   final Function(String)? onFileCopy;
+  final String mode; // 'explorer' o 'search'
 
   const ProjectExplorer({
     super.key,
@@ -20,6 +22,7 @@ class ProjectExplorer extends StatefulWidget {
     this.onFileViewCode,
     this.onFileViewScreen,
     this.onFileCopy,
+    this.mode = 'explorer',
   });
 
   @override
@@ -33,11 +36,57 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
   bool _isLoading = true;
   Set<String> _expandedPaths = {};
   String? _lastLoadedPath; // Para detectar cambios de proyecto
+  
+  // Estado para búsqueda
+  final TextEditingController _searchController = TextEditingController();
+  List<String> _searchResults = [];
+  bool _isSearching = false;
 
   @override
   void initState() {
     super.initState();
     _loadProject();
+    _searchController.addListener(_onSearchChanged);
+  }
+  
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+  
+  void _onSearchChanged() {
+    if (widget.mode == 'search') {
+      _searchFiles(_searchController.text);
+    }
+  }
+  
+  Future<void> _searchFiles(String query) async {
+    if (query.isEmpty || _projectPath == null) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+    });
+
+    try {
+      final results = await FileService.searchFiles(_projectPath!, query);
+      setState(() {
+        _searchResults = results;
+        _isSearching = false;
+      });
+    } catch (e) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+      print('❌ Error al buscar archivos: $e');
+    }
   }
 
   @override
@@ -501,6 +550,157 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
       );
     }
 
+    // Si el modo es búsqueda, mostrar el panel de búsqueda
+    if (widget.mode == 'search') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header de búsqueda
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: CursorTheme.surface,
+              border: Border(
+                bottom: BorderSide(color: CursorTheme.border, width: 1),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.search, size: 16, color: Colors.white70),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por nombre de archivo...',
+                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13),
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Resultados de búsqueda
+          Expanded(
+            child: _isSearching
+                ? const Center(
+                    child: CircularProgressIndicator(),
+                  )
+                : _searchResults.isEmpty && _searchController.text.isNotEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.search_off,
+                              size: 48,
+                              color: CursorTheme.textSecondary,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No se encontraron archivos',
+                              style: TextStyle(
+                                color: CursorTheme.textSecondary,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : _searchResults.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.search,
+                                  size: 48,
+                                  color: CursorTheme.textSecondary,
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Escribe para buscar archivos...',
+                                  style: TextStyle(
+                                    color: CursorTheme.textSecondary,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            itemCount: _searchResults.length,
+                            itemBuilder: (context, index) {
+                              final filePath = _searchResults[index];
+                              final fileName = filePath.split('/').last;
+                              final isSelected = _selectedPath == filePath;
+                              
+                              return Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedPath = filePath;
+                                    });
+                                    widget.onFileSelected?.call(filePath);
+                                  },
+                                  onDoubleTap: () {
+                                    widget.onFileDoubleClick?.call(filePath);
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    color: isSelected
+                                        ? CursorTheme.explorerItemSelected
+                                        : Colors.transparent,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          _getFileIcon(fileName),
+                                          size: 16,
+                                          color: _getFileColor(fileName),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            fileName,
+                                            style: TextStyle(
+                                              color: isSelected
+                                                  ? Colors.white
+                                                  : CursorTheme.textPrimary,
+                                              fontSize: 13,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          filePath.replaceAll(_projectPath!, ''),
+                                          style: TextStyle(
+                                            color: CursorTheme.textSecondary,
+                                            fontSize: 11,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+          ),
+        ],
+      );
+    }
+    
+    // Modo explorador normal
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

@@ -26,6 +26,7 @@ import '../models/pending_action.dart';
 import 'settings_screen.dart';
 
 // Custom painter para el icono de código (corchetes angulares <>)
+// Ajustado para tamaño pequeño profesional (20x20) con esquinas redondeadas
 // Mismo que en message_bubble.dart - mantener consistencia
 class RobotIconPainter extends CustomPainter {
   @override
@@ -33,17 +34,17 @@ class RobotIconPainter extends CustomPainter {
     final paint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
+      ..strokeWidth = 1.8 // Más delgado para tamaño pequeño
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
     final centerX = size.width / 2;
     final centerY = size.height / 2;
     
-    // Tamaño de los corchetes
-    final bracketSize = size.width * 0.25; // 25% del ancho
-    final bracketHeight = size.height * 0.4; // 40% de la altura
-    final spacing = size.width * 0.15; // Espacio entre corchetes
+    // Tamaño de los corchetes ajustado para 20x20
+    final bracketSize = size.width * 0.22; // 22% del ancho
+    final bracketHeight = size.height * 0.35; // 35% de la altura
+    final spacing = size.width * 0.12; // Espacio entre corchetes
     
     // Corchete izquierdo <
     final leftBracketPath = Path()
@@ -112,7 +113,18 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _currentSessionId = widget.chatId ?? DateTime.now().millisecondsSinceEpoch.toString();
+    // Escuchar cambios en la plataforma
+    _platformService.addListener(_onPlatformChanged);
     _initialize();
+  }
+
+  void _onPlatformChanged() {
+    if (mounted) {
+      setState(() {
+        _selectedPlatform = _platformService.selectedPlatform;
+        print('🔧 ChatScreen._onPlatformChanged: Plataforma actualizada a: $_selectedPlatform');
+      });
+    }
   }
 
   /// Método público para precargar un mensaje desde fuera (Debug Console)
@@ -155,6 +167,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _initialize() async {
+    // Sincronizar plataforma con PlatformService
+    // Si el servicio no tiene plataforma, establecer 'macos' como predeterminada
+    if (_platformService.selectedPlatform.isEmpty) {
+      _platformService.setPlatform('macos');
+    }
+    _selectedPlatform = _platformService.selectedPlatform;
+    print('🔧 ChatScreen._initialize: Plataforma sincronizada: $_selectedPlatform');
+    
     // Resetear estado cuando cambia el proyecto
     final projectPath = widget.projectPath ?? await ProjectService.getProjectPath();
     if (_lastProjectPath != projectPath) {
@@ -372,6 +392,56 @@ NO uses herramientas ni propongas acciones automáticas.
       };
 
       final bool allowTools = !isErrorReport;
+      
+      // Detectar si el mensaje del usuario es una solicitud simple de run/debug
+      final isSimpleRunRequest = userMessage.toLowerCase().contains('run') ||
+          userMessage.toLowerCase().contains('debug') ||
+          userMessage.toLowerCase().contains('ejecuta') ||
+          userMessage.toLowerCase().contains('compila') ||
+          userMessage.toLowerCase().contains('corre') ||
+          userMessage.toLowerCase().contains('inicia') ||
+          userMessage.toLowerCase().contains('rund and debug') ||
+          userMessage.toLowerCase().contains('run and debug');
+      
+      // Si es una solicitud simple de run/debug, ejecutar directamente sin esperar respuesta del agente
+      if (isSimpleRunRequest) {
+        final lowerMessage = userMessage.toLowerCase();
+        print('🚀 Solicitud simple detectada, ejecutando directamente...');
+        
+        // Agregar mensaje del usuario al chat
+        final userMsg = Message(
+          role: 'user',
+          content: userMessage,
+          timestamp: DateTime.now(),
+        );
+        setState(() {
+          _messages.add(userMsg);
+          _isLoading = true;
+          _loadingStatus = 'Ejecutando...';
+        });
+        await _saveConversation();
+        _scrollToBottom();
+        
+        // Ejecutar directamente según la solicitud
+        if (lowerMessage.contains('debug') || lowerMessage.contains('depura')) {
+          print('🚀 Ejecutando DEBUG directamente');
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted) {
+              _handleDebug();
+            }
+          });
+          return; // Salir temprano, no enviar al agente
+        } else {
+          print('🚀 Ejecutando RUN directamente');
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted) {
+              _handleRun();
+            }
+          });
+          return; // Salir temprano, no enviar al agente
+        }
+      }
+      
       final response = await _openAIService!.sendMessage(
         message: enhancedMessage,
         imagePaths: imagesToSend.isNotEmpty ? imagesToSend : null,
@@ -389,7 +459,7 @@ NO uses herramientas ni propongas acciones automáticas.
             });
           }
         } : null,
-        onPendingActions: allowTools ? (pendingActionsList) {
+        onPendingActions: (allowTools && !isSimpleRunRequest) ? (pendingActionsList) {
           // Convertir a objetos PendingAction y mostrar diálogo de confirmación
           print('🔔 onPendingActions callback recibido con ${pendingActionsList.length} acciones');
           if (mounted) {
@@ -449,6 +519,26 @@ NO uses herramientas ni propongas acciones automáticas.
         });
         await _saveConversation();
         _scrollToBottom();
+        
+        // Si es una solicitud simple de run/debug, ejecutar directamente
+        if (isSimpleRunRequest) {
+          final lowerResponse = response.toLowerCase();
+          if (lowerResponse.contains('debug') || lowerResponse.contains('depura')) {
+            print('🚀 Ejecutando DEBUG automáticamente desde solicitud del usuario');
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (mounted) {
+                _handleDebug();
+              }
+            });
+          } else if (lowerResponse.contains('run') || lowerResponse.contains('ejecut') || lowerResponse.contains('compil')) {
+            print('🚀 Ejecutando RUN automáticamente desde solicitud del usuario');
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (mounted) {
+                _handleRun();
+              }
+            });
+          }
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -662,16 +752,16 @@ NO uses herramientas ni propongas acciones automáticas.
       if (projectPath == null || projectPath.isEmpty) {
         print('❌ ChatScreen._handleRun: NO HAY PROYECTO');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No hay proyecto cargado'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No hay proyecto cargado'),
+            backgroundColor: Colors.orange,
+          ),
+        );
         }
         return;
       }
-      
+
       // Verificar que el directorio existe
       final projectDir = Directory(projectPath);
       if (!await projectDir.exists()) {
@@ -748,6 +838,8 @@ NO uses herramientas ni propongas acciones automáticas.
       _debugService.setRunning(true);
       _debugService.resetCompilationProgress();
       _debugService.setCompilationProgress(0.05, 'Iniciando $projectTypeName...');
+      // Abrir Debug Console automáticamente al ejecutar
+      _debugService.openPanel();
       _debugService.clearAll();
       
       // Obtener nombre del proyecto
@@ -765,125 +857,344 @@ NO uses herramientas ni propongas acciones automáticas.
       
       // Para Flutter, usar el sistema existente con dispositivos
       if (projectType == ProjectType.flutter) {
-        final result = await AdvancedDebuggingService.runFlutterApp(
-          projectPath: projectPath,
-          platform: _selectedPlatform,
+        // Sincronizar plataforma antes de ejecutar
+        _selectedPlatform = _platformService.selectedPlatform;
+        print('🚀 Ejecutando Flutter en plataforma: $_selectedPlatform');
+        print('🔧 PlatformService.selectedPlatform: ${_platformService.selectedPlatform}');
+        
+        // Asegurar que la plataforma seleccionada se use correctamente
+        // Priorizar _selectedPlatform, luego PlatformService, finalmente 'macos' como fallback
+        final platformToUse = _selectedPlatform.isNotEmpty 
+            ? _selectedPlatform 
+            : (_platformService.selectedPlatform.isNotEmpty 
+                ? _platformService.selectedPlatform 
+                : 'macos');
+        print('✅ Usando plataforma: $platformToUse');
+        print('   _selectedPlatform: $_selectedPlatform');
+        print('   _platformService.selectedPlatform: ${_platformService.selectedPlatform}');
+        
+        // Determinar si debemos usar web-server (solo para fallback Android/iOS, NO para web normal)
+        // useWebServer = false significa que para la plataforma web normal se usará chrome (navegador externo)
+        // Esto solo se activará en el fallback más adelante
+        
+      final result = await AdvancedDebuggingService.runFlutterApp(
+        projectPath: projectPath,
+          platform: platformToUse,
           mode: 'release',
-          onOutput: (line) {
-            _debugService.addOutput(line);
-            _debugService.addDebugConsole(line);
+          useWebServer: false, // Para la plataforma web normal, usar chrome
+        onOutput: (line) {
+          _debugService.addOutput(line);
+          _debugService.addDebugConsole(line);
+          
+            print('📥 Flutter output: $line');
             
             // Detectar errores
-            final lowerLine = line.toLowerCase();
-            if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
-                (lowerLine.contains('error:') && !lowerLine.contains('no error')) ||
-                (lowerLine.contains('failed') && !lowerLine.contains('no devices found')) ||
-                lowerLine.contains('undefined name') ||
-                lowerLine.contains('undefined class') ||
-                lowerLine.contains('undefined method') ||
-                lowerLine.contains('undefined getter') ||
-                lowerLine.contains('syntax error') ||
-                (lowerLine.contains('cannot') && (lowerLine.contains('find') || lowerLine.contains('resolve')))) {
-              _debugService.addProblem(line);
-              print('🔴 Error detectado: $line');
-            }
-            
+          final lowerLine = line.toLowerCase();
+          if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
+              (lowerLine.contains('error:') && !lowerLine.contains('no error')) ||
+              (lowerLine.contains('failed') && !lowerLine.contains('no devices found')) ||
+              lowerLine.contains('undefined name') ||
+              lowerLine.contains('undefined class') ||
+              lowerLine.contains('undefined method') ||
+              lowerLine.contains('undefined getter') ||
+              lowerLine.contains('syntax error') ||
+              (lowerLine.contains('cannot') && (lowerLine.contains('find') || lowerLine.contains('resolve')))) {
+            _debugService.addProblem(line);
+            print('🔴 Error detectado: $line');
+          }
+          
             // Analizar progreso
             double progress = _debugService.compilationProgress;
-            String status = currentStatus;
-            
-            if (line.contains('Running Gradle task') || line.contains('Running pod install')) {
-              status = 'Configurando dependencias...';
-              progress = 0.15;
-            } else if (line.contains('Resolving dependencies') || line.contains('Downloading')) {
-              status = 'Descargando dependencias...';
-              progress = 0.25;
-            } else if (line.contains('Building') || line.contains('Compiling') || line.contains('Assembling')) {
-              status = 'Compilando código...';
-              progress = 0.45;
-            } else if (line.contains('Running') && line.contains('flutter')) {
-              status = 'Ejecutando aplicación...';
-              progress = 0.75;
-            } else if (line.contains('Launching') || line.contains('Starting')) {
-              status = 'Iniciando aplicación...';
-              progress = 0.85;
-            } else if (line.contains('Flutter run key commands') || line.contains('An Observatory debugger')) {
-              status = 'Aplicación ejecutándose';
-              progress = 1.0;
-            } else if (line.contains('Syncing files') || line.contains('Waiting for')) {
-              status = 'Sincronizando archivos...';
-              progress = 0.35;
-            } else if (line.contains('%')) {
-              final percentMatch = RegExp(r'(\d+)%').firstMatch(line);
-              if (percentMatch != null) {
-                final percent = int.parse(percentMatch.group(1)!);
-                progress = percent / 100.0;
-                status = 'Compilando... $percent%';
-              }
+          String status = currentStatus;
+          
+          if (line.contains('Running Gradle task') || line.contains('Running pod install')) {
+            status = 'Configurando dependencias...';
+            progress = 0.15;
+          } else if (line.contains('Resolving dependencies') || line.contains('Downloading')) {
+            status = 'Descargando dependencias...';
+            progress = 0.25;
+          } else if (line.contains('Building') || line.contains('Compiling') || line.contains('Assembling')) {
+            status = 'Compilando código...';
+            progress = 0.45;
+          } else if (line.contains('Running') && line.contains('flutter')) {
+            status = 'Ejecutando aplicación...';
+            progress = 0.75;
+          } else if (line.contains('Launching') || line.contains('Starting')) {
+            status = 'Iniciando aplicación...';
+            progress = 0.85;
+          } else if (line.contains('Flutter run key commands') || line.contains('An Observatory debugger')) {
+            status = 'Aplicación ejecutándose';
+            progress = 1.0;
+          } else if (line.contains('Syncing files') || line.contains('Waiting for')) {
+            status = 'Sincronizando archivos...';
+            progress = 0.35;
+          } else if (line.contains('%')) {
+            final percentMatch = RegExp(r'(\d+)%').firstMatch(line);
+            if (percentMatch != null) {
+              final percent = int.parse(percentMatch.group(1)!);
+              progress = percent / 100.0;
+              status = 'Compilando... $percent%';
             }
-            
-            if (progress > _debugService.compilationProgress) {
-              _debugService.setCompilationProgress(progress, status);
-              currentStatus = status;
-            }
-            
-            // Detectar URL para web
-            if (_selectedPlatform == 'web') {
-              RegExpMatch? urlMatch;
-              urlMatch = RegExp(r'http://localhost:(\d+)').firstMatch(line);
-              if (urlMatch != null) {
-                detectedUrl = 'http://localhost:${urlMatch.group(1)}';
-                _debugService.setAppUrl(detectedUrl);
-                print('🌐 URL detectada (localhost): $detectedUrl');
+          }
+          
+          if (progress > _debugService.compilationProgress) {
+            _debugService.setCompilationProgress(progress, status);
+            currentStatus = status;
+          }
+          
+            // Detectar URL para web - patrones más amplios para Flutter web
+            if (platformToUse == 'web') {
+              print('🔍 Buscando URL en línea para Flutter web: "$line"');
+              
+              // Patrón 1: "The Flutter DevTools debugger and profiler on [platform] is available at: http://localhost:XXXXX"
+              RegExpMatch? urlMatch = RegExp(r'available at:\s*(http://[^\s]+)', caseSensitive: false).firstMatch(line);
+            if (urlMatch != null) {
+                detectedUrl = urlMatch.group(1)!.trim();
+              _debugService.setAppUrl(detectedUrl);
+                print('🌐 ✅✅✅ URL detectada (available at): $detectedUrl');
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true;
+                  });
+                }
+                _debugService.setRunning(true);
+                _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose');
               } else {
-                urlMatch = RegExp(r'http://127\.0\.0\.1:(\d+)').firstMatch(line);
+                // Patrón 2: "http://localhost:XXXXX" o "http://127.0.0.1:XXXXX"
+                urlMatch = RegExp(r'http://(localhost|127\.0\.0\.1):(\d+)').firstMatch(line);
                 if (urlMatch != null) {
-                  detectedUrl = 'http://127.0.0.1:${urlMatch.group(1)}';
+                  final host = urlMatch.group(1)!;
+                  final port = urlMatch.group(2)!;
+                  detectedUrl = 'http://$host:$port';
                   _debugService.setAppUrl(detectedUrl);
-                  print('🌐 URL detectada (127.0.0.1): $detectedUrl');
+                  print('🌐 ✅✅✅ URL detectada (http://$host:$port): $detectedUrl');
+                  if (mounted) {
+                    setState(() {
+                      _isRunning = true;
+                    });
+                  }
+                  _debugService.setRunning(true);
+                  _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose');
                 } else {
-                  urlMatch = RegExp(r'available at:\s*(http://[^\s]+)').firstMatch(line);
+                  // Patrón 3: Cualquier URL http:// en la línea
+                  urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
                   if (urlMatch != null) {
                     detectedUrl = urlMatch.group(1)!.trim();
                     _debugService.setAppUrl(detectedUrl);
-                    print('🌐 URL detectada (available at): $detectedUrl');
-                  } else {
-                    urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
-                    if (urlMatch != null) {
-                      detectedUrl = urlMatch.group(1)!.trim();
-                      _debugService.setAppUrl(detectedUrl);
-                      print('🌐 URL detectada (genérico): $detectedUrl');
+                    print('🌐 ✅✅✅ URL detectada (genérico): $detectedUrl');
+                    if (mounted) {
+                      setState(() {
+                        _isRunning = true;
+                      });
                     }
+                    _debugService.setRunning(true);
+                    _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose');
                   }
                 }
               }
+              
+              // También detectar cuando Chrome se abre (indica que la app está lista)
+              if (line.contains('Chrome') && (line.contains('Launching') || line.contains('Starting'))) {
+                // Si no se detectó URL aún, usar localhost:8080 como fallback (puerto común de Flutter web)
+                if (detectedUrl == null) {
+                  detectedUrl = 'http://localhost:8080';
+                  _debugService.setAppUrl(detectedUrl);
+                  print('🌐 ✅ URL establecida por defecto (Chrome detectado): $detectedUrl');
+                  if (mounted) {
+                    setState(() {
+                      _isRunning = true;
+                    });
+                  }
+                  _debugService.setRunning(true);
+                  _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose');
+                }
             }
-          },
-          onError: (error) {
-            _debugService.addProblem(error.toString());
-            _debugService.setCompilationProgress(0.0, 'Error en compilación');
-          },
-        );
-        
-        if (detectedUrl != null) {
-          _debugService.setAppUrl(detectedUrl);
+          }
+        },
+        onError: (error) {
+          _debugService.addProblem(error.toString());
+          _debugService.setCompilationProgress(0.0, 'Error en compilación');
+        },
+      );
+      
+      if (detectedUrl != null) {
+        _debugService.setAppUrl(detectedUrl);
+          print('🌐 URL final establecida: $detectedUrl');
         }
 
-        setState(() {
-          _isRunning = false;
-        });
+        // Variables para detectar si se ejecutó el fallback web
+        bool fallbackWebExecuted = false;
+        final isAndroidOrIOS = platformToUse.toLowerCase() == 'android' || platformToUse.toLowerCase() == 'ios';
         
-        _debugService.setRunning(false);
-        _debugService.setCompilationProgress(1.0, result.success ? 'Completado' : 'Error');
+        // Para Flutter web, mantener _isRunning en true si la compilación fue exitosa
+        // Para otras plataformas (Android/iOS/macOS), la app se ejecuta en el dispositivo/emulador
+        if (platformToUse == 'web' && result.success) {
+          print('✅ Flutter web ejecutándose correctamente, manteniendo _isRunning = true');
+          if (mounted) {
+      setState(() {
+              _isRunning = true;
+            });
+          }
+          _debugService.setRunning(true);
+          _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose');
+        } else if (result.success) {
+          // Para Android/iOS/macOS, la app se ejecuta en el dispositivo/emulador
+          // NO establecer URL (solo para web)
+          print('✅ Flutter ${platformToUse} ejecutándose en dispositivo/emulador');
+          if (mounted) {
+            setState(() {
+              _isRunning = true; // Mantener en true para mostrar que está ejecutándose
+            });
+          }
+          _debugService.setRunning(true);
+          _debugService.setAppUrl(null); // Asegurar que no hay URL para apps nativas
+          _debugService.setCompilationProgress(1.0, 'Aplicación ejecutándose en ${platformToUse.toUpperCase()}');
+        } else {
+          // Compilación fallida - verificar si es por falta de dispositivo Android/iOS
+          final errorMessage = result.errors.isNotEmpty 
+              ? result.errors.join('\n')
+              : 'La compilación falló. Revisa el Debug Console para más detalles.';
+          
+          final isNoDeviceError = errorMessage.contains('No se encontró dispositivo disponible') ||
+                                 errorMessage.contains('No se encontró dispositivo para la plataforma');
+          
+          // Si es Android/iOS y no hay dispositivo, ejecutar automáticamente la versión web como fallback
+          if (isAndroidOrIOS && isNoDeviceError) {
+            print('📱 No se encontró dispositivo para $platformToUse. Ejecutando versión web como fallback...');
+            _debugService.addDebugConsole('📱 No se encontró dispositivo para $platformToUse');
+            _debugService.addDebugConsole('🌐 Ejecutando versión web como fallback...');
+            _debugService.setCompilationProgress(0.1, 'Ejecutando versión web como fallback...');
+            
+            // Ejecutar la versión web
+            String? webDetectedUrl;
+            bool webUrlDetected = false;
+            
+            final webResult = await AdvancedDebuggingService.runFlutterApp(
+              projectPath: projectPath,
+              platform: 'web',
+              mode: 'release',
+              useWebServer: true, // Usar web-server para NO abrir navegador externo (fallback Android/iOS)
+              onOutput: (line) {
+                _debugService.addOutput(line);
+                _debugService.addDebugConsole(line);
+                
+                print('📥 Flutter web (fallback) output: $line');
+                
+                // Detectar URL para web
+                if (!webUrlDetected) {
+                  // Patrón 1: "available at: http://..."
+                  RegExpMatch? urlMatch = RegExp(r'available at:\s*(http://[^\s]+)', caseSensitive: false).firstMatch(line);
+                  if (urlMatch != null) {
+                    webDetectedUrl = urlMatch.group(1)!.trim();
+                    _debugService.setAppUrl(webDetectedUrl);
+                    webUrlDetected = true;
+                    print('🌐 ✅✅✅ URL detectada (fallback web): $webDetectedUrl');
+                    if (mounted) {
+                      setState(() {
+                        _isRunning = true;
+                      });
+                    }
+                    _debugService.setRunning(true);
+                    _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse)');
+                  } else {
+                    // Patrón 2: "http://localhost:XXXXX" o "http://127.0.0.1:XXXXX"
+                    urlMatch = RegExp(r'http://(localhost|127\.0\.0\.1):(\d+)').firstMatch(line);
+                    if (urlMatch != null) {
+                      final host = urlMatch.group(1)!;
+                      final port = urlMatch.group(2)!;
+                      webDetectedUrl = 'http://$host:$port';
+                      _debugService.setAppUrl(webDetectedUrl);
+                      webUrlDetected = true;
+                      print('🌐 ✅✅✅ URL detectada (fallback web): $webDetectedUrl');
+                      if (mounted) {
+                        setState(() {
+                          _isRunning = true;
+                        });
+                      }
+                      _debugService.setRunning(true);
+                      _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse)');
+                    } else {
+                      // Patrón 3: Cualquier URL http:// en la línea
+                      urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
+                      if (urlMatch != null) {
+                        webDetectedUrl = urlMatch.group(1)!.trim();
+                        _debugService.setAppUrl(webDetectedUrl);
+                        webUrlDetected = true;
+                        print('🌐 ✅✅✅ URL detectada (fallback web): $webDetectedUrl');
+                        if (mounted) {
+                          setState(() {
+                            _isRunning = true;
+                          });
+                        }
+                        _debugService.setRunning(true);
+                        _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse)');
+                      }
+                    }
+                  }
+                  
+                  // Fallback si se detecta Chrome pero no URL específica
+                  if (webDetectedUrl == null && line.contains('Chrome') && (line.contains('Launching') || line.contains('Starting'))) {
+                    webDetectedUrl = 'http://localhost:8080';
+                    _debugService.setAppUrl(webDetectedUrl);
+                    webUrlDetected = true;
+                    print('🌐 ✅ URL establecida por defecto (fallback web): $webDetectedUrl');
+                    if (mounted) {
+                      setState(() {
+                        _isRunning = true;
+                      });
+                    }
+                    _debugService.setRunning(true);
+                    _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse)');
+                  }
+                }
+              },
+              onError: (error) {
+                _debugService.addProblem(error.toString());
+                _debugService.setCompilationProgress(0.0, 'Error en compilación web (fallback)');
+              },
+            );
+            
+            if (webResult.success && webDetectedUrl != null) {
+              print('✅ Versión web ejecutándose correctamente como fallback para $platformToUse');
+              fallbackWebExecuted = true;
+              if (mounted) {
+                setState(() {
+                  _isRunning = true;
+                });
+              }
+              _debugService.setRunning(true);
+              _debugService.setAppUrl(webDetectedUrl);
+              _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse)');
+            } else {
+              // Si el fallback web también falla, mostrar error
+              setState(() {
+                _isRunning = false;
+              });
+      _debugService.setRunning(false);
+              _debugService.setAppUrl(null);
+              _debugService.setCompilationProgress(1.0, errorMessage);
+            }
+          } else {
+            // Error normal (no es por falta de dispositivo)
+            setState(() {
+              _isRunning = false;
+            });
+            _debugService.setRunning(false);
+            _debugService.setAppUrl(null); // Limpiar URL en caso de error
+            _debugService.setCompilationProgress(1.0, errorMessage); // Establecer mensaje de error en compilationStatus
+          }
+        }
         
-        if (!result.success && mounted) {
+        // Solo mostrar diálogo de error si no se ejecutó el fallback web exitosamente
+        if (!result.success && mounted && !fallbackWebExecuted) {
+          final errorMessage = result.errors.isNotEmpty 
+              ? result.errors.join('\n')
+              : 'La compilación falló. Revisa el Debug Console para más detalles.';
           showDialog(
             context: context,
             builder: (context) => ErrorConfirmationDialog(
               title: 'Compilación fallida',
-              message: result.errors.isNotEmpty 
-                  ? result.errors.join('\n')
-                  : 'La compilación falló. Revisa el Debug Console para más detalles.',
+              message: errorMessage,
               showViewErrorsButton: true,
               onViewErrors: () {
                 _debugService.openPanel();
@@ -1029,7 +1340,7 @@ NO uses herramientas ni propongas acciones automáticas.
                 _debugService.setCompilationProgress(1.0, 'Servidor ejecutándose ✅');
                 _debugService.setRunning(true);
                 print('✅ Servidor listo con URL: ${detectedUrl ?? "pendiente"}');
-                if (mounted) {
+        if (mounted) {
                   setState(() {
                     _isRunning = true; // Mantener en ejecución para servidores
                   });
@@ -1163,9 +1474,9 @@ NO uses herramientas ni propongas acciones automáticas.
                     print('⚠️ Error al terminar proceso: $e');
                   }
                   
-                  if (mounted) {
-                    showDialog(
-                      context: context,
+          if (mounted) {
+            showDialog(
+              context: context,
                       builder: (context) => ErrorConfirmationDialog(
                         title: 'Error de ejecución',
                         message: 'No se pudo ejecutar el comando:\n\n$line\n\nVerifica que el comando existe y está instalado.',
@@ -1276,8 +1587,8 @@ NO uses herramientas ni propongas acciones automáticas.
                   message: 'El proceso terminó con código de error: $exitCode\n\nRevisa el Debug Console para más detalles.',
                   showViewErrorsButton: true,
                   onViewErrors: () {
-                    _debugService.openPanel();
-                  },
+                      _debugService.openPanel();
+                    },
                 ),
               );
             }
@@ -1312,11 +1623,11 @@ NO uses herramientas ni propongas acciones automáticas.
     } catch (e) {
       print('❌ Error general en _handleRun: $e');
       if (mounted) {
-        setState(() {
-          _isRunning = false;
-        });
-        _debugService.setRunning(false);
-        
+      setState(() {
+        _isRunning = false;
+      });
+      _debugService.setRunning(false);
+      
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al ejecutar: $e'),
@@ -1443,15 +1754,17 @@ NO uses herramientas ni propongas acciones automáticas.
       print('   Requiere dispositivo: ${runCommand.requiresDevice}');
       
       // Configurar estado de ejecución
-      setState(() {
-        _isRunning = true;
-        _isDebugging = true;
-      });
-      
-      _debugService.setRunning(true);
-      _debugService.resetCompilationProgress();
+    setState(() {
+      _isRunning = true;
+      _isDebugging = true;
+    });
+    
+    _debugService.setRunning(true);
+    _debugService.resetCompilationProgress();
       _debugService.setCompilationProgress(0.05, 'Iniciando $projectTypeName (DEBUG)...');
-      _debugService.clearAll();
+      // Abrir Debug Console automáticamente al ejecutar
+      _debugService.openPanel();
+    _debugService.clearAll();
       
       // Obtener nombre del proyecto
       final projectName = projectPath.split('/').last;
@@ -1469,13 +1782,32 @@ NO uses herramientas ni propongas acciones automáticas.
       
       // Para Flutter, usar el sistema existente con dispositivos
       if (projectType == ProjectType.flutter) {
+        // Sincronizar plataforma antes de ejecutar
+        _selectedPlatform = _platformService.selectedPlatform;
+        print('🚀 Ejecutando Flutter en plataforma (DEBUG): $_selectedPlatform');
+        print('🔧 PlatformService.selectedPlatform: ${_platformService.selectedPlatform}');
+        
+        // Asegurar que la plataforma seleccionada se use correctamente
+        // Priorizar _selectedPlatform, luego PlatformService, finalmente 'macos' como fallback
+        final platformToUse = _selectedPlatform.isNotEmpty 
+            ? _selectedPlatform 
+            : (_platformService.selectedPlatform.isNotEmpty 
+                ? _platformService.selectedPlatform 
+                : 'macos');
+        print('✅ Usando plataforma (DEBUG): $platformToUse');
+        print('   _selectedPlatform: $_selectedPlatform');
+        print('   _platformService.selectedPlatform: ${_platformService.selectedPlatform}');
+        
         final result = await AdvancedDebuggingService.runFlutterApp(
           projectPath: projectPath,
-          platform: _selectedPlatform,
+          platform: platformToUse,
           mode: 'debug',
+          useWebServer: false, // Para la plataforma web normal, usar chrome
           onOutput: (line) {
             _debugService.addOutput(line);
             _debugService.addDebugConsole(line);
+            
+            print('📥 Flutter output (DEBUG): $line');
             
             // Detectar errores
             final lowerLine = line.toLowerCase();
@@ -1531,34 +1863,75 @@ NO uses herramientas ni propongas acciones automáticas.
               currentStatus = status;
             }
             
-            // Detectar URL para web
-            if (_selectedPlatform == 'web') {
-              RegExpMatch? urlMatch;
-              urlMatch = RegExp(r'http://localhost:(\d+)').firstMatch(line);
+            // Detectar URL para web - patrones más amplios para Flutter web
+            if (platformToUse == 'web') {
+              print('🔍 Buscando URL en línea para Flutter web (DEBUG): "$line"');
+              
+              // Patrón 1: "The Flutter DevTools debugger and profiler on [platform] is available at: http://localhost:XXXXX"
+              RegExpMatch? urlMatch = RegExp(r'available at:\s*(http://[^\s]+)', caseSensitive: false).firstMatch(line);
               if (urlMatch != null) {
-                detectedUrl = 'http://localhost:${urlMatch.group(1)}';
+                detectedUrl = urlMatch.group(1)!.trim();
                 _debugService.setAppUrl(detectedUrl);
-                print('🌐 URL detectada (localhost): $detectedUrl');
+                print('🌐 ✅✅✅ URL detectada (available at): $detectedUrl');
+                if (mounted) {
+    setState(() {
+                    _isRunning = true;
+                    _isDebugging = true;
+                  });
+                }
+                _debugService.setRunning(true);
+                _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (DEBUG)');
               } else {
-                urlMatch = RegExp(r'http://127\.0\.0\.1:(\d+)').firstMatch(line);
+                // Patrón 2: "http://localhost:XXXXX" o "http://127.0.0.1:XXXXX"
+                urlMatch = RegExp(r'http://(localhost|127\.0\.0\.1):(\d+)').firstMatch(line);
                 if (urlMatch != null) {
-                  detectedUrl = 'http://127.0.0.1:${urlMatch.group(1)}';
+                  final host = urlMatch.group(1)!;
+                  final port = urlMatch.group(2)!;
+                  detectedUrl = 'http://$host:$port';
                   _debugService.setAppUrl(detectedUrl);
-                  print('🌐 URL detectada (127.0.0.1): $detectedUrl');
+                  print('🌐 ✅✅✅ URL detectada (http://$host:$port): $detectedUrl');
+                  if (mounted) {
+                    setState(() {
+                      _isRunning = true;
+                      _isDebugging = true;
+                    });
+                  }
+                  _debugService.setRunning(true);
+                  _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (DEBUG)');
                 } else {
-                  urlMatch = RegExp(r'available at:\s*(http://[^\s]+)').firstMatch(line);
+                  // Patrón 3: Cualquier URL http:// en la línea
+                  urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
                   if (urlMatch != null) {
                     detectedUrl = urlMatch.group(1)!.trim();
                     _debugService.setAppUrl(detectedUrl);
-                    print('🌐 URL detectada (available at): $detectedUrl');
-                  } else {
-                    urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
-                    if (urlMatch != null) {
-                      detectedUrl = urlMatch.group(1)!.trim();
-                      _debugService.setAppUrl(detectedUrl);
-                      print('🌐 URL detectada (genérico): $detectedUrl');
+                    print('🌐 ✅✅✅ URL detectada (genérico): $detectedUrl');
+                    if (mounted) {
+                      setState(() {
+                        _isRunning = true;
+                        _isDebugging = true;
+                      });
                     }
+                    _debugService.setRunning(true);
+                    _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (DEBUG)');
                   }
+                }
+              }
+              
+              // También detectar cuando Chrome se abre (indica que la app está lista)
+              if (line.contains('Chrome') && (line.contains('Launching') || line.contains('Starting'))) {
+                // Si no se detectó URL aún, usar localhost:8080 como fallback (puerto común de Flutter web)
+                if (detectedUrl == null) {
+                  detectedUrl = 'http://localhost:8080';
+                  _debugService.setAppUrl(detectedUrl);
+                  print('🌐 ✅ URL establecida por defecto (Chrome detectado): $detectedUrl');
+                  if (mounted) {
+                    setState(() {
+                      _isRunning = true;
+                      _isDebugging = true;
+                    });
+                  }
+                  _debugService.setRunning(true);
+                  _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (DEBUG)');
                 }
               }
             }
@@ -1571,24 +1944,191 @@ NO uses herramientas ni propongas acciones automáticas.
         
         if (detectedUrl != null) {
           _debugService.setAppUrl(detectedUrl);
+          print('🌐 URL final establecida (DEBUG): $detectedUrl');
         }
 
-        setState(() {
-          _isRunning = false;
-          _isDebugging = false;
-        });
+        // Variables para detectar si se ejecutó el fallback web (DEBUG)
+        bool fallbackWebExecutedDebug = false;
+        final isAndroidOrIOSDebug = platformToUse.toLowerCase() == 'android' || platformToUse.toLowerCase() == 'ios';
         
-        _debugService.setRunning(false);
-        _debugService.setCompilationProgress(1.0, result.success ? 'Completado (DEBUG)' : 'Error');
+        // Para Flutter web, mantener _isRunning en true si la compilación fue exitosa
+        // Para otras plataformas (Android/iOS/macOS), la app se ejecuta en el dispositivo/emulador
+        if (platformToUse == 'web' && result.success) {
+          print('✅ Flutter web ejecutándose correctamente (DEBUG), manteniendo _isRunning = true');
+          if (mounted) {
+            setState(() {
+              _isRunning = true;
+              _isDebugging = true;
+            });
+          }
+          _debugService.setRunning(true);
+          _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (DEBUG)');
+        } else if (result.success) {
+          // Para Android/iOS/macOS, la app se ejecuta en el dispositivo/emulador
+          // NO establecer URL (solo para web)
+          print('✅ Flutter ${platformToUse} ejecutándose en dispositivo/emulador (DEBUG)');
+          if (mounted) {
+            setState(() {
+              _isRunning = true; // Mantener en true para mostrar que está ejecutándose
+              _isDebugging = true;
+            });
+          }
+          _debugService.setRunning(true);
+          _debugService.setAppUrl(null); // Asegurar que no hay URL para apps nativas
+          _debugService.setCompilationProgress(1.0, 'Aplicación ejecutándose en ${platformToUse.toUpperCase()} (DEBUG)');
+        } else {
+          // Compilación fallida - verificar si es por falta de dispositivo Android/iOS
+          final errorMessage = result.errors.isNotEmpty 
+              ? result.errors.join('\n')
+              : 'La compilación falló. Revisa el Debug Console para más detalles.';
+          
+          final isNoDeviceError = errorMessage.contains('No se encontró dispositivo disponible') ||
+                                 errorMessage.contains('No se encontró dispositivo para la plataforma');
+          
+          // Si es Android/iOS y no hay dispositivo, ejecutar automáticamente la versión web como fallback
+          if (isAndroidOrIOSDebug && isNoDeviceError) {
+            print('📱 No se encontró dispositivo para $platformToUse (DEBUG). Ejecutando versión web como fallback...');
+            _debugService.addDebugConsole('📱 No se encontró dispositivo para $platformToUse (DEBUG)');
+            _debugService.addDebugConsole('🌐 Ejecutando versión web como fallback (DEBUG)...');
+            _debugService.setCompilationProgress(0.1, 'Ejecutando versión web como fallback (DEBUG)...');
+            
+            // Ejecutar la versión web
+            String? webDetectedUrl;
+            bool webUrlDetected = false;
+            
+            final webResult = await AdvancedDebuggingService.runFlutterApp(
+              projectPath: projectPath,
+              platform: 'web',
+              mode: 'debug',
+              useWebServer: true, // Usar web-server para NO abrir navegador externo (fallback Android/iOS)
+              onOutput: (line) {
+                _debugService.addOutput(line);
+                _debugService.addDebugConsole(line);
+                
+                print('📥 Flutter web (fallback DEBUG) output: $line');
+                
+                // Detectar URL para web
+                if (!webUrlDetected) {
+                  // Patrón 1: "available at: http://..."
+                  RegExpMatch? urlMatch = RegExp(r'available at:\s*(http://[^\s]+)', caseSensitive: false).firstMatch(line);
+                  if (urlMatch != null) {
+                    webDetectedUrl = urlMatch.group(1)!.trim();
+                    _debugService.setAppUrl(webDetectedUrl);
+                    webUrlDetected = true;
+                    print('🌐 ✅✅✅ URL detectada (fallback web DEBUG): $webDetectedUrl');
+                    if (mounted) {
+                      setState(() {
+                        _isRunning = true;
+                        _isDebugging = true;
+                      });
+                    }
+                    _debugService.setRunning(true);
+                    _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse, DEBUG)');
+                  } else {
+                    // Patrón 2: "http://localhost:XXXXX" o "http://127.0.0.1:XXXXX"
+                    urlMatch = RegExp(r'http://(localhost|127\.0\.0\.1):(\d+)').firstMatch(line);
+                    if (urlMatch != null) {
+                      final host = urlMatch.group(1)!;
+                      final port = urlMatch.group(2)!;
+                      webDetectedUrl = 'http://$host:$port';
+                      _debugService.setAppUrl(webDetectedUrl);
+                      webUrlDetected = true;
+                      print('🌐 ✅✅✅ URL detectada (fallback web DEBUG): $webDetectedUrl');
+                      if (mounted) {
+                        setState(() {
+                          _isRunning = true;
+                          _isDebugging = true;
+                        });
+                      }
+                      _debugService.setRunning(true);
+                      _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse, DEBUG)');
+                    } else {
+                      // Patrón 3: Cualquier URL http:// en la línea
+                      urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
+                      if (urlMatch != null) {
+                        webDetectedUrl = urlMatch.group(1)!.trim();
+                        _debugService.setAppUrl(webDetectedUrl);
+                        webUrlDetected = true;
+                        print('🌐 ✅✅✅ URL detectada (fallback web DEBUG): $webDetectedUrl');
+                        if (mounted) {
+                          setState(() {
+                            _isRunning = true;
+                            _isDebugging = true;
+                          });
+                        }
+                        _debugService.setRunning(true);
+                        _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse, DEBUG)');
+                      }
+                    }
+                  }
+                  
+                  // Fallback si se detecta Chrome pero no URL específica
+                  if (webDetectedUrl == null && line.contains('Chrome') && (line.contains('Launching') || line.contains('Starting'))) {
+                    webDetectedUrl = 'http://localhost:8080';
+                    _debugService.setAppUrl(webDetectedUrl);
+                    webUrlDetected = true;
+                    print('🌐 ✅ URL establecida por defecto (fallback web DEBUG): $webDetectedUrl');
+                    if (mounted) {
+                      setState(() {
+                        _isRunning = true;
+                        _isDebugging = true;
+                      });
+                    }
+                    _debugService.setRunning(true);
+                    _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse, DEBUG)');
+                  }
+                }
+              },
+              onError: (error) {
+                _debugService.addProblem(error.toString());
+                _debugService.setCompilationProgress(0.0, 'Error en compilación web (fallback DEBUG)');
+              },
+            );
+            
+            if (webResult.success && webDetectedUrl != null) {
+              print('✅ Versión web ejecutándose correctamente como fallback para $platformToUse (DEBUG)');
+              fallbackWebExecutedDebug = true;
+              if (mounted) {
+                setState(() {
+                  _isRunning = true;
+                  _isDebugging = true;
+                });
+              }
+              _debugService.setRunning(true);
+              _debugService.setAppUrl(webDetectedUrl);
+              _debugService.setCompilationProgress(1.0, 'Aplicación web ejecutándose (fallback para $platformToUse, DEBUG)');
+            } else {
+              // Si el fallback web también falla, mostrar error
+              setState(() {
+                _isRunning = false;
+                _isDebugging = false;
+              });
+              _debugService.setRunning(false);
+              _debugService.setAppUrl(null);
+              _debugService.setCompilationProgress(1.0, errorMessage);
+            }
+          } else {
+            // Error normal (no es por falta de dispositivo)
+            setState(() {
+              _isRunning = false;
+              _isDebugging = false;
+            });
+            _debugService.setRunning(false);
+            _debugService.setAppUrl(null); // Limpiar URL en caso de error
+            _debugService.setCompilationProgress(1.0, errorMessage); // Establecer mensaje de error en compilationStatus
+          }
+        }
         
-        if (!result.success && mounted) {
-          showDialog(
-            context: context,
+        // Solo mostrar diálogo de error si no se ejecutó el fallback web exitosamente
+        if (!result.success && mounted && !fallbackWebExecutedDebug) {
+          final errorMessage = result.errors.isNotEmpty 
+              ? result.errors.join('\n')
+              : 'La compilación falló. Revisa el Debug Console para más detalles.';
+    showDialog(
+      context: context,
             builder: (context) => ErrorConfirmationDialog(
               title: 'Compilación fallida',
-              message: result.errors.isNotEmpty 
-                  ? result.errors.join('\n')
-                  : 'La compilación falló. Revisa el Debug Console para más detalles.',
+              message: errorMessage,
               showViewErrorsButton: true,
               onViewErrors: () {
                 _debugService.openPanel();
@@ -1839,7 +2379,7 @@ NO uses herramientas ni propongas acciones automáticas.
                     print('⚠️ Error al terminar proceso: $e');
                   }
                   
-                  if (mounted) {
+        if (mounted) {
                     showDialog(
                       context: context,
                       builder: (context) => ErrorConfirmationDialog(
@@ -1849,10 +2389,10 @@ NO uses herramientas ni propongas acciones automáticas.
                         onViewErrors: () {
                           _debugService.openPanel();
                         },
-                      ),
-                    );
-                  }
-                }
+            ),
+          );
+        }
+      }
               }
             }
           });
@@ -1876,7 +2416,7 @@ NO uses herramientas ni propongas acciones automáticas.
                 try {
                   process.kill();
                   _runningProcess = null;
-                } catch (e) {
+    } catch (e) {
                   print('⚠️ Error al terminar proceso: $e');
                 }
                 
@@ -1894,9 +2434,9 @@ NO uses herramientas ni propongas acciones automáticas.
                     onViewErrors: () {
                       _debugService.openPanel();
                     },
-                  ),
-                );
-              }
+          ),
+        );
+      }
             });
             
             // Monitorear si el proceso termina inesperadamente
@@ -1919,8 +2459,8 @@ NO uses herramientas ni propongas acciones automáticas.
               _debugService.setRunning(false);
               
               if (exitCode != 0 && mounted) {
-                showDialog(
-                  context: context,
+      showDialog(
+        context: context,
                   builder: (context) => ErrorConfirmationDialog(
                     title: 'Servidor detenido',
                     message: 'El servidor terminó inesperadamente con código: $exitCode\n\nRevisa el Debug Console para más detalles.',
@@ -2042,8 +2582,23 @@ NO uses herramientas ni propongas acciones automáticas.
   Future<void> _handleRestart() async {
     _handleStop();
     await Future.delayed(const Duration(milliseconds: 500));
-    await _handleRun();
+    if (_isDebugging) {
+      await _handleDebug();
+    } else {
+      await _handleRun();
+    }
   }
+
+  // Métodos públicos para acceso desde MultiChatScreen
+  void handleRun() => _handleRun();
+  void handleDebug() => _handleDebug();
+  void handleStop() => _handleStop();
+  void handleRestart() => _handleRestart();
+  
+  // Getters públicos para el estado
+  bool get isRunning => _isRunning;
+  bool get isDebugging => _isDebugging;
+  String get selectedPlatform => _selectedPlatform;
 
   void _openSettings() {
     Navigator.push(
@@ -2063,11 +2618,15 @@ NO uses herramientas ni propongas acciones automáticas.
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.chat_bubble_outline, size: 48, color: CursorTheme.textSecondary),
-            const SizedBox(height: 12),
+            Icon(Icons.chat_bubble_outline, size: 48, color: CursorTheme.textSecondary.withOpacity(0.5)),
+            const SizedBox(height: 16),
             Text(
               'Comienza una conversación',
-              style: TextStyle(color: CursorTheme.textPrimary, fontSize: 14),
+              style: TextStyle(
+                color: CursorTheme.textSecondary,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ],
         ),
@@ -2090,19 +2649,23 @@ NO uses herramientas ni propongas acciones automáticas.
                 // Tarjeta compacta para "pensando" o "trabajando con archivos" - estilo Cursor
                 // Mostrar tarjeta de trabajo en tiempo real si hay operación de archivo
                 if (_currentFileOperation != null && _currentFilePath != null) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                         // Icono del proyecto (robot azul)
                         Container(
-                          width: 24,
-                          height: 24,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF007ACC),
-                            shape: BoxShape.circle,
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF007ACC),
+                            borderRadius: BorderRadius.circular(4.5), // Esquinas redondeadas como iconos del dock
+                            border: Border.all(
+                              color: const Color(0xFF007ACC).withOpacity(0.3), // Borde sutil
+                              width: 0.5,
+                            ),
                           ),
                           child: CustomPaint(
                             painter: RobotIconPainter(),
@@ -2110,31 +2673,31 @@ NO uses herramientas ni propongas acciones automáticas.
                         ),
                         const SizedBox(width: 12),
                         // Tarjeta de trabajo en tiempo real estilo Cursor
-                        Container(
+                      Container(
                           constraints: const BoxConstraints(maxWidth: 500),
                           padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
+                        decoration: BoxDecoration(
                             color: CursorTheme.surface,
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: CursorTheme.border, width: 1),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
                               Row(
                                 children: [
                                   SizedBox(
                                     width: 12,
                                     height: 12,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 1.5,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
                                       valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
                                   Expanded(
-                                    child: Text(
+                              child: Text(
                                       _currentFileOperation == 'creando' 
                                           ? 'Creando archivo'
                                           : _currentFileOperation == 'editando' 
@@ -2142,8 +2705,8 @@ NO uses herramientas ni propongas acciones automáticas.
                                               : _currentFileOperation == 'leyendo'
                                                   ? 'Leyendo archivo'
                                                   : 'Trabajando',
-                                      style: const TextStyle(
-                                        color: CursorTheme.textPrimary,
+                                style: const TextStyle(
+                                  color: CursorTheme.textPrimary,
                                         fontSize: 13,
                                         fontWeight: FontWeight.w500,
                                       ),
@@ -2175,18 +2738,18 @@ NO uses herramientas ni propongas acciones automáticas.
                                         _currentFilePath!.split('/').last,
                                         style: const TextStyle(
                                           color: CursorTheme.textSecondary,
-                                          fontSize: 12,
+                                  fontSize: 12,
                                           fontFamily: 'monospace',
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
                                   ],
-                                ),
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
+                        ),
                         ),
                       ],
                     ),
@@ -2201,11 +2764,15 @@ NO uses herramientas ni propongas acciones automáticas.
                     children: [
                       // Icono del proyecto (robot azul)
                       Container(
-                        width: 24,
-                        height: 24,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF007ACC),
-                          shape: BoxShape.circle,
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF007ACC),
+                          borderRadius: BorderRadius.circular(4.5), // Esquinas redondeadas como iconos del dock
+                          border: Border.all(
+                            color: const Color(0xFF007ACC).withOpacity(0.3), // Borde sutil
+                            width: 0.5,
+                          ),
                         ),
                         child: CustomPaint(
                           painter: RobotIconPainter(),
@@ -2291,32 +2858,10 @@ NO uses herramientas ni propongas acciones automáticas.
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // Barra de Run and Debug en la esquina superior derecha
-          Container(
-            height: 36,
-            padding: const EdgeInsets.only(right: 8, top: 4),
-            alignment: Alignment.topRight,
-            child: RunDebugToolbar(
-              onRun: _handleRun,
-              onDebug: _handleDebug,
-              onStop: _handleStop,
-              onRestart: _handleRestart,
-              onPlatformChanged: (platform) {
-                print('🔧 Plataforma seleccionada: $platform');
-                setState(() {
-                  _selectedPlatform = platform;
-                });
-                // Actualizar el servicio compartido
-                _platformService.setPlatform(platform);
-              },
-              selectedPlatform: _selectedPlatform,
-              isRunning: _isRunning,
-              isDebugging: _isDebugging,
-            ),
-          ),
-          
+          Column(
+            children: [
           Expanded(
             child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
           ),
@@ -2341,6 +2886,33 @@ NO uses herramientas ni propongas acciones automáticas.
             isLoading: _isLoading,
             onStop: _stopRequest,
             placeholder: 'Plan, @ for context, / for commands',
+              ),
+            ],
+          ),
+          // Barra de Run and Debug arrastrable (flotante)
+          RunDebugToolbar(
+            onRun: _handleRun,
+            onDebug: _handleDebug,
+            onStop: _handleStop,
+            onRestart: _handleRestart,
+            onPlatformChanged: (platform) {
+              print('🔧 Plataforma seleccionada: $platform');
+              setState(() {
+                _selectedPlatform = platform;
+              });
+              // Actualizar el servicio compartido
+              _platformService.setPlatform(platform);
+              
+              // Si se cambia a una plataforma que no es web, limpiar la URL
+              // (las apps nativas Android/iOS no tienen URL)
+              if (platform.toLowerCase() != 'web') {
+                print('🧹 Limpiando URL porque la plataforma no es web: $platform');
+                _debugService.setAppUrl(null);
+              }
+            },
+            selectedPlatform: _selectedPlatform,
+            isRunning: _isRunning,
+            isDebugging: _isDebugging,
           ),
         ],
       ),
@@ -2371,6 +2943,7 @@ NO uses herramientas ni propongas acciones automáticas.
     
     _messageController.dispose();
     _scrollController.dispose();
+    _platformService.removeListener(_onPlatformChanged);
     _openAIService?.dispose();
     _saveConversation();
     super.dispose();

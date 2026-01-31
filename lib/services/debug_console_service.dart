@@ -7,11 +7,11 @@ class DebugConsoleService extends ChangeNotifier {
   factory DebugConsoleService() => _instance;
   DebugConsoleService._internal();
 
-  double _panelHeight = 0.0; // 0 = cerrado, >0 = abierto
+  double _panelHeight = 250.0; // Visible por defecto con altura 250
   List<String> _output = [];
   List<String> _debugConsole = [];
   List<String> _problems = [];
-  bool _isVisible = false;
+  bool _isVisible = true; // Visible por defecto
   bool _isRunning = false;
   String? _appUrl; // URL de la app ejecutándose (para web)
   double _compilationProgress = 0.0; // Progreso de compilación (0.0 - 1.0)

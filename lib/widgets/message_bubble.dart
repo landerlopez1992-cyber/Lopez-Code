@@ -162,46 +162,62 @@ class MessageBubble extends StatelessWidget {
     final isUser = message.role == 'user';
     
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12), // Espacio más compacto como Cursor
+      padding: const EdgeInsets.only(bottom: 16), // Espacio entre mensajes como Cursor
       child: Row(
         mainAxisAlignment:
             isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isUser) ...[
-            // Icono del proyecto (robot azul)
+            // Icono del asistente (código azul) - profesional, pequeño, esquinas redondeadas
             Container(
-              width: 24,
-              height: 24,
-              decoration: const BoxDecoration(
-                color: Color(0xFF007ACC),
-                shape: BoxShape.circle,
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                color: const Color(0xFF007ACC),
+                borderRadius: BorderRadius.circular(4.5), // Esquinas redondeadas como iconos del dock
+                border: Border.all(
+                  color: const Color(0xFF007ACC).withOpacity(0.3), // Borde sutil
+                  width: 0.5,
+                ),
               ),
               child: CustomPaint(
                 painter: RobotIconPainter(),
               ),
             ),
-            const SizedBox(width: 12), // Más espacio como Cursor
+            const SizedBox(width: 10),
           ],
           Flexible(
             child: isUser 
                 ? Container(
                     constraints: const BoxConstraints(maxWidth: 900),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
                       color: CursorTheme.userMessageBg,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: _buildMessageContent(context, isUser),
                   )
-                : _buildMessageContent(context, isUser),
+                : Container(
+                    constraints: const BoxConstraints(maxWidth: 900),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: CursorTheme.assistantMessageBg,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: CursorTheme.assistantMessageBorder,
+                        width: 1,
+                      ),
+                    ),
+                    child: _buildMessageContent(context, isUser),
+                  ),
           ),
           if (isUser) ...[
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             CircleAvatar(
-              radius: 12, // Mismo tamaño que el avatar del asistente
-              backgroundColor: const Color(0xFF37373D), // Color más consistente con el tema
-              child: const Icon(Icons.person, size: 14, color: Colors.white),
+              radius: 14,
+              backgroundColor: const Color(0xFF37373D),
+              child: const Icon(Icons.person, size: 16, color: Colors.white),
             ),
           ],
         ],
@@ -221,23 +237,24 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
 }
 
 // Custom painter para el icono de código (corchetes angulares <>)
+// Ajustado para tamaño pequeño profesional (20x20) con esquinas redondeadas
 class RobotIconPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
+      ..strokeWidth = 1.8 // Más delgado para tamaño pequeño
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
     final centerX = size.width / 2;
     final centerY = size.height / 2;
     
-    // Tamaño de los corchetes
-    final bracketSize = size.width * 0.25; // 25% del ancho
-    final bracketHeight = size.height * 0.4; // 40% de la altura
-    final spacing = size.width * 0.15; // Espacio entre corchetes
+    // Tamaño de los corchetes ajustado para 20x20
+    final bracketSize = size.width * 0.22; // 22% del ancho
+    final bracketHeight = size.height * 0.35; // 35% de la altura
+    final spacing = size.width * 0.12; // Espacio entre corchetes
     
     // Corchete izquierdo <
     final leftBracketPath = Path()

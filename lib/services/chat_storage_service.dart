@@ -85,6 +85,13 @@ class ChatStorageService {
     await saveAgentChats(chats);
   }
 
+  // Eliminar un agente específico
+  static Future<void> deleteAgentChat(String chatId) async {
+    final chats = await loadAgentChats();
+    chats.removeWhere((c) => c.id == chatId);
+    await saveAgentChats(chats);
+  }
+
   // Cargar mensajes de un agente
   static Future<List<dynamic>> loadAgentMessages(String chatId) async {
     final chat = (await loadAgentChats()).firstWhere(

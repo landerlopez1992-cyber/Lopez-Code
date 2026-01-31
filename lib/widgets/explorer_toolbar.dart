@@ -6,40 +6,41 @@ import 'cursor_theme.dart';
 class ExplorerToolbar extends StatelessWidget {
   final int selectedIndex;
   final Function(int)? onItemSelected;
+  final Function(String)? onAction; // Nueva callback para acciones específicas
 
   const ExplorerToolbar({
     super.key,
     this.selectedIndex = 0,
     this.onItemSelected,
+    this.onAction,
   });
 
   @override
   Widget build(BuildContext context) {
     final items = [
       {
-        'icon': Icons.description_outlined,
-        'tooltip': 'Explorador de archivos',
-        'selectedIcon': Icons.description,
-      },
-      {
         'icon': Icons.search_outlined,
-        'tooltip': 'Buscar',
+        'tooltip': 'Buscar archivos',
         'selectedIcon': Icons.search,
+        'action': 'search',
       },
       {
-        'icon': Icons.account_tree_outlined,
-        'tooltip': 'Ramas y dependencias',
-        'selectedIcon': Icons.account_tree,
+        'icon': Icons.source_outlined,
+        'tooltip': 'Git (Commit & Push)',
+        'selectedIcon': Icons.source,
+        'action': 'git',
       },
       {
-        'icon': Icons.grid_view_outlined,
-        'tooltip': 'Vista de grid',
-        'selectedIcon': Icons.grid_view,
+        'icon': Icons.cloud_outlined,
+        'tooltip': 'Supabase',
+        'selectedIcon': Icons.cloud,
+        'action': 'supabase',
       },
       {
-        'icon': Icons.preview_outlined,
-        'tooltip': 'Vista previa',
-        'selectedIcon': Icons.preview,
+        'icon': Icons.local_fire_department_outlined,
+        'tooltip': 'Firebase',
+        'selectedIcon': Icons.local_fire_department,
+        'action': 'firebase',
       },
     ];
 
@@ -63,7 +64,14 @@ class ExplorerToolbar extends StatelessWidget {
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => onItemSelected?.call(index),
+                  onTap: () {
+                    onItemSelected?.call(index);
+                    // Ejecutar acción específica si está definida
+                    final action = item['action'] as String?;
+                    if (action != null) {
+                      onAction?.call(action);
+                    }
+                  },
                   child: Container(
                     height: 40,
                     decoration: BoxDecoration(

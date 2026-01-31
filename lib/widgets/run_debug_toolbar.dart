@@ -3,7 +3,8 @@ import 'cursor_theme.dart';
 
 /// Barra de herramientas de Run and Debug
 /// Similar a Cursor IDE - botones para ejecutar, depurar, etc.
-class RunDebugToolbar extends StatelessWidget {
+/// Ahora es arrastrable como en Cursor IDE
+class RunDebugToolbar extends StatefulWidget {
   final VoidCallback? onRun;
   final VoidCallback? onDebug;
   final VoidCallback? onStop;
@@ -26,126 +27,218 @@ class RunDebugToolbar extends StatelessWidget {
   });
 
   @override
+  State<RunDebugToolbar> createState() => _RunDebugToolbarState();
+}
+
+class _RunDebugToolbarState extends State<RunDebugToolbar> {
+  late Offset _position;
+  bool _isDragging = false;
+  
+  @override
+  void initState() {
+    super.initState();
+    // Posición inicial: se calculará dinámicamente en build() para alinearse con el icono del chat
+    // Por defecto, usar posición que se calculará en build()
+    _position = const Offset(0, 0); // Se calculará en build()
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 32),
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      decoration: BoxDecoration(
-        color: CursorTheme.surface,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: CursorTheme.border,
-          width: 1,
+    // Calcular posición relativa al panel de chat
+    // Sidebar (280px) + Emulador (550px) = 830px (inicio del panel de chat)
+    // La barra debe estar alineada horizontalmente con los botones del AppBar (esquina superior derecha)
+    // y verticalmente con la barra del chat (que está justo debajo del AppBar)
+    final chatPanelStart = 280.0 + 550.0; // Sidebar + Emulador
+    final left = chatPanelStart + 12.0; // Alineado con el inicio del panel de chat
+    // Top: Alineada con el AppBar (los botones están en el AppBar, altura ~56px)
+    // La barra debe estar a la misma altura que los botones del AppBar
+    final top = 8.0; // Pequeño margen desde arriba para alinearse con los botones del AppBar
+    
+    // Si la posición fue arrastrada (dx > 0 y dy > 0), usar esa posición, sino usar la calculada
+    final finalLeft = _position.dx > 0 && _position.dx != chatPanelStart + 12.0 ? _position.dx : left;
+    final finalTop = _position.dy > 0 && _position.dy != 8.0 ? _position.dy : top;
+    
+    // Actualizar posición inicial si no ha sido arrastrada
+    if (_position.dx == 0 && _position.dy == 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _position = Offset(finalLeft, finalTop);
+          });
+        }
+      });
+    }
+    
+    return Positioned(
+      left: finalLeft,
+      top: finalTop,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: (details) {
+            setState(() {
+              _isDragging = true;
+            });
+          },
+          onPanUpdate: (details) {
+            setState(() {
+              _position += details.delta;
+              // Limitar el movimiento dentro de la pantalla
+              final screenSize = MediaQuery.of(context).size;
+              final toolbarWidth = 350.0; // Ancho aproximado de la barra
+              final toolbarHeight = 50.0; // Alto aproximado de la barra
+              _position = Offset(
+                _position.dx.clamp(0.0, screenSize.width - toolbarWidth),
+                _position.dy.clamp(0.0, screenSize.height - toolbarHeight),
+              );
+            });
+          },
+          onPanEnd: (details) {
+            setState(() {
+              _isDragging = false;
+            });
+          },
+          child: MouseRegion(
+          cursor: _isDragging ? SystemMouseCursors.grabbing : SystemMouseCursors.grab,
+          child: Material(
+            color: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxHeight: 32, maxWidth: 600),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              decoration: BoxDecoration(
+                color: CursorTheme.surface,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: _isDragging ? CursorTheme.primary : CursorTheme.border,
+                  width: _isDragging ? 2 : 1,
+                ),
+                boxShadow: _isDragging
+                    ? [
+                        BoxShadow(
+                          color: CursorTheme.primary.withOpacity(0.3),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ]
+                    : null,
+              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // Indicador de arrastre (solo visible cuando se arrastra)
+                if (_isDragging)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Icon(
+                      Icons.drag_handle,
+                      size: 12,
+                      color: CursorTheme.primary,
+                    ),
+                  ),
+                // Botón Run
+                _ToolbarButton(
+                  icon: Icons.play_arrow,
+                  label: 'Run',
+                  onPressed: widget.isRunning ? null : widget.onRun,
+                  color: Colors.green,
+                  tooltip: 'Ejecutar aplicación',
+                ),
+                const SizedBox(width: 3),
+                
+                // Botón Debug
+                _ToolbarButton(
+                  icon: Icons.bug_report,
+                  label: 'Debug',
+                  onPressed: widget.isRunning ? null : widget.onDebug,
+                  color: Colors.orange,
+                  tooltip: 'Depurar aplicación',
+                ),
+                const SizedBox(width: 3),
+                
+                // Botón Stop
+                _ToolbarButton(
+                  icon: Icons.stop,
+                  label: 'Stop',
+                  onPressed: widget.isRunning ? widget.onStop : null,
+                  color: Colors.red,
+                  tooltip: 'Detener ejecución',
+                  isEnabled: widget.isRunning,
+                ),
+                const SizedBox(width: 3),
+                
+                // Botón Restart
+                _ToolbarButton(
+                  icon: Icons.refresh,
+                  label: 'Restart',
+                  onPressed: widget.isRunning ? widget.onRestart : null,
+                  color: Colors.blue,
+                  tooltip: 'Reiniciar aplicación',
+                  isEnabled: widget.isRunning,
+                ),
+                
+                const SizedBox(width: 6),
+                
+                // Separador
+                Container(
+                  width: 1,
+                  height: 20,
+                  color: CursorTheme.border,
+                ),
+                
+                const SizedBox(width: 6),
+                
+                // Selector de plataforma - sin Flexible para evitar problemas
+                _PlatformSelector(
+                  selectedPlatform: widget.selectedPlatform ?? 'macos',
+                  onChanged: widget.onPlatformChanged,
+                  isEnabled: !widget.isRunning,
+                ),
+                
+                // Indicador de estado - sin Flexible, usar constraints
+                if (widget.isRunning) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    constraints: const BoxConstraints(maxWidth: 100),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: Colors.green.withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: Colors.green,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          widget.isDebugging ? 'Debugging...' : 'Running...',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          // Botón Run
-          _ToolbarButton(
-            icon: Icons.play_arrow,
-            label: 'Run',
-            onPressed: isRunning ? null : onRun,
-            color: Colors.green,
-            tooltip: 'Ejecutar aplicación',
-          ),
-          const SizedBox(width: 3),
-          
-          // Botón Debug
-          _ToolbarButton(
-            icon: Icons.bug_report,
-            label: 'Debug',
-            onPressed: isRunning ? null : onDebug,
-            color: Colors.orange,
-            tooltip: 'Depurar aplicación',
-          ),
-          const SizedBox(width: 3),
-          
-          // Botón Stop
-          _ToolbarButton(
-            icon: Icons.stop,
-            label: 'Stop',
-            onPressed: isRunning ? onStop : null,
-            color: Colors.red,
-            tooltip: 'Detener ejecución',
-            isEnabled: isRunning,
-          ),
-          const SizedBox(width: 3),
-          
-          // Botón Restart
-          _ToolbarButton(
-            icon: Icons.refresh,
-            label: 'Restart',
-            onPressed: isRunning ? onRestart : null,
-            color: Colors.blue,
-            tooltip: 'Reiniciar aplicación',
-            isEnabled: isRunning,
-          ),
-          
-          const SizedBox(width: 8),
-          
-          // Separador
-          Container(
-            width: 1,
-            height: 20,
-            color: CursorTheme.border,
-          ),
-          
-          const SizedBox(width: 8),
-          
-          // Selector de plataforma - Flexible para evitar overflow
-          Flexible(
-            child: _PlatformSelector(
-              selectedPlatform: selectedPlatform ?? 'macos',
-              onChanged: onPlatformChanged,
-              isEnabled: !isRunning,
-            ),
-          ),
-          
-          // Indicador de estado - Flexible para evitar overflow
-          if (isRunning) ...[
-            const SizedBox(width: 8),
-            Flexible(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: Colors.green.withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 5),
-                    Flexible(
-                      child: Text(
-                        isDebugging ? 'Debugging...' : 'Running...',
-                        style: TextStyle(
-                          color: Colors.green,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ],
       ),
     );
   }
@@ -260,7 +353,8 @@ class _PlatformSelector extends StatelessWidget {
       ),
       color: CursorTheme.surface,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        constraints: const BoxConstraints(maxWidth: 100),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
         decoration: BoxDecoration(
           color: CursorTheme.background,
           borderRadius: BorderRadius.circular(4),
@@ -280,15 +374,18 @@ class _PlatformSelector extends StatelessWidget {
                   : CursorTheme.textSecondary.withOpacity(0.3),
             ),
             const SizedBox(width: 4),
-            Text(
-              platforms.firstWhere((p) => p['value'] == selectedPlatform)['label'] as String,
-              style: TextStyle(
-                color: isEnabled
-                    ? CursorTheme.textPrimary
-                    : CursorTheme.textSecondary.withOpacity(0.3),
-                fontSize: 10,
+            Flexible(
+              child: Text(
+                platforms.firstWhere((p) => p['value'] == selectedPlatform)['label'] as String,
+                style: TextStyle(
+                  color: isEnabled
+                      ? CursorTheme.textPrimary
+                      : CursorTheme.textSecondary.withOpacity(0.3),
+                  fontSize: 10,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
               ),
-              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(width: 2),
             Icon(

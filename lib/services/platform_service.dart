@@ -6,7 +6,7 @@ class PlatformService extends ChangeNotifier {
   factory PlatformService() => _instance;
   PlatformService._internal();
 
-  String _selectedPlatform = 'macos';
+  String _selectedPlatform = 'macos'; // Valor por defecto
 
   String get selectedPlatform => _selectedPlatform;
   bool get isMobile => _selectedPlatform == 'android' || _selectedPlatform == 'ios';

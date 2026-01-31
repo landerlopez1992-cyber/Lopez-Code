@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'cursor_theme.dart';
 
 /// Panel inferior con tabs para Debug Console, Output, Problems
@@ -82,6 +83,32 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
       ),
       child: Column(
         children: [
+          // Barra redimensionable horizontal (solo cuando está en modo horizontal)
+          if (!isVertical)
+            GestureDetector(
+              onVerticalDragUpdate: (details) {
+                if (widget.onHeightChanged != null) {
+                  final newHeight = height - details.delta.dy;
+                  // Limitar altura entre 100 y 600 píxeles
+                  if (newHeight >= 100 && newHeight <= 600) {
+                    widget.onHeightChanged!(newHeight);
+                  }
+                }
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeUpDown,
+                child: Container(
+                  height: 4,
+                  color: CursorTheme.border,
+                  child: Center(
+                    child: Container(
+                      height: 1,
+                      color: CursorTheme.textDisabled,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // Header con tabs
           _buildHeader(),
           

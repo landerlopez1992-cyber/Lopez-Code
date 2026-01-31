@@ -90,67 +90,72 @@ class AdvancedDebuggingService {
   }
 
   /// Encuentra el ID del dispositivo más apropiado para la plataforma
+  /// IMPORTANTE: Solo devuelve un dispositivo si coincide EXACTAMENTE con la plataforma solicitada
   static Future<String?> findDeviceId(String platform) async {
+    print('🔍 Buscando dispositivo para plataforma: $platform');
     final devices = await getAvailableDevices();
     
     if (devices.isEmpty) {
+      print('⚠️ No hay dispositivos disponibles');
       return null;
     }
     
-    // Buscar dispositivo que coincida con la plataforma
+    print('📱 Dispositivos disponibles: ${devices.length}');
+    for (var device in devices) {
+      print('   - ${device['name']} (${device['id']}, platform: ${device['platform']}, category: ${device['category']})');
+    }
+    
+    // Buscar dispositivo que coincida EXACTAMENTE con la plataforma
     for (var device in devices) {
       final id = device['id'] ?? '';
       final devicePlatform = device['platform']?.toLowerCase() ?? '';
       final deviceCategory = device['category']?.toLowerCase() ?? '';
       
-      // Para Android, buscar emuladores o dispositivos físicos
-      if (platform == 'android') {
+      // Para Android, buscar SOLO dispositivos Android
+      if (platform.toLowerCase() == 'android') {
         // Buscar dispositivos Android por múltiples criterios
         if (id.contains('android') || 
             id.contains('emulator') ||
             id.startsWith('emulator-') ||
             devicePlatform == 'android' ||
-            (deviceCategory == 'mobile' && devicePlatform != 'ios')) {
-          print('📱 Dispositivo Android encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
+            (deviceCategory == 'mobile' && devicePlatform != 'ios' && devicePlatform != 'macos')) {
+          print('✅ Dispositivo Android encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
           return id;
         }
       }
-      // Para iOS, buscar simuladores o dispositivos físicos
-      else if (platform == 'ios') {
+      // Para iOS, buscar SOLO dispositivos iOS
+      else if (platform.toLowerCase() == 'ios') {
         if (id.contains('ios') || 
             id.contains('simulator') ||
             id.contains('iPhone') ||
             id.contains('iPad') ||
             devicePlatform == 'ios' ||
             (deviceCategory == 'mobile' && devicePlatform == 'ios')) {
-          print('📱 Dispositivo iOS encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
+          print('✅ Dispositivo iOS encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
           return id;
         }
       }
-      // Para macOS, buscar dispositivos macOS
-      else if (platform == 'macos') {
+      // Para macOS, buscar SOLO dispositivos macOS
+      else if (platform.toLowerCase() == 'macos') {
         if (id.contains('macos') || 
             id.contains('mac') ||
             devicePlatform == 'macos' ||
             devicePlatform == 'darwin' ||
             (deviceCategory == 'desktop' && devicePlatform == 'macos')) {
-          print('📱 Dispositivo macOS encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
+          print('✅ Dispositivo macOS encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
           return id;
         }
       }
       // Para otras plataformas, buscar coincidencia exacta
       else if (id == platform || devicePlatform == platform.toLowerCase() || deviceCategory == platform.toLowerCase()) {
-        print('📱 Dispositivo encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
+        print('✅ Dispositivo encontrado: ${device['name']} (${device['id']}, platform: $devicePlatform, category: $deviceCategory)');
         return id;
       }
     }
     
-    // Si no se encuentra coincidencia exacta, devolver el primer dispositivo disponible
-    if (devices.isNotEmpty) {
-      print('⚠️ No se encontró dispositivo exacto para $platform, usando: ${devices.first['id']}');
-      return devices.first['id'];
-    }
-    
+    // NO devolver un dispositivo por defecto - esto causaría ejecución en plataforma incorrecta
+    print('❌ No se encontró dispositivo para la plataforma "$platform"');
+    print('   Solo se ejecutará en la plataforma solicitada si hay un dispositivo disponible');
     return null;
   }
 
@@ -159,6 +164,7 @@ class AdvancedDebuggingService {
     required String projectPath,
     String platform = 'macos',
     String mode = 'debug',
+    bool useWebServer = false, // Si es true, usa web-server en lugar de chrome para plataforma web
     Function(String line)? onOutput,
     Function(CompilationError error)? onError,
   }) async {
@@ -210,14 +216,23 @@ class AdvancedDebuggingService {
         onOutput?.call('🌐 Iniciando compilación para Web...');
         onOutput?.call('💡 Web no requiere dispositivo físico o emulador');
         
-        // Intentar primero con chrome, si falla usar web-server
-        final List<String> args = ['run', '-d', 'chrome'];
+        // Usar web-server si se solicita (no abre navegador externo), de lo contrario usar chrome
+        final webDevice = useWebServer ? 'web-server' : 'chrome';
+        final List<String> args = ['run', '-d', webDevice];
         if (mode == 'release') {
           args.add('--release');
         } else if (mode == 'profile') {
           args.add('--profile');
         }
         // debug es el modo por defecto, no necesita flag
+        
+        if (useWebServer) {
+          print('🌐 Usando web-server (NO abrirá navegador externo)');
+          onOutput?.call('🌐 Usando web-server (servidor interno sin navegador externo)');
+        } else {
+          print('🌐 Usando Chrome (abrirá navegador externo)');
+          onOutput?.call('🌐 Usando Chrome (abrirá navegador en ventana separada)');
+        }
         
         print('🌐 Comando: flutter ${args.join(' ')}');
         print('🌐 Working Directory: $projectPath');
@@ -260,6 +275,10 @@ class AdvancedDebuggingService {
             '   5. Para macOS: Asegúrate de tener Xcode instalado';
         result.errors.add(errorMsg);
         result.success = false;
+        result.endTime = DateTime.now(); // Establecer endTime para indicar que el proceso terminó
+        result.phase = 'error'; // Marcar como error
+        // Enviar el mensaje de error también a onOutput para que se muestre en Debug Console
+        onOutput?.call(errorMsg);
         onError?.call(CompilationError(
           file: '',
           line: 0,
@@ -267,6 +286,7 @@ class AdvancedDebuggingService {
           type: 'error',
           message: errorMsg,
         ));
+        print('❌ ABORTANDO: No se encontró dispositivo para "$platform". NO se ejecutará flutter run.');
         return result;
       }
       
