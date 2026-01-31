@@ -27,52 +27,92 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
   }
 
   Future<void> _loadDocumentation() async {
+    if (!mounted) return;
+    
     setState(() {
       _isLoading = true;
     });
 
     try {
       final sources = await DocumentationService.getDocumentationSources();
-      setState(() {
-        _sources = sources;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _sources = sources;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       print('❌ Error al cargar documentación: $e');
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   Future<void> _addDocumentation() async {
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (context) => _AddDocumentationDialog(),
-    );
-
-    if (result != null) {
-      final source = DocumentationSource(
-        name: result['name']!,
-        url: result['url']!,
-        indexedAt: DateTime.now(),
-        description: result['description'],
+    try {
+      final result = await showDialog<Map<String, String>>(
+        context: context,
+        builder: (context) => _AddDocumentationDialog(),
       );
 
-      final success = await DocumentationService.addDocumentationSource(source);
-      if (success) {
-        _loadDocumentation();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Documentación agregada'),
-            backgroundColor: Colors.green,
-          ),
+      if (result != null && mounted) {
+        final source = DocumentationSource(
+          name: result['name']!,
+          url: result['url']!,
+          indexedAt: DateTime.now(),
+          description: result['description'],
         );
-      } else {
+
+        // Mostrar loading
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Guardando documentación...'),
+              duration: Duration(seconds: 1),
+            ),
+          );
+        }
+
+        final success = await DocumentationService.addDocumentationSource(source);
+        
+        if (!mounted) return;
+        
+        if (success) {
+          // Recargar documentación de forma segura
+          await _loadDocumentation();
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('✅ Documentación agregada'),
+                backgroundColor: Colors.green,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('⚠️ Esta documentación ya existe'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error al agregar documentación: $e');
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('⚠️ Esta documentación ya existe'),
-            backgroundColor: Colors.orange,
+          SnackBar(
+            content: Text('❌ Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -414,15 +454,35 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
         ),
         TextButton(
           onPressed: () {
-            if (_nameController.text.isNotEmpty &&
-                _urlController.text.isNotEmpty) {
+            final name = _nameController.text.trim();
+            final url = _urlController.text.trim();
+            
+            if (name.isNotEmpty && url.isNotEmpty) {
+              // Validar URL básica
+              if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('⚠️ La URL debe comenzar con http:// o https://'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+                return;
+              }
+              
               Navigator.of(context).pop({
-                'name': _nameController.text,
-                'url': _urlController.text,
-                'description': _descriptionController.text.isEmpty
+                'name': name,
+                'url': url,
+                'description': _descriptionController.text.trim().isEmpty
                     ? null
-                    : _descriptionController.text,
+                    : _descriptionController.text.trim(),
               });
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('⚠️ Nombre y URL son requeridos'),
+                  backgroundColor: Colors.orange,
+                ),
+              );
             }
           },
           child: Text(

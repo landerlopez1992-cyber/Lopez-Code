@@ -59,62 +59,72 @@ class _CursorChatInputState extends State<CursorChatInput> {
     final offset = renderBox.localToGlobal(Offset.zero);
     final screenSize = MediaQuery.of(context).size;
 
-    // Calcular posición: DEBAJO del botón, alineado a la izquierda
-    final selectorWidth = 260.0;
-    final selectorHeight = _autoMode ? 100.0 : 380.0;
-    
-    // Posición X: alineado con el botón (esquina izquierda del chat)
-    final left = offset.dx;
-    
-    // Posición Y: DEBAJO del botón (no arriba)
-    final top = offset.dy + renderBox.size.height + 4; // 4px de margen debajo
-    
-    // Asegurar que no se salga de la pantalla
-    final finalLeft = left.clamp(8.0, screenSize.width - selectorWidth - 8);
-    final finalTop = top.clamp(8.0, screenSize.height - selectorHeight - 8);
+    // Función para calcular posición dinámicamente
+    Offset calculatePosition(bool autoMode) {
+      final selectorWidth = 260.0;
+      final selectorHeight = autoMode ? 100.0 : 380.0;
+      
+      // Posición X: alineado con el botón (esquina izquierda del chat)
+      final left = offset.dx;
+      
+      // Posición Y: DEBAJO del botón
+      final top = offset.dy + renderBox.size.height + 4; // 4px de margen debajo
+      
+      // Asegurar que no se salga de la pantalla
+      final finalLeft = left.clamp(8.0, screenSize.width - selectorWidth - 8);
+      final finalTop = top.clamp(8.0, screenSize.height - selectorHeight - 8);
+      
+      return Offset(finalLeft, finalTop);
+    }
 
     _overlayEntry = OverlayEntry(
-      builder: (context) => Stack(
-        children: [
-          // Área transparente para cerrar al tocar fuera
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: _closeOverlay,
-              behavior: HitTestBehavior.translucent,
-              child: Container(
+      builder: (context) {
+        // Recalcular posición cuando cambia el modo Auto
+        final position = calculatePosition(_autoMode);
+        
+        return Stack(
+          children: [
+            // Área transparente para cerrar al tocar fuera
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _closeOverlay,
+                behavior: HitTestBehavior.translucent,
+                child: Container(
+                  color: Colors.transparent,
+                ),
+              ),
+            ),
+            // Selector de modelos
+            Positioned(
+              left: position.dx,
+              top: position.dy,
+              child: Material(
                 color: Colors.transparent,
+                child: ModelSelector(
+                  currentModel: _currentModel,
+                  autoMode: _autoMode,
+                  onModelChanged: (model) {
+                    print('✅ Modelo seleccionado en CursorChatInput: $model');
+                    setState(() {
+                      _currentModel = model;
+                    });
+                    widget.onModelChanged?.call(model);
+                    _closeOverlay(); // Cerrar el overlay después de seleccionar
+                  },
+                  onAutoChanged: (auto) async {
+                    setState(() {
+                      _autoMode = auto;
+                    });
+                    await SettingsService.saveAutoMode(auto);
+                    // Recalcular posición del overlay cuando cambia Auto
+                    _overlayEntry?.markNeedsBuild();
+                  },
+                ),
               ),
             ),
-          ),
-          // Selector de modelos
-          Positioned(
-            left: finalLeft,
-            top: finalTop,
-            child: Material(
-              color: Colors.transparent,
-              child: ModelSelector(
-                currentModel: _currentModel,
-                autoMode: _autoMode,
-                onModelChanged: (model) {
-                  print('✅ Modelo seleccionado en CursorChatInput: $model');
-                  setState(() {
-                    _currentModel = model;
-                  });
-                  widget.onModelChanged?.call(model);
-                  _closeOverlay(); // Cerrar el overlay después de seleccionar
-                },
-                onAutoChanged: (auto) async {
-                  setState(() {
-                    _autoMode = auto;
-                  });
-                  await SettingsService.saveAutoMode(auto);
-                  // NO cerrar el overlay al cambiar Auto mode
-                },
-              ),
-            ),
-          ),
-        ],
-      ),
+          ],
+        );
+      },
     );
 
     Overlay.of(context).insert(_overlayEntry!);
