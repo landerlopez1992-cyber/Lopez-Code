@@ -130,36 +130,76 @@ class SmartContextManager {
   
   /// Verifica si es una consulta simple (no requiere búsqueda semántica)
   static bool _isSimpleQuery(String message) {
-    final simpleKeywords = [
+    final lowerMsg = message.toLowerCase().trim();
+    
+    // Saludos comunes
+    final greetings = [
       'hola',
-      'gracias',
-      'ok',
-      'entendido',
-      'sí',
-      'no',
+      'hi',
+      'hello',
+      'hey',
+      'buenos días',
+      'buenas tardes',
+      'buenas noches',
+      'saludos',
     ];
     
-    final lowerMsg = message.toLowerCase().trim();
-    return simpleKeywords.any((kw) => lowerMsg == kw) || lowerMsg.length < 10;
+    // Respuestas simples
+    final simpleResponses = [
+      'gracias',
+      'thanks',
+      'ok',
+      'okay',
+      'entendido',
+      'perfecto',
+      'sí',
+      'si',
+      'yes',
+      'no',
+      'vale',
+    ];
+    
+    // Verificar si es solo un saludo o respuesta simple
+    if (greetings.any((g) => lowerMsg == g || lowerMsg.startsWith('$g '))) {
+      return true;
+    }
+    
+    if (simpleResponses.contains(lowerMsg)) {
+      return true;
+    }
+    
+    // Mensajes muy cortos (probablemente no son preguntas técnicas)
+    if (lowerMsg.length < 10 && !lowerMsg.contains('?')) {
+      return true;
+    }
+    
+    return false;
   }
   
-  /// System prompt profesional y conciso
+  /// System prompt profesional y conversacional
   static String _getSystemPrompt() {
-    return '''Eres un asistente de programación Flutter/Dart experto.
+    return '''Eres un asistente de programación Flutter/Dart experto y amigable.
 
-REGLAS IMPORTANTES:
-1. Responde SOLO lo que se pregunta, sin información extra
-2. Si piden código, da código completo y funcional
-3. Sé conciso pero preciso
-4. No repitas información que ya está en el historial
-5. Si no estás seguro, di "necesito más contexto sobre..."
+PERSONALIDAD:
+- Sé conversacional y natural en saludos y conversaciones casuales
+- Para "hola", "buenos días", etc: saluda de vuelta y pregunta en qué puedes ayudar
+- Sé técnico y preciso cuando se trata de código
+- Mantén un tono profesional pero amigable
 
-FORMATO DE RESPUESTA:
+REGLAS DE RESPUESTA:
+1. SALUDOS: Responde naturalmente ("¡Hola! ¿En qué puedo ayudarte hoy?")
+2. CÓDIGO: Si piden código, da código completo y funcional
+3. PRECISIÓN: Sé conciso pero preciso en explicaciones técnicas
+4. CONTEXTO: Solo pide más contexto si realmente no entiendes la pregunta técnica
+5. NO REPITAS: No repitas información que ya está en el historial
+
+FORMATO:
 - Código: usa bloques ```dart
-- Explicaciones: máximo 2-3 líneas por concepto
+- Explicaciones técnicas: máximo 2-3 líneas por concepto
 - Pasos: lista numerada simple
+- Conversación casual: sé natural y amigable
 
-Tu objetivo: resolver el problema del usuario eficientemente.''';
+Tu objetivo: ayudar al usuario de manera eficiente y amigable.''';
   }
   
   /// Obtiene contenido de archivos seleccionados
