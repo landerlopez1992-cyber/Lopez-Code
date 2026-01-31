@@ -37,37 +37,31 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
   @override
   void initState() {
     super.initState();
-    // Posición inicial: se calculará dinámicamente en build() para alinearse con el icono del chat
-    // Por defecto, usar posición que se calculará en build()
-    _position = const Offset(0, 0); // Se calculará en build()
+    // Posición inicial: Sidebar (280px) + Emulador (550px) = 830px (inicio del panel de chat)
+    // Alineado con el inicio del panel de chat + 12px de margen
+    // Top: 8px desde arriba para alinearse con los botones del AppBar
+    _position = const Offset(830.0 + 12.0, 8.0);
   }
 
   @override
   Widget build(BuildContext context) {
     // Calcular posición relativa al panel de chat
-    // Sidebar (280px) + Emulador (550px) = 830px (inicio del panel de chat)
-    // La barra debe estar alineada horizontalmente con los botones del AppBar (esquina superior derecha)
+    // La barra debe estar alineada horizontalmente con el inicio del panel de chat
     // y verticalmente con la barra del chat (que está justo debajo del AppBar)
-    final chatPanelStart = 280.0 + 550.0; // Sidebar + Emulador
+    // Asumir sidebar de 280px y emulador de 550px por defecto
+    final sidebarWidth = 280.0;
+    final emulatorWidth = 550.0;
+    final chatPanelStart = sidebarWidth + emulatorWidth + 4.0; // Sidebar + Emulador + divisor
     final left = chatPanelStart + 12.0; // Alineado con el inicio del panel de chat
     // Top: Alineada con el AppBar (los botones están en el AppBar, altura ~56px)
     // La barra debe estar a la misma altura que los botones del AppBar
     final top = 8.0; // Pequeño margen desde arriba para alinearse con los botones del AppBar
     
-    // Si la posición fue arrastrada (dx > 0 y dy > 0), usar esa posición, sino usar la calculada
-    final finalLeft = _position.dx > 0 && _position.dx != chatPanelStart + 12.0 ? _position.dx : left;
-    final finalTop = _position.dy > 0 && _position.dy != 8.0 ? _position.dy : top;
-    
-    // Actualizar posición inicial si no ha sido arrastrada
-    if (_position.dx == 0 && _position.dy == 0) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          setState(() {
-            _position = Offset(finalLeft, finalTop);
-          });
-        }
-      });
-    }
+    // Si la posición fue arrastrada, usar esa posición, sino usar la calculada
+    // Solo actualizar si no se ha arrastrado manualmente (dx == 830 + 12 significa posición inicial)
+    final isInitialPosition = (_position.dx - 830.0 - 12.0).abs() < 1.0;
+    final finalLeft = isInitialPosition ? left : _position.dx;
+    final finalTop = isInitialPosition ? top : _position.dy;
     
     return Positioned(
       left: finalLeft,

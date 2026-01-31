@@ -19,7 +19,6 @@ import '../widgets/cursor_chat_input.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/confirmation_dialog.dart';
 import '../widgets/error_confirmation_dialog.dart';
-import '../widgets/run_debug_toolbar.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
 import '../models/pending_action.dart';
@@ -2812,53 +2811,11 @@ NO uses herramientas ni propongas acciones automáticas.
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: CursorTheme.background,
-      appBar: AppBar(
-        backgroundColor: CursorTheme.surface,
-        elevation: 0,
-        title: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-            const Text('Lopez Code', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFF007ACC).withOpacity(0.2),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: const Color(0xFF007ACC), width: 1),
-              ),
-              child: const Text('v1.5.1', style: TextStyle(color: Color(0xFF007ACC), fontSize: 10, fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ),
-        actions: [
-          // Toggle Debug Console (ahora funciona)
-          AnimatedBuilder(
-            animation: _debugService,
-            builder: (context, child) {
-              return IconButton(
-                icon: Icon(
-                  _debugService.isVisible ? Icons.terminal : Icons.terminal_outlined,
-                  size: 18,
-                ),
-                color: _debugService.isVisible ? CursorTheme.primary : CursorTheme.textSecondary,
-                onPressed: () {
-                  _debugService.togglePanel();
-                },
-                tooltip: _debugService.isVisible ? 'Ocultar Debug Console' : 'Mostrar Debug Console',
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings, size: 18),
-            color: CursorTheme.textSecondary,
-            onPressed: _openSettings,
-          ),
-        ],
-      ),
-      body: Stack(
+    // No usar Scaffold con AppBar cuando está dentro de MultiChatScreen
+    // para evitar overflow - MultiChatScreen ya tiene su propia barra de pestañas
+    return Container(
+      color: CursorTheme.background,
+      child: Stack(
         children: [
           Column(
             children: [
@@ -2886,33 +2843,8 @@ NO uses herramientas ni propongas acciones automáticas.
             isLoading: _isLoading,
             onStop: _stopRequest,
             placeholder: 'Plan, @ for context, / for commands',
-              ),
-            ],
           ),
-          // Barra de Run and Debug arrastrable (flotante)
-          RunDebugToolbar(
-            onRun: _handleRun,
-            onDebug: _handleDebug,
-            onStop: _handleStop,
-            onRestart: _handleRestart,
-            onPlatformChanged: (platform) {
-              print('🔧 Plataforma seleccionada: $platform');
-              setState(() {
-                _selectedPlatform = platform;
-              });
-              // Actualizar el servicio compartido
-              _platformService.setPlatform(platform);
-              
-              // Si se cambia a una plataforma que no es web, limpiar la URL
-              // (las apps nativas Android/iOS no tienen URL)
-              if (platform.toLowerCase() != 'web') {
-                print('🧹 Limpiando URL porque la plataforma no es web: $platform');
-                _debugService.setAppUrl(null);
-              }
-            },
-            selectedPlatform: _selectedPlatform,
-            isRunning: _isRunning,
-            isDebugging: _isDebugging,
+            ],
           ),
         ],
       ),

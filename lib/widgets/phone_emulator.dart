@@ -635,143 +635,190 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
 
   @override
   Widget build(BuildContext context) {
-    final isIOS = widget.platform.toLowerCase() == 'ios';
-    final isAndroid = widget.platform.toLowerCase() == 'android';
-    final isWeb = widget.platform.toLowerCase() == 'web';
-    
-    // Si es web, usar WebView directamente
-    if (isWeb) {
-      if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
-        print('🌐 PhoneEmulator (Web): Mostrando WebView con URL: ${widget.appUrl}');
-        return Container(
-          width: widget.width,
-          height: widget.height,
-          color: CursorTheme.background,
-          child: Stack(
-            children: [
-              _buildWebViewWithInspector(),
-              // Botón para abrir en navegador externo
-              Positioned(
-                top: 10,
-                right: 10,
-                child: FloatingActionButton.small(
-                  onPressed: () async {
-                    final uri = Uri.parse(widget.appUrl!);
-                    if (await canLaunchUrl(uri)) {
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                      print('✅ URL abierta en navegador externo: ${widget.appUrl}');
-                    } else {
-                      print('❌ No se pudo abrir la URL en navegador externo: ${widget.appUrl}');
-                    }
-                  },
-                  backgroundColor: CursorTheme.primary,
-                  child: Icon(Icons.open_in_browser, color: Colors.white),
-                  tooltip: 'Abrir en navegador externo',
-                ),
-              ),
-            ],
-          ),
-        );
-      } else if (widget.isRunning) {
-        // Mostrar indicador de carga si está ejecutándose pero aún no hay URL
-        print('⏳ PhoneEmulator (Web): Esperando URL... isRunning: ${widget.isRunning}, appUrl: ${widget.appUrl}');
-        return Container(
-          width: widget.width,
-          height: widget.height,
-          color: CursorTheme.background,
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+    try {
+      final platform = widget.platform.toLowerCase();
+      final isIOS = platform == 'ios';
+      final isAndroid = platform == 'android';
+      final isWeb = platform == 'web';
+      
+      // Si es web, mostrar monitor de PC rectangular sin frame de teléfono
+      if (isWeb) {
+        if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
+          print('🌐 PhoneEmulator (Web): Mostrando WebView con URL: ${widget.appUrl}');
+          return _buildWebMonitor(
+            child: Stack(
               children: [
-                CircularProgressIndicator(color: CursorTheme.primary),
-                const SizedBox(height: 16),
-                Text(
-                  'Esperando URL de la app...',
-                  style: TextStyle(
-                    color: CursorTheme.textSecondary,
-                    fontSize: 12,
+                // WebView a todo ancho
+                _buildWebViewWithInspector(),
+                // Botón para abrir en navegador externo
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: FloatingActionButton.small(
+                    onPressed: () async {
+                      final uri = Uri.parse(widget.appUrl!);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        print('✅ URL abierta en navegador externo: ${widget.appUrl}');
+                      } else {
+                        print('❌ No se pudo abrir la URL en navegador externo: ${widget.appUrl}');
+                      }
+                    },
+                    backgroundColor: CursorTheme.primary,
+                    child: Icon(Icons.open_in_browser, color: Colors.white),
+                    tooltip: 'Abrir en navegador externo',
                   ),
                 ),
               ],
             ),
-          ),
-        );
-      } else {
-        // No está ejecutándose - PERO SIEMPRE mostrar el frame del teléfono
-        return Container(
-          width: widget.width,
-          height: widget.height,
-          color: CursorTheme.background,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
+          );
+        } else if (widget.isRunning) {
+          // Mostrar indicador de carga si está ejecutándose pero aún no hay URL
+          print('⏳ PhoneEmulator (Web): Esperando URL... isRunning: ${widget.isRunning}, appUrl: ${widget.appUrl}');
+          return _buildWebMonitor(
             child: Center(
-              child: _buildPhoneFrame(false), // Siempre mostrar frame Android
-            ),
-          ),
-        );
-      }
-    }
-    
-    // Si no es Android ni iOS, verificar si hay una URL disponible (fallback a web)
-    if (!isIOS && !isAndroid) {
-      // Si hay una URL disponible y está ejecutándose, mostrar WebView (fallback a web)
-      if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
-        print('🌐 PhoneEmulator (Fallback Web): Mostrando WebView con URL: ${widget.appUrl}');
-        return Container(
-          width: widget.width,
-          height: widget.height,
-          color: CursorTheme.background,
-          child: Stack(
-            children: [
-              _buildWebViewWithInspector(),
-              // Botón para abrir en navegador externo
-              Positioned(
-                top: 10,
-                right: 10,
-                child: FloatingActionButton.small(
-                  onPressed: () async {
-                    final uri = Uri.parse(widget.appUrl!);
-                    if (await canLaunchUrl(uri)) {
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                      print('✅ URL abierta en navegador externo: ${widget.appUrl}');
-                    } else {
-                      print('❌ No se pudo abrir la URL en navegador externo: ${widget.appUrl}');
-                    }
-                  },
-                  backgroundColor: CursorTheme.primary,
-                  child: Icon(Icons.open_in_browser, color: Colors.white),
-                  tooltip: 'Abrir en navegador externo',
-                ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: CursorTheme.primary),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Esperando URL de la app...',
+                    style: TextStyle(
+                      color: CursorTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          );
+        } else {
+          // No está ejecutándose - Mostrar placeholder tipo monitor de PC
+          return _buildWebMonitor(
+            child: _buildPlaceholder(),
+          );
+        }
+      }
+    
+      // Si no es Android ni iOS ni Web, tratar como web (fallback)
+      if (!isIOS && !isAndroid && !isWeb) {
+        // Si hay una URL disponible y está ejecutándose, mostrar WebView tipo monitor
+        if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
+          print('🌐 PhoneEmulator (Fallback Web): Mostrando WebView con URL: ${widget.appUrl}');
+          return _buildWebMonitor(
+            child: Stack(
+              children: [
+                _buildWebViewWithInspector(),
+                // Botón para abrir en navegador externo
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: FloatingActionButton.small(
+                    onPressed: () async {
+                      final uri = Uri.parse(widget.appUrl!);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        print('✅ URL abierta en navegador externo: ${widget.appUrl}');
+                      } else {
+                        print('❌ No se pudo abrir la URL en navegador externo: ${widget.appUrl}');
+                      }
+                    },
+                    backgroundColor: CursorTheme.primary,
+                    child: Icon(Icons.open_in_browser, color: Colors.white),
+                    tooltip: 'Abrir en navegador externo',
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        // Si no hay URL, mostrar placeholder tipo monitor
+        return _buildWebMonitor(
+          child: _buildPlaceholder(),
         );
       }
-      // Si no hay URL, SIEMPRE mostrar el frame del teléfono
+
       return Container(
         width: widget.width,
         height: widget.height,
         color: CursorTheme.background,
         child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          child: Center(
-            child: _buildPhoneFrame(false), // Siempre mostrar frame Android
+          physics: const AlwaysScrollableScrollPhysics(), // Scroll funcional en el emulador
+          padding: EdgeInsets.zero, // Sin padding adicional
+          child: Align(
+            alignment: Alignment.topCenter, // Alinear arriba en lugar de centrar
+            child: _buildPhoneFrame(isIOS),
+          ),
+        ),
+      );
+    } catch (e, stackTrace) {
+      print('❌ Error en PhoneEmulator.build: $e');
+      print('Stack trace: $stackTrace');
+      // Retornar un widget de error seguro
+      return Container(
+        width: widget.width,
+        height: widget.height,
+        color: CursorTheme.background,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(
+                'Error al cargar el emulador',
+                style: TextStyle(color: CursorTheme.textPrimary),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Plataforma: ${widget.platform}',
+                style: TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
+              ),
+            ],
           ),
         ),
       );
     }
+  }
 
-    return Container(
-      width: widget.width,
-      height: widget.height,
-      color: CursorTheme.background,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(), // Scroll funcional en el emulador
-        child: Center(
-          child: _buildPhoneFrame(isIOS),
+  /// Construye un contenedor tipo monitor de PC para Web (rectangular, sin frame de teléfono)
+  Widget _buildWebMonitor({required Widget child}) {
+    // Si width y height están especificados, usarlos; si no, expandir para llenar el espacio disponible
+    if (widget.width != null && widget.height != null) {
+      return Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: CursorTheme.background,
+          border: Border.all(
+            color: CursorTheme.border,
+            width: 1,
+          ),
+          borderRadius: BorderRadius.circular(4),
         ),
-      ),
-    );
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: child,
+        ),
+      );
+    } else {
+      // Expandir para llenar el espacio disponible
+      return Container(
+        decoration: BoxDecoration(
+          color: CursorTheme.background,
+          border: Border.all(
+            color: CursorTheme.border,
+            width: 1,
+          ),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: child,
+        ),
+      );
+    }
   }
 
   Widget _buildPhoneFrame(bool isIOS) {
@@ -927,7 +974,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
                   child: _buildScreenContent(),
                 ),
               ),
-              // Navigation bar
+              // Navigation bar con botones funcionales
               Container(
                 height: 48,
                 width: double.infinity,
@@ -935,38 +982,90 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.3),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
+                    // Botón Atrás (izquierda)
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          // Navegar hacia atrás en el WebView si está disponible
+                          if (_webViewInitialized && widget.isRunning) {
+                            _webViewController.goBack();
+                            print('🔙 Navegación hacia atrás');
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(24),
                         child: Container(
-                          width: 24,
-                          height: 24,
+                          width: 40,
+                          height: 40,
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: Colors.white.withOpacity(0.1),
                             shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.arrow_back,
+                            size: 20,
+                            color: Colors.white.withOpacity(0.8),
                           ),
                         ),
                       ),
                     ),
-                    Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.3),
-                        shape: BoxShape.circle,
+                    // Botón Home (centro)
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          // Ir al inicio/raíz de la app
+                          if (_webViewInitialized && widget.isRunning && widget.appUrl != null) {
+                            _webViewController.loadRequest(Uri.parse(widget.appUrl!));
+                            print('🏠 Navegación al inicio');
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(24),
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Container(
+                              width: 24,
+                              height: 24,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Botón Opciones/Menú (derecha)
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          // Mostrar menú de opciones o recargar
+                          if (_webViewInitialized && widget.isRunning) {
+                            _webViewController.reload();
+                            print('🔄 Recargando aplicación');
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(24),
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.more_vert,
+                            size: 20,
+                            color: Colors.white.withOpacity(0.8),
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -1044,7 +1143,11 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                isAndroid ? Icons.android : Icons.phone_iphone,
+                isAndroid
+                    ? Icons.android
+                    : isIOS
+                        ? Icons.apple
+                        : Icons.web,
                 size: 64,
                 color: CursorTheme.primary,
               ),
@@ -1121,7 +1224,11 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         children: [
           // Icono de la plataforma
           Icon(
-            widget.platform.toLowerCase() == 'ios' ? Icons.phone_iphone : Icons.android,
+            widget.platform.toLowerCase() == 'ios'
+                ? Icons.apple
+                : widget.platform.toLowerCase() == 'android'
+                    ? Icons.android
+                    : Icons.web,
             size: 64,
             color: CursorTheme.primary.withOpacity(0.7),
           ),
@@ -1209,19 +1316,33 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     // NO llamar a _buildPhoneFrame() aquí porque ya estamos dentro del frame
     return Container(
       color: CursorTheme.surface,
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              widget.platform.toLowerCase() == 'ios' ? Icons.phone_iphone : Icons.android,
-              size: 64,
-              color: CursorTheme.textSecondary.withOpacity(0.5),
-            ),
+            // Mostrar logo según la plataforma
+            widget.platform.toLowerCase() == 'ios'
+                ? Icon(
+                    Icons.apple,
+                    size: 64,
+                    color: CursorTheme.textSecondary.withOpacity(0.5),
+                  )
+                : widget.platform.toLowerCase() == 'android'
+                    ? Icon(
+                        Icons.android,
+                        size: 64,
+                        color: CursorTheme.textSecondary.withOpacity(0.5),
+                      )
+                    : Icon(
+                        Icons.web,
+                        size: 64,
+                        color: CursorTheme.textSecondary.withOpacity(0.5),
+                      ),
             const SizedBox(height: 24),
             Text(
               'Presiona Run/Debug para iniciar',
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: CursorTheme.textSecondary,
                 fontSize: 16,
@@ -1231,6 +1352,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
             const SizedBox(height: 8),
             Text(
               'La aplicación aparecerá aquí',
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: CursorTheme.textSecondary.withOpacity(0.7),
                 fontSize: 12,
