@@ -424,8 +424,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                           );
                           setState(() {
                             _selectedElement = element;
-                            _selectedTab = 1;
-                            print('📝 Cambiando a pestaña Code automáticamente');
+                            // NO cambiar automáticamente a Code - mantener Preview visible
+                            // para que el usuario vea el elemento resaltado en el emulador
+                            print('✅ Elemento guardado. Preview sigue activo para ver el resaltado.');
                           });
                           final elementInfo =
                               'Elemento seleccionado en el inspector:\n'
@@ -673,10 +674,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       }
 
       for (final prop in visualProps) {
-        styles.keys.where((k) => k.contains(prop)).forEach((key) {
+        // Recopilar primero las claves que coinciden para evitar ConcurrentModificationError
+        final matchingKeys = styles.keys.where((k) => k.contains(prop)).toList();
+        for (final key in matchingKeys) {
           buffer.writeln('  $key: ${styles[key]};');
           styles.remove(key);
-        });
+        }
       }
 
       // Resto de estilos
@@ -1202,13 +1205,29 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                             ),
                                           ),
                                           const SizedBox(width: 8),
-                                          GestureDetector(
-                                            onTap: () {
-                                              setState(() {
-                                                _inspectorMode =
-                                                    !_inspectorMode;
-                                              });
-                                            },
+                                          Tooltip(
+                                            message: _inspectorMode 
+                                                ? 'Desactivar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)'
+                                                : 'Activar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)',
+                                            child: GestureDetector(
+                                              onTap: () {
+                                                setState(() {
+                                                  _inspectorMode =
+                                                      !_inspectorMode;
+                                                });
+                                                // Mostrar advertencia si es Flutter
+                                                if (_inspectorMode) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        '🔍 Inspector activado. Nota: Funciona mejor con apps web HTML/CSS. Apps Flutter Web usan Canvas y tienen limitaciones.',
+                                                      ),
+                                                      duration: Duration(seconds: 4),
+                                                      backgroundColor: Colors.orange,
+                                                    ),
+                                                  );
+                                                }
+                                              },
                                             child: Container(
                                               width: 44,
                                               height: 24,
@@ -1265,6 +1284,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                   ),
                                                 ],
                                               ),
+                                            ),
                                             ),
                                           ),
                                         ],
