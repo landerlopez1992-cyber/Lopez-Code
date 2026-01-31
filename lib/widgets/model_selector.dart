@@ -92,10 +92,10 @@ class _ModelSelectorState extends State<ModelSelector> {
 
   @override
   Widget build(BuildContext context) {
-    final maxHeight = _autoMode ? 140.0 : 420.0;
+    final maxHeight = _autoMode ? 100.0 : 380.0;
     
     return Container(
-      width: 280, // Más compacto como Cursor
+      width: 260, // Más compacto como Cursor (foto 4)
       constraints: BoxConstraints(
         maxHeight: maxHeight,
       ),
@@ -161,7 +161,7 @@ class _ModelSelectorState extends State<ModelSelector> {
           
           // Toggle Auto
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               border: _autoMode ? null : Border(
                 bottom: BorderSide(
@@ -178,38 +178,20 @@ class _ModelSelectorState extends State<ModelSelector> {
             }),
           ),
           
-          // Mensaje cuando Auto está activo
+          // Mensaje cuando Auto está activo (MUY compacto para evitar overflow)
           if (_autoMode)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.auto_awesome,
-                    size: 32,
-                    color: CursorTheme.primary.withOpacity(0.8),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Modo Automático',
-                    style: TextStyle(
-                      color: CursorTheme.textPrimary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Selección automática del mejor modelo',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: CursorTheme.textSecondary.withOpacity(0.8),
-                      fontSize: 10,
-                    ),
-                    maxLines: 2,
-                  ),
-                ],
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              constraints: const BoxConstraints(maxHeight: 50),
+              child: Text(
+                'Balanced quality and speed, recommended for most tasks.',
+                style: TextStyle(
+                  color: CursorTheme.textSecondary.withOpacity(0.6),
+                  fontSize: 9.5,
+                  height: 1.2,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           
@@ -218,18 +200,18 @@ class _ModelSelectorState extends State<ModelSelector> {
             Flexible(
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxHeight: maxHeight - 80, // Restar altura de búsqueda + toggle (más compacto)
+                  maxHeight: maxHeight - 60, // Restar altura de búsqueda + toggle
                 ),
                 child: ListView.separated(
                   shrinkWrap: true,
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 2),
                   itemCount: _availableModels.length,
                   separatorBuilder: (context, index) => Divider(
-                    height: 1,
+                    height: 0.5,
                     thickness: 0.5,
-                    color: CursorTheme.border.withOpacity(0.2),
-                    indent: 12,
-                    endIndent: 12,
+                    color: CursorTheme.border.withOpacity(0.15),
+                    indent: 10,
+                    endIndent: 10,
                   ),
                   itemBuilder: (context, index) {
                     final model = _availableModels[index];
@@ -262,58 +244,48 @@ class _ModelSelectorState extends State<ModelSelector> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Row(
-          children: [
-            Icon(
-              Icons.auto_awesome,
-              size: 14,
-              color: value ? CursorTheme.primary : CursorTheme.textSecondary.withOpacity(0.7),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 12,
-                fontWeight: value ? FontWeight.w500 : FontWeight.normal,
-              ),
-            ),
-          ],
+        Text(
+          label,
+          style: TextStyle(
+            color: CursorTheme.textPrimary,
+            fontSize: 11.5,
+            fontWeight: value ? FontWeight.w500 : FontWeight.normal,
+          ),
         ),
         GestureDetector(
           onTap: () => onChanged(!value),
           child: Container(
-            width: 42,
-            height: 22,
+            width: 38,
+            height: 20,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(11),
+              borderRadius: BorderRadius.circular(10),
               color: value
                   ? CursorTheme.primary
                   : CursorTheme.background,
               border: Border.all(
                 color: value
                     ? CursorTheme.primary
-                    : CursorTheme.border.withOpacity(0.4),
+                    : CursorTheme.border.withOpacity(0.3),
                 width: 1,
               ),
             ),
             child: Stack(
               children: [
                 AnimatedPositioned(
-                  duration: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 180),
                   curve: Curves.easeInOut,
-                  left: value ? 20 : 2,
+                  left: value ? 18 : 2,
                   top: 2,
                   child: Container(
-                    width: 18,
-                    height: 18,
+                    width: 16,
+                    height: 16,
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(9),
+                      borderRadius: BorderRadius.circular(8),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.15),
-                          blurRadius: 3,
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 2,
                           offset: const Offset(0, 1),
                         ),
                       ],
@@ -374,8 +346,8 @@ class _ModelSelectorItemState extends State<_ModelSelectorItem> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
             padding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 8,
+              horizontal: 10,
+              vertical: 6,
             ),
             decoration: BoxDecoration(
               color: widget.isSelected
@@ -386,20 +358,16 @@ class _ModelSelectorItemState extends State<_ModelSelectorItem> {
             ),
             child: Row(
               children: [
-                // Icono del modelo (más pequeño)
+                // Icono del modelo (más pequeño aún)
                 if (widget.model.hasBrain)
                   Icon(
                     Icons.psychology,
-                    size: 16,
-                    color: CursorTheme.primary.withOpacity(0.8),
+                    size: 14,
+                    color: CursorTheme.primary.withOpacity(0.7),
                   )
                 else
-                  Icon(
-                    Icons.smart_toy_outlined,
-                    size: 16,
-                    color: CursorTheme.textSecondary.withOpacity(0.6),
-                  ),
-                const SizedBox(width: 10),
+                  SizedBox.shrink(), // Sin icono para modelos estándar (como Cursor)
+                if (widget.model.hasBrain) const SizedBox(width: 8),
                 // Información del modelo
                 Expanded(
                   child: Column(
@@ -410,20 +378,20 @@ class _ModelSelectorItemState extends State<_ModelSelectorItem> {
                         widget.model.name,
                         style: TextStyle(
                           color: CursorTheme.textPrimary,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: widget.isSelected
-                              ? FontWeight.w600
+                              ? FontWeight.w500
                               : FontWeight.w400,
                         ),
                       ),
                       if (widget.model.description != null) ...[
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 1),
                         Text(
                           widget.model.description!,
                           style: TextStyle(
-                            color: CursorTheme.textSecondary.withOpacity(0.7),
-                            fontSize: 10,
-                            height: 1.2,
+                            color: CursorTheme.textSecondary.withOpacity(0.6),
+                            fontSize: 9.5,
+                            height: 1.15,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -432,14 +400,14 @@ class _ModelSelectorItemState extends State<_ModelSelectorItem> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 // Check para el seleccionado (más pequeño)
                 AnimatedScale(
                   duration: const Duration(milliseconds: 150),
                   scale: widget.isSelected ? 1.0 : 0.0,
                   child: Icon(
-                    Icons.check_circle,
-                    size: 16,
+                    Icons.check,
+                    size: 14,
                     color: CursorTheme.primary,
                   ),
                 ),
