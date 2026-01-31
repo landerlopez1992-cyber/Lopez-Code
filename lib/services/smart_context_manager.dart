@@ -1,13 +1,16 @@
 import 'dart:io';
 import 'conversation_memory_service.dart';
 import 'documentation_service.dart';
+import 'semantic_search_service.dart';
 
 /// Context Manager profesional para optimizar uso de tokens
+/// ✨ AHORA CON BÚSQUEDA SEMÁNTICA (RAG) ✨
 /// Solo envía información relevante a la IA
 class SmartContextManager {
   static const int _avgCharsPerToken = 4; // Aproximación
   
   /// Construye el contexto optimizado para enviar a la IA
+  /// 🧠 CON BÚSQUEDA SEMÁNTICA AUTOMÁTICA 🧠
   static Future<ContextBundle> buildOptimizedContext({
     required String userMessage,
     required String projectPath,
@@ -16,6 +19,7 @@ class SmartContextManager {
     bool includeDocumentation = true,
     bool includeHistory = true,
     bool includeProjectStructure = false,
+    bool useSemanticSearch = true, // ✨ NUEVO: búsqueda semántica
   }) async {
     final buffer = StringBuffer();
     int estimatedTokens = 0;
@@ -44,7 +48,26 @@ class SmartContextManager {
       }
     }
     
-    // 3. Archivos seleccionados (contenido real, no solo nombres)
+    // 🧠 3. BÚSQUEDA SEMÁNTICA (RAG) - NUEVO
+    if (useSemanticSearch && !_isSimpleQuery(userMessage)) {
+      final semanticContext = await SemanticSearchService.buildContextForQuery(
+        query: userMessage,
+        maxFiles: 3,
+        includeRelated: true,
+      );
+      
+      if (semanticContext.hasResults) {
+        final formattedContext = SemanticSearchService.formatContextForAI(semanticContext);
+        buffer.writeln(formattedContext);
+        estimatedTokens += _estimateTokens(formattedContext);
+        metadata['semanticSearchUsed'] = true;
+        metadata['semanticFilesFound'] = semanticContext.totalFiles;
+        
+        print('🧠 Búsqueda semántica: ${semanticContext.totalFiles} archivos relevantes');
+      }
+    }
+    
+    // 4. Archivos seleccionados manualmente (contenido real, no solo nombres)
     if (selectedFiles != null && selectedFiles.isNotEmpty) {
       final filesContent = await _getSelectedFilesContent(
         selectedFiles,
@@ -60,7 +83,7 @@ class SmartContextManager {
       }
     }
     
-    // 4. Documentación relevante (si está activa)
+    // 5. Documentación relevante (si está activa)
     if (includeDocumentation) {
       final docContent = await DocumentationService.getActiveDocumentationContent();
       
@@ -78,7 +101,7 @@ class SmartContextManager {
       }
     }
     
-    // 5. Estructura del proyecto (solo si se solicita explícitamente)
+    // 6. Estructura del proyecto (solo si se solicita explícitamente)
     if (includeProjectStructure) {
       final structure = await _getProjectStructure(projectPath);
       
@@ -91,7 +114,7 @@ class SmartContextManager {
       }
     }
     
-    // 6. Mensaje del usuario (siempre al final)
+    // 7. Mensaje del usuario (siempre al final)
     buffer.writeln('=== SOLICITUD DEL USUARIO ===');
     buffer.writeln(userMessage);
     estimatedTokens += _estimateTokens(userMessage);
@@ -103,6 +126,21 @@ class SmartContextManager {
       estimatedTokens: estimatedTokens,
       metadata: metadata,
     );
+  }
+  
+  /// Verifica si es una consulta simple (no requiere búsqueda semántica)
+  static bool _isSimpleQuery(String message) {
+    final simpleKeywords = [
+      'hola',
+      'gracias',
+      'ok',
+      'entendido',
+      'sí',
+      'no',
+    ];
+    
+    final lowerMsg = message.toLowerCase().trim();
+    return simpleKeywords.any((kw) => lowerMsg == kw) || lowerMsg.length < 10;
   }
   
   /// System prompt profesional y conciso
@@ -260,8 +298,11 @@ class ContextBundle {
   String get summary {
     final parts = <String>[];
     if (metadata['historyIncluded'] == true) parts.add('historial');
+    if (metadata['semanticSearchUsed'] == true) {
+      parts.add('${metadata['semanticFilesFound']} archivos relevantes (RAG)');
+    }
     if (metadata['filesIncluded'] != null) {
-      parts.add('${metadata['filesIncluded']} archivos');
+      parts.add('${metadata['filesIncluded']} archivos seleccionados');
     }
     if (metadata['documentationIncluded'] == true) parts.add('documentación');
     if (metadata['structureIncluded'] == true) parts.add('estructura');
