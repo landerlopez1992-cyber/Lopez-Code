@@ -22,6 +22,7 @@ import '../widgets/error_confirmation_dialog.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
 import '../models/pending_action.dart';
+import '../services/documentation_service.dart';
 import 'settings_screen.dart';
 
 // Custom painter para el icono de código (corchetes angulares <>)
@@ -97,6 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
   late String _currentSessionId;
   String? _lastProjectPath;
   Map<String, dynamic>? _lastUserMessage; // Guardar último mensaje para reenviar después de confirmación
+  List<String> _selectedDocumentation = []; // URLs de documentación seleccionadas
   
   // Run and Debug
   String _selectedPlatform = 'macos';
@@ -358,6 +360,24 @@ class _ChatScreenState extends State<ChatScreen> {
           };
         }).toList();
 
+        // Obtener documentación seleccionada
+        String documentationContext = '';
+        if (_selectedDocumentation.isNotEmpty) {
+          final sources = await DocumentationService.getDocumentationSources();
+          final activeSources = sources.where((s) => _selectedDocumentation.contains(s.url)).toList();
+          
+          if (activeSources.isNotEmpty) {
+            documentationContext = '\n\n--- DOCUMENTACIÓN DE REFERENCIA ---\n';
+            for (var source in activeSources) {
+              documentationContext += '📚 ${source.name} (${source.url})\n';
+              if (source.description != null && source.description!.isNotEmpty) {
+                documentationContext += '   ${source.description}\n';
+              }
+            }
+            documentationContext += '\n⚠️ Usa esta documentación como referencia para enriquecer tus respuestas.\n';
+          }
+        }
+        
         String enhancedMessage = userMessage;
         if (projectContext.isNotEmpty) {
           enhancedMessage = '''
@@ -368,15 +388,24 @@ $projectSummary
 
 ESTRUCTURA Y ARCHIVOS:
 $projectContext
+$documentationContext
 
 ⚠️ ACTÚA DIRECTAMENTE - Proporciona código completo cuando se solicite.
 ''';
         } else if (isErrorReport) {
           enhancedMessage = '''
 $userMessage
+$documentationContext
 
 ⚠️ IMPORTANTE: Solo analiza los errores y sugiere soluciones.
 NO uses herramientas ni propongas acciones automáticas.
+''';
+        } else if (documentationContext.isNotEmpty) {
+          enhancedMessage = '''
+$userMessage
+$documentationContext
+
+⚠️ ACTÚA DIRECTAMENTE - Proporciona código completo cuando se solicite.
 ''';
         }
       
@@ -884,6 +913,7 @@ NO uses herramientas ni propongas acciones automáticas.
         onOutput: (line) {
           _debugService.addOutput(line);
           _debugService.addDebugConsole(line);
+          _maybeCaptureVmServiceUri(line);
           
             print('📥 Flutter output: $line');
             
@@ -1073,9 +1103,11 @@ NO uses herramientas ni propongas acciones automáticas.
               platform: 'web',
               mode: 'release',
               useWebServer: true, // Usar web-server para NO abrir navegador externo (fallback Android/iOS)
+              webRenderer: 'html', // Necesario para inspector (DOM) en WebView
               onOutput: (line) {
                 _debugService.addOutput(line);
                 _debugService.addDebugConsole(line);
+                _maybeCaptureVmServiceUri(line);
                 
                 print('📥 Flutter web (fallback) output: $line');
                 
@@ -1805,6 +1837,7 @@ NO uses herramientas ni propongas acciones automáticas.
           onOutput: (line) {
             _debugService.addOutput(line);
             _debugService.addDebugConsole(line);
+            _maybeCaptureVmServiceUri(line);
             
             print('📥 Flutter output (DEBUG): $line');
             
@@ -2000,9 +2033,11 @@ NO uses herramientas ni propongas acciones automáticas.
               platform: 'web',
               mode: 'debug',
               useWebServer: true, // Usar web-server para NO abrir navegador externo (fallback Android/iOS)
+              webRenderer: 'html', // Necesario para inspector (DOM) en WebView
               onOutput: (line) {
                 _debugService.addOutput(line);
                 _debugService.addDebugConsole(line);
+                _maybeCaptureVmServiceUri(line);
                 
                 print('📥 Flutter web (fallback DEBUG) output: $line');
                 
@@ -2547,6 +2582,21 @@ NO uses herramientas ni propongas acciones automáticas.
     }
   }
 
+  void _maybeCaptureVmServiceUri(String line) {
+    final lowerLine = line.toLowerCase();
+    if (!(lowerLine.contains('vm service') ||
+        lowerLine.contains('dart vm service') ||
+        lowerLine.contains('observatory'))) {
+      return;
+    }
+
+    final match = RegExp(r'((?:http|ws)://[^\s]+)').firstMatch(line);
+    if (match != null) {
+      final uri = match.group(1)!.trim();
+      _debugService.setVmServiceUri(uri);
+    }
+  }
+
   void _handleStop() {
     // Limpiar timeouts
     if (_startupTimeout != null) {
@@ -2574,6 +2624,7 @@ NO uses herramientas ni propongas acciones automáticas.
     });
     _debugService.setRunning(false);
     _debugService.setAppUrl(null); // Limpiar URL al detener
+    _debugService.setVmServiceUri(null); // Limpiar VM Service al detener
     _debugService.setCompilationProgress(0.0, '');
     _debugService.addDebugConsole('🛑 Ejecución detenida por el usuario');
   }
@@ -2843,6 +2894,25 @@ NO uses herramientas ni propongas acciones automáticas.
             isLoading: _isLoading,
             onStop: _stopRequest,
             placeholder: 'Plan, @ for context, / for commands',
+            onModelChanged: (model) async {
+              // Actualizar el modelo en el servicio OpenAI
+              if (_openAIService != null) {
+                _openAIService!.setModel(model);
+                await SettingsService.saveSelectedModel(model);
+                print('✅ Modelo cambiado a: $model');
+              } else {
+                await _loadOpenAIService();
+              }
+            },
+            onDocumentationSelected: (url) async {
+              // Agregar documentación a la lista de seleccionadas
+              if (!_selectedDocumentation.contains(url)) {
+                setState(() {
+                  _selectedDocumentation.add(url);
+                });
+                print('✅ Documentación agregada: $url');
+              }
+            },
           ),
             ],
           ),

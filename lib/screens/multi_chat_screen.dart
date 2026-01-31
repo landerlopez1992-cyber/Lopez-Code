@@ -13,6 +13,7 @@ import '../services/file_service.dart';
 import '../services/chat_storage_service.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
+import '../services/devtools_service.dart';
 import '../widgets/run_debug_toolbar.dart';
 import 'chat_screen.dart';
 import 'welcome_screen.dart';
@@ -92,6 +93,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         } else if (!_debugService.isVisible && _debugPanelWidth > 0) {
           _debugPanelWidth = 0.0;
         }
+
+        final hasWebView = _debugService.appUrl != null &&
+            _debugService.appUrl!.isNotEmpty;
+        if (!hasWebView && _inspectorMode) {
+          _inspectorMode = false;
+        }
       });
 
       // Si la URL se limpió (se detuvo el servidor), resetear el estado
@@ -139,7 +146,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
   void _onPlatformChanged() {
     if (mounted) {
-      setState(() {});
+      setState(() {
+        final isWebPlatform =
+            _platformService.selectedPlatform.toLowerCase() == 'web';
+        if (!isWebPlatform && _inspectorMode) {
+          _inspectorMode = false;
+        }
+      });
     }
   }
 
@@ -1191,103 +1204,253 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                     ),
                                     _buildTab(1, 'Code', Icons.code),
                                     const SizedBox(width: 16),
-                                    // Toggle "Inspect Mode" (solo visible en Preview)
+                                    // Inspector (solo visible en Preview)
                                     if (_selectedTab == 0)
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            'Inspect Mode',
-                                            style: TextStyle(
-                                              color: CursorTheme.textPrimary,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Tooltip(
-                                            message: _inspectorMode 
-                                                ? 'Desactivar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)'
-                                                : 'Activar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)',
-                                            child: GestureDetector(
-                                              onTap: () {
-                                                setState(() {
-                                                  _inspectorMode =
-                                                      !_inspectorMode;
-                                                });
-                                                // Mostrar advertencia si es Flutter
-                                                if (_inspectorMode) {
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(
-                                                        '🔍 Inspector activado. Nota: Funciona mejor con apps web HTML/CSS. Apps Flutter Web usan Canvas y tienen limitaciones.',
-                                                      ),
-                                                      duration: Duration(seconds: 4),
-                                                      backgroundColor: Colors.orange,
-                                                    ),
-                                                  );
-                                                }
-                                              },
-                                            child: Container(
-                                              width: 44,
-                                              height: 24,
-                                              decoration: BoxDecoration(
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                color: _inspectorMode
-                                                    ? CursorTheme.primary
-                                                    : CursorTheme.surface
-                                                          .withOpacity(0.5),
-                                                border: Border.all(
-                                                  color: _inspectorMode
-                                                      ? CursorTheme.primary
-                                                      : CursorTheme.border,
-                                                  width: 1,
+                                      Builder(
+                                        builder: (context) {
+                                          final platform = _platformService
+                                              .selectedPlatform
+                                              .toLowerCase();
+                                          final hasWebView =
+                                              _debugService.appUrl != null &&
+                                                  _debugService
+                                                      .appUrl!.isNotEmpty;
+                                          final canUseWebInspector =
+                                              platform == 'web' || hasWebView;
+                                          final hasVmService =
+                                              _debugService.vmServiceUri !=
+                                                      null &&
+                                                  _debugService
+                                                      .vmServiceUri!.isNotEmpty;
+
+                                          return Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                'Inspector',
+                                                style: TextStyle(
+                                                  color:
+                                                      CursorTheme.textPrimary,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
                                                 ),
                                               ),
-                                              child: Stack(
-                                                children: [
-                                                  AnimatedPositioned(
-                                                    duration: const Duration(
-                                                      milliseconds: 200,
-                                                    ),
-                                                    curve: Curves.easeInOut,
-                                                    left: _inspectorMode
-                                                        ? 22
-                                                        : 2,
-                                                    top: 2,
-                                                    child: Container(
-                                                      width: 20,
-                                                      height: 20,
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.white,
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              10,
+                                              const SizedBox(width: 8),
+                                              if (canUseWebInspector)
+                                                Tooltip(
+                                                  message: _inspectorMode
+                                                      ? 'Desactivar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)'
+                                                      : 'Activar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)',
+                                                  child: GestureDetector(
+                                                    onTap: () {
+                                                      setState(() {
+                                                        _inspectorMode =
+                                                            !_inspectorMode;
+                                                      });
+                                                      if (_inspectorMode) {
+                                                        ScaffoldMessenger.of(
+                                                          context,
+                                                        ).showSnackBar(
+                                                          SnackBar(
+                                                            content: Text(
+                                                              '🔍 Inspector activado. Nota: Funciona mejor con apps web HTML/CSS. Apps Flutter Web usan Canvas y tienen limitaciones.',
                                                             ),
-                                                        boxShadow: [
-                                                          BoxShadow(
-                                                            color: Colors.black
+                                                            duration: Duration(
+                                                              seconds: 4,
+                                                            ),
+                                                            backgroundColor:
+                                                                Colors.orange,
+                                                          ),
+                                                        );
+                                                      }
+                                                    },
+                                                    child: Container(
+                                                      width: 44,
+                                                      height: 24,
+                                                      decoration: BoxDecoration(
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(12),
+                                                        color: _inspectorMode
+                                                            ? CursorTheme
+                                                                .primary
+                                                            : CursorTheme
+                                                                .surface
                                                                 .withOpacity(
-                                                                  0.2,
+                                                                    0.5),
+                                                        border: Border.all(
+                                                          color: _inspectorMode
+                                                              ? CursorTheme
+                                                                  .primary
+                                                              : CursorTheme
+                                                                  .border,
+                                                          width: 1,
+                                                        ),
+                                                      ),
+                                                      child: Stack(
+                                                        children: [
+                                                          AnimatedPositioned(
+                                                            duration:
+                                                                const Duration(
+                                                              milliseconds: 200,
+                                                            ),
+                                                            curve:
+                                                                Curves.easeInOut,
+                                                            left: _inspectorMode
+                                                                ? 22
+                                                                : 2,
+                                                            top: 2,
+                                                            child: Container(
+                                                              width: 20,
+                                                              height: 20,
+                                                              decoration:
+                                                                  BoxDecoration(
+                                                                color:
+                                                                    Colors.white,
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                  10,
                                                                 ),
-                                                            blurRadius: 4,
-                                                            offset:
-                                                                const Offset(
-                                                                  0,
-                                                                  2,
-                                                                ),
+                                                                boxShadow: [
+                                                                  BoxShadow(
+                                                                    color: Colors
+                                                                        .black
+                                                                        .withOpacity(
+                                                                          0.2,
+                                                                        ),
+                                                                    blurRadius:
+                                                                        4,
+                                                                    offset:
+                                                                        const Offset(
+                                                                      0,
+                                                                      2,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            ),
                                                           ),
                                                         ],
                                                       ),
                                                     ),
                                                   ),
-                                                ],
-                                              ),
-                                            ),
-                                            ),
-                                          ),
-                                        ],
+                                                )
+                                              else
+                                                Tooltip(
+                                                  message: hasVmService
+                                                      ? 'Abrir Flutter DevTools (Inspector)'
+                                                      : 'Inicia la app en modo Debug para habilitar el Inspector',
+                                                  child: GestureDetector(
+                                                    onTap: () async {
+                                                      if (!hasVmService) {
+                                                        ScaffoldMessenger.of(
+                                                          context,
+                                                        ).showSnackBar(
+                                                          SnackBar(
+                                                            content: Text(
+                                                              'No se detectó VM Service. Ejecuta en modo Debug y espera a que la app inicie.',
+                                                            ),
+                                                            backgroundColor:
+                                                                Colors.orange,
+                                                          ),
+                                                        );
+                                                        return;
+                                                      }
+
+                                                      _debugService
+                                                          .addDebugConsole(
+                                                        '🧩 Abriendo DevTools Inspector...',
+                                                      );
+                                                      final url =
+                                                          await DevToolsService
+                                                              .openInspector(
+                                                        vmServiceUri: _debugService
+                                                            .vmServiceUri!,
+                                                        onLog: _debugService
+                                                            .addDebugConsole,
+                                                      );
+                                                      if (!mounted) return;
+                                                      if (url == null) {
+                                                        ScaffoldMessenger.of(
+                                                          context,
+                                                        ).showSnackBar(
+                                                          SnackBar(
+                                                            content: Text(
+                                                              'No se pudo abrir DevTools. Revisa el Debug Console.',
+                                                            ),
+                                                            backgroundColor:
+                                                                Colors.red,
+                                                          ),
+                                                        );
+                                                      }
+                                                    },
+                                                    child: Container(
+                                                      padding:
+                                                          const EdgeInsets
+                                                              .symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 4,
+                                                      ),
+                                                      decoration: BoxDecoration(
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(6),
+                                                        color: hasVmService
+                                                            ? CursorTheme
+                                                                .surface
+                                                            : CursorTheme
+                                                                .surface
+                                                                .withOpacity(
+                                                                    0.5),
+                                                        border: Border.all(
+                                                          color: hasVmService
+                                                              ? CursorTheme
+                                                                  .border
+                                                              : CursorTheme
+                                                                  .border
+                                                                  .withOpacity(
+                                                                    0.5,
+                                                                  ),
+                                                          width: 1,
+                                                        ),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
+                                                        children: [
+                                                          Icon(
+                                                            Icons
+                                                                .bug_report_outlined,
+                                                            size: 14,
+                                                            color: hasVmService
+                                                                ? CursorTheme
+                                                                    .textPrimary
+                                                                : CursorTheme
+                                                                    .textSecondary,
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 6,
+                                                          ),
+                                                          Text(
+                                                            'Abrir',
+                                                            style: TextStyle(
+                                                              color: hasVmService
+                                                                  ? CursorTheme
+                                                                      .textPrimary
+                                                                  : CursorTheme
+                                                                      .textSecondary,
+                                                              fontSize: 11,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          );
+                                        },
                                       ),
                                     const SizedBox(width: 8),
                                     // Selector de tamaño del emulador (solo visible en Preview)

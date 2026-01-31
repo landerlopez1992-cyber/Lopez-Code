@@ -5,6 +5,7 @@ class SettingsService {
   static const String _systemRulesKey = 'system_rules';
   static const String _systemBehaviorKey = 'system_behavior';
   static const String _selectedModelKey = 'openai_selected_model';
+  static const String _autoModeKey = 'openai_auto_mode';
 
   // API Key
   static Future<void> saveApiKey(String apiKey) async {
@@ -53,6 +54,17 @@ class SettingsService {
   static Future<String> getSelectedModel() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_selectedModelKey) ?? 'gpt-4o-mini'; // Por defecto el más económico
+  }
+
+  // Modo Auto
+  static Future<void> saveAutoMode(bool autoMode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoModeKey, autoMode);
+  }
+
+  static Future<bool> getAutoMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_autoModeKey) ?? false;
   }
 
   // Get combined system prompt

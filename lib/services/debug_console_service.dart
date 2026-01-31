@@ -14,6 +14,7 @@ class DebugConsoleService extends ChangeNotifier {
   bool _isVisible = true; // Visible por defecto
   bool _isRunning = false;
   String? _appUrl; // URL de la app ejecutándose (para web)
+  String? _vmServiceUri; // URI del VM Service (para Inspector nativo)
   double _compilationProgress = 0.0; // Progreso de compilación (0.0 - 1.0)
   String _compilationStatus = ''; // Estado actual de compilación
 
@@ -24,6 +25,7 @@ class DebugConsoleService extends ChangeNotifier {
   bool get isVisible => _isVisible;
   bool get isRunning => _isRunning;
   String? get appUrl => _appUrl;
+  String? get vmServiceUri => _vmServiceUri;
   double get compilationProgress => _compilationProgress;
   String get compilationStatus => _compilationStatus;
 
@@ -67,6 +69,7 @@ class DebugConsoleService extends ChangeNotifier {
     _output.clear();
     _debugConsole.clear();
     _problems.clear();
+    _vmServiceUri = null;
     notifyListeners();
   }
 
@@ -105,6 +108,14 @@ class DebugConsoleService extends ChangeNotifier {
       _appUrl = url;
       notifyListeners();
       print('✅ URL actualizada, notificando listeners...');
+    }
+  }
+
+  void setVmServiceUri(String? uri) {
+    if (_vmServiceUri != uri) {
+      print('🧩 DebugConsoleService.setVmServiceUri: "$_vmServiceUri" -> "$uri"');
+      _vmServiceUri = uri;
+      notifyListeners();
     }
   }
 

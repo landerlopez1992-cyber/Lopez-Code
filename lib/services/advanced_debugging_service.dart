@@ -165,6 +165,7 @@ class AdvancedDebuggingService {
     String platform = 'macos',
     String mode = 'debug',
     bool useWebServer = false, // Si es true, usa web-server en lugar de chrome para plataforma web
+    String? webRenderer, // html | canvaskit | auto
     Function(String line)? onOutput,
     Function(CompilationError error)? onError,
   }) async {
@@ -225,6 +226,9 @@ class AdvancedDebuggingService {
           args.add('--profile');
         }
         // debug es el modo por defecto, no necesita flag
+        if (webRenderer != null && webRenderer.isNotEmpty) {
+          args.add('--web-renderer=$webRenderer');
+        }
         
         if (useWebServer) {
           print('🌐 Usando web-server (NO abrirá navegador externo)');
