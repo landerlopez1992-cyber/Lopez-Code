@@ -261,82 +261,93 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         GestureDetector(
-          onTap: () {
-            if (isDirectory) {
-              _toggleExpand(path);
-            } else {
-              setState(() {
-                _selectedPath = path;
-              });
-              widget.onFileSelected?.call(path);
-            }
-          },
-          onDoubleTap: () {
-            if (!isDirectory) {
-              widget.onFileDoubleClick?.call(path);
-            }
-          },
           onSecondaryTap: !isDirectory ? () {
             _showContextMenu(context, path, name);
           } : null,
-          child: Container(
-            padding: EdgeInsets.only(
-              left: level * 16.0 + 8,
-              right: 8,
-              top: 4,
-              bottom: 4,
-            ),
-            color: isSelected
-                ? CursorTheme.explorerItemSelected
-                : Colors.transparent,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                if (isDirectory) {
+                  _toggleExpand(path);
+                } else {
+                  setState(() {
+                    _selectedPath = path;
+                  });
+                  widget.onFileSelected?.call(path);
+                }
+              },
+              onDoubleTap: () {
+                if (!isDirectory) {
+                  widget.onFileDoubleClick?.call(path);
+                }
+              },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(3),
-                  color: isSelected
-                      ? CursorTheme.explorerItemSelected
-                      : null,
+                padding: EdgeInsets.only(
+                  left: level * 18.0 + 10, // Más espacio como Cursor
+                  right: 10,
+                  top: 3,
+                  bottom: 3,
                 ),
-                child: Row(
-                  children: [
-                    // Icono de expandir/colapsar para directorios
-                    if (isDirectory) ...[
-                      Icon(
-                        isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                        size: 16,
-                        color: CursorTheme.textSecondary,
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        isExpanded ? Icons.folder_open : Icons.folder,
-                        size: 16,
-                        color: Colors.amber,
-                      ),
-                    ] else ...[
-                      const SizedBox(width: 20), // Espacio para alinear con directorios
-                      Icon(
-                        _getFileIcon(name),
-                        size: 16,
-                        color: _getFileColor(name),
-                      ),
-                    ],
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        name,
-                        style: TextStyle(
-                          color: isSelected 
-                              ? CursorTheme.textPrimary 
-                              : CursorTheme.textSecondary,
-                          fontSize: 13,
-                          fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                color: isSelected
+                    ? CursorTheme.explorerItemSelected
+                    : Colors.transparent,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  onEnter: (_) {
+                    if (!isSelected) {
+                      // Efecto hover sutil
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(4),
+                      color: isSelected
+                          ? CursorTheme.explorerItemSelected
+                          : null,
                     ),
-                  ],
+                    child: Row(
+                      children: [
+                        // Icono de expandir/colapsar para directorios
+                        if (isDirectory) ...[
+                          Icon(
+                            isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                            size: 14, // Más pequeño como Cursor
+                            color: CursorTheme.textSecondary.withOpacity(0.8),
+                          ),
+                          const SizedBox(width: 6),
+                          Icon(
+                            isExpanded ? Icons.folder_open : Icons.folder,
+                            size: 16,
+                            color: const Color(0xFFFFB800), // Amarillo más suave como Cursor
+                          ),
+                        ] else ...[
+                          const SizedBox(width: 20), // Espacio para alinear con directorios
+                          Icon(
+                            _getFileIcon(name),
+                            size: 16,
+                            color: _getFileColor(name).withOpacity(0.9),
+                          ),
+                        ],
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            name,
+                            style: TextStyle(
+                              color: isSelected 
+                                  ? CursorTheme.textPrimary 
+                                  : CursorTheme.textSecondary,
+                              fontSize: 13,
+                              fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                              height: 1.4, // Mejor interlineado
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),

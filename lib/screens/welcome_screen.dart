@@ -76,52 +76,72 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       String? result;
       
       // PRIMERO intentar con file_picker (más confiable en Flutter)
-      print('Intentando con file_picker primero...');
+      print('🔍 Intentando con file_picker primero...');
       try {
         result = await FilePicker.platform.getDirectoryPath(
           dialogTitle: 'Seleccionar Directorio del Proyecto',
         ).timeout(
-          const Duration(seconds: 15),
+          const Duration(seconds: 30), // Aumentado a 30 segundos
           onTimeout: () {
-            print('Timeout en file_picker');
+            print('⏱️ Timeout en file_picker después de 30 segundos');
             return null;
           },
         );
         
         if (result != null && result.isNotEmpty) {
-          print('file_picker funcionó: $result');
+          print('✅ file_picker funcionó correctamente: $result');
+          
+          // Verificar que el directorio existe
+          final dir = Directory(result);
+          if (await dir.exists()) {
+            print('✅ El directorio existe y es válido');
+          } else {
+            print('❌ El directorio no existe: $result');
+            result = null;
+          }
         } else {
-          print('file_picker retornó null o vacío');
+          print('⚠️ file_picker retornó null o vacío');
         }
-      } catch (e) {
-        print('file_picker falló: $e');
+      } catch (e, stackTrace) {
+        print('❌ file_picker falló con error: $e');
+        print('Stack trace: $stackTrace');
         result = null;
       }
       
       // Si file_picker no funcionó, intentar con diálogo nativo como fallback
       if (result == null || result.isEmpty) {
-        print('file_picker no funcionó, intentando diálogo nativo de macOS...');
+        print('🔄 file_picker no funcionó, intentando diálogo nativo de macOS...');
         try {
           result = await NativeFilePicker.selectDirectory().timeout(
             const Duration(seconds: 60),
             onTimeout: () {
-              print('Timeout en diálogo nativo');
+              print('⏱️ Timeout en diálogo nativo después de 60 segundos');
               return null;
             },
           );
           
           if (result != null && result.isNotEmpty) {
-            print('Diálogo nativo funcionó: $result');
+            print('✅ Diálogo nativo funcionó: $result');
+            
+            // Verificar que el directorio existe
+            final dir = Directory(result);
+            if (await dir.exists()) {
+              print('✅ El directorio existe y es válido');
+            } else {
+              print('❌ El directorio no existe: $result');
+              result = null;
+            }
           } else {
-            print('Diálogo nativo retornó null o vacío');
+            print('⚠️ Diálogo nativo retornó null o vacío');
           }
-        } catch (e) {
-          print('Error al abrir diálogo nativo: $e');
+        } catch (e, stackTrace) {
+          print('❌ Error al abrir diálogo nativo: $e');
+          print('Stack trace: $stackTrace');
           result = null;
         }
       }
       
-      print('Resultado final de selección: $result');
+      print('📋 Resultado final de selección: ${result ?? "null"}');
 
       // Cerrar indicador de carga
       if (mounted && dialogShown) {
@@ -130,10 +150,45 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       }
 
       if (result != null && result.isNotEmpty) {
+        print('✅ Path seleccionado: $result');
+        
+        // Verificar si es un proyecto Flutter (solo para logging, no bloquea)
+        final isFlutter = await ProjectService.isFlutterProject(result);
+        if (isFlutter) {
+          final projectName = await ProjectService.getProjectName(result);
+          print('✅ Proyecto Flutter detectado');
+          print('   Nombre: ${projectName ?? "N/A"}');
+        } else {
+          print('ℹ️ Proyecto no-Flutter detectado (permitido - editor de código)');
+        }
+        print('   Ruta: $result');
+        
+        print('📁 Guardando proyecto...');
         await ProjectService.saveProjectPath(result);
+        
+        // Verificar que se guardó correctamente
+        final savedPath = await ProjectService.getProjectPath();
+        print('✅ Proyecto guardado en ProjectService: $savedPath');
+        
+        if (savedPath == null || savedPath.isEmpty) {
+          print('❌ ERROR: El proyecto no se guardó correctamente');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Error: No se pudo guardar el proyecto'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+          return;
+        }
+        
         await _saveRecentProject(result);
+        print('✅ Proyecto agregado a recientes');
         
         if (mounted) {
+          print('🚀 Navegando a MultiChatScreen...');
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (context) => const MultiChatScreen()),
           );
@@ -296,6 +351,17 @@ Error original: $e''';
           Navigator.of(context).pop(); // Cerrar indicador de carga
           
           if (cloneResult['success'] == true) {
+            // Verificar si es Flutter (solo para logging, no bloquea)
+            final isFlutter = await ProjectService.isFlutterProject(targetPath);
+            if (isFlutter) {
+              final projectName = await ProjectService.getProjectName(targetPath);
+              print('✅ Proyecto Flutter detectado');
+              print('   Nombre: ${projectName ?? "N/A"}');
+            } else {
+              print('ℹ️ Repositorio no-Flutter clonado (permitido - editor de código)');
+            }
+            print('   Ruta: $targetPath');
+            
             await ProjectService.saveProjectPath(targetPath);
             await _saveRecentProject(targetPath);
             
@@ -370,6 +436,14 @@ Error original: $e''';
       return;
     }
     
+    // Verificar si es Flutter (solo para logging, no bloquea)
+    final isFlutter = await ProjectService.isFlutterProject(normalizedPath);
+    if (isFlutter) {
+      print('✅ Proyecto Flutter detectado');
+    } else {
+      print('ℹ️ Proyecto no-Flutter (permitido - editor de código)');
+    }
+    
     print('📁 Abriendo proyecto reciente: $normalizedPath');
     await ProjectService.saveProjectPath(normalizedPath);
     await _saveRecentProject(normalizedPath);
@@ -432,11 +506,22 @@ Error original: $e''';
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Logo y título
-              Icon(
-                Icons.code,
-                size: 64,
-                color: CursorTheme.primary,
+              // Logo y título - Logo de chevrones azules
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.chevron_left,
+                    size: 48,
+                    color: CursorTheme.primary,
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 48,
+                    color: CursorTheme.primary,
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
               const Text(

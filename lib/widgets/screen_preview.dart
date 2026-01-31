@@ -203,28 +203,32 @@ class _ScreenPreviewState extends State<ScreenPreview> {
     );
   }
 
-  Widget _buildDeviceButton(DeviceType type, IconData icon) {
-    final isSelected = _deviceType == type;
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _deviceType = type;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: isSelected ? CursorTheme.primary.withOpacity(0.2) : Colors.transparent,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Icon(
-          icon,
-          size: 16,
-          color: isSelected ? CursorTheme.primary : CursorTheme.textSecondary,
-        ),
-      ),
-    );
-  }
+      Widget _buildDeviceButton(DeviceType type, IconData icon) {
+        final isSelected = _deviceType == type;
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              setState(() {
+                _deviceType = type;
+              });
+            },
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: isSelected ? CursorTheme.primary.withOpacity(0.2) : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Icon(
+                icon,
+                size: 16,
+                color: isSelected ? CursorTheme.primary : CursorTheme.textSecondary,
+              ),
+            ),
+          ),
+        );
+      }
 
   double _getDeviceWidth() {
     switch (_deviceType) {
@@ -367,54 +371,17 @@ class _ScreenPreviewState extends State<ScreenPreview> {
       }
     }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (hasAppBar)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.blue,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(8),
-                  topRight: Radius.circular(8),
-                ),
-              ),
-              child: Text(
-                appBarTitle ?? 'App Title',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          // Mostrar código fuente del archivo como preview
-          Container(
-            constraints: BoxConstraints(maxHeight: 500),
-            padding: const EdgeInsets.all(16),
-            color: backgroundColor,
-            child: SingleChildScrollView(
-              child: SelectableText(
-                _fileContent ?? '',
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  color: Colors.black87,
-                  height: 1.4,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    // Construir Scaffold visual real en lugar de código
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      appBar: hasAppBar
+          ? AppBar(
+              title: Text(appBarTitle ?? 'App Title'),
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            )
+          : null,
+      body: _buildVisualPreview(content),
     );
   }
 

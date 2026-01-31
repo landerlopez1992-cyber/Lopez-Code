@@ -1,28 +1,82 @@
 import 'dart:io';
+import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/message.dart';
 import '../services/openai_service.dart';
 import '../services/settings_service.dart';
+import '../services/ai_system_prompt.dart';
 import '../services/project_service.dart';
 import '../services/chat_storage_service.dart';
 import '../services/project_context_service.dart';
 import '../services/file_service.dart';
+import '../services/advanced_debugging_service.dart';
+import '../services/project_type_detector.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/cursor_chat_input.dart';
 import '../widgets/cursor_theme.dart';
-import '../widgets/project_explorer.dart';
-import '../widgets/code_editor_panel.dart';
-import '../widgets/screen_preview.dart';
+import '../widgets/confirmation_dialog.dart';
+import '../widgets/error_confirmation_dialog.dart';
+import '../widgets/run_debug_toolbar.dart';
+import '../services/debug_console_service.dart';
+import '../services/platform_service.dart';
+import '../models/pending_action.dart';
 import 'settings_screen.dart';
+
+// Custom painter para el icono de código (corchetes angulares <>)
+// Mismo que en message_bubble.dart - mantener consistencia
+class RobotIconPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final centerX = size.width / 2;
+    final centerY = size.height / 2;
+    
+    // Tamaño de los corchetes
+    final bracketSize = size.width * 0.25; // 25% del ancho
+    final bracketHeight = size.height * 0.4; // 40% de la altura
+    final spacing = size.width * 0.15; // Espacio entre corchetes
+    
+    // Corchete izquierdo <
+    final leftBracketPath = Path()
+      ..moveTo(centerX - spacing / 2, centerY)
+      ..lineTo(centerX - spacing / 2 - bracketSize, centerY - bracketHeight / 2)
+      ..lineTo(centerX - spacing / 2 - bracketSize, centerY + bracketHeight / 2)
+      ..lineTo(centerX - spacing / 2, centerY);
+    canvas.drawPath(leftBracketPath, paint);
+    
+    // Corchete derecho >
+    final rightBracketPath = Path()
+      ..moveTo(centerX + spacing / 2, centerY)
+      ..lineTo(centerX + spacing / 2 + bracketSize, centerY - bracketHeight / 2)
+      ..lineTo(centerX + spacing / 2 + bracketSize, centerY + bracketHeight / 2)
+      ..lineTo(centerX + spacing / 2, centerY);
+    canvas.drawPath(rightBracketPath, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
 
 class ChatScreen extends StatefulWidget {
   final String? chatId;
   final String? projectPath;
+  final Function(GlobalKey<_ChatScreenState>)? onScreenCreated; // Callback para registrar el GlobalKey
   
-  const ChatScreen({super.key, this.chatId, this.projectPath});
+  const ChatScreen({
+    super.key, 
+    this.chatId, 
+    this.projectPath,
+    this.onScreenCreated,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -34,22 +88,70 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Message> _messages = [];
   bool _isLoading = false;
   String _loadingStatus = '';
+  bool _isErrorReportDraft = false; // Mensaje precargado de errores
   String? _currentFileOperation; // 'creando', 'editando', 'leyendo'
   String? _currentFilePath;
   OpenAIService? _openAIService;
   List<String> _selectedImages = [];
   String? _selectedFilePath;
   late String _currentSessionId;
-  bool _showProjectExplorer = true;
-  double _explorerWidth = 300.0;
   String? _lastProjectPath;
-  int _explorerRefreshCounter = 0; // Para forzar refresh del explorador
+  Map<String, dynamic>? _lastUserMessage; // Guardar último mensaje para reenviar después de confirmación
+  
+  // Run and Debug
+  String _selectedPlatform = 'macos';
+  bool _isRunning = false;
+  bool _isDebugging = false;
+  Process? _runningProcess; // Proceso en ejecución (para poder detenerlo)
+  Timer? _startupTimeout; // Timeout para detectar si el proceso no inicia
+  Timer? _startupTimeoutDebug; // Timeout para modo debug
+  final DebugConsoleService _debugService = DebugConsoleService();
+  final PlatformService _platformService = PlatformService();
 
   @override
   void initState() {
     super.initState();
     _currentSessionId = widget.chatId ?? DateTime.now().millisecondsSinceEpoch.toString();
     _initialize();
+  }
+
+  /// Método público para precargar un mensaje desde fuera (Debug Console)
+  /// Precarga el mensaje en el input, pero NO lo envía automáticamente
+  void sendExternalMessage(String message) {
+    if (!mounted || message.isEmpty) return;
+    
+    try {
+      // Usar un microtask para evitar problemas de estado
+      Future.microtask(() {
+        if (!mounted) return;
+        
+        setState(() {
+          _messageController.text = message;
+          _isErrorReportDraft = true;
+          // NO llamar a _sendMessage() automáticamente
+          // El usuario debe presionar el botón de enviar
+        });
+        
+        // Hacer scroll al final para que el usuario vea el mensaje precargado
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          
+          try {
+            if (_scrollController.hasClients) {
+              _scrollController.animateTo(
+                _scrollController.position.maxScrollExtent,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut,
+              );
+            }
+          } catch (e) {
+            print('⚠️ Error al hacer scroll: $e');
+          }
+        });
+      });
+    } catch (e) {
+      print('❌ Error en sendExternalMessage: $e');
+    }
   }
 
   Future<void> _initialize() async {
@@ -92,10 +194,10 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadConversation() async {
     try {
       final projectPath = widget.projectPath ?? await ProjectService.getProjectPath();
-      if (projectPath == null) return;
+      if (projectPath == null || projectPath.isEmpty) return;
       
       final messagesJson = await ChatStorageService.loadAgentMessages(_currentSessionId);
-      if (messagesJson != null && messagesJson.isNotEmpty) {
+      if (messagesJson.isNotEmpty) {
         setState(() {
           _messages.clear();
           _messages.addAll(messagesJson.map((m) => Message.fromJson(m)));
@@ -152,9 +254,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final imagesToSend = List<String>.from(_selectedImages);
     final filePathToSend = _selectedFilePath;
 
-    final userMessage = _messageController.text.trim().isEmpty 
+    String userMessage = _messageController.text.trim().isEmpty 
         ? (hasImages ? 'Analiza esta imagen y describe lo que ves' : '')
         : _messageController.text.trim();
+
+    final bool isErrorReport = _isErrorReportDraft ||
+        userMessage.contains('Errores de Compilación/Ejecución');
+
+    // Si es un reporte de errores, limitar tamaño para evitar bloqueos
+    if (isErrorReport && userMessage.length > 6000) {
+      userMessage = '${userMessage.substring(0, 6000)}\n\n...[Errores truncados para evitar bloqueo]';
+    }
     _messageController.clear();
 
     final userMsg = Message(
@@ -165,38 +275,53 @@ class _ChatScreenState extends State<ChatScreen> {
       filePath: filePathToSend,
     );
 
-    setState(() {
-      _messages.add(userMsg);
-      _isLoading = true;
-      _selectedImages.clear();
-      _selectedFilePath = null;
-    });
-
-    _scrollToBottom();
+    if (mounted) {
+      setState(() {
+        _messages.add(userMsg);
+        _isLoading = true;
+        _selectedImages.clear();
+        _selectedFilePath = null;
+      });
+      _scrollToBottom();
+    }
 
     try {
-      final systemPrompt = await SettingsService.getSystemPrompt();
+      // Obtener projectPath antes de usarlo
+      final currentProjectPath = widget.projectPath ?? await ProjectService.getProjectPath();
       
-      setState(() {
-        _loadingStatus = 'Analizando el contexto...';
-      });
+      // Usar el nuevo System Prompt Master con reglas inviolables
+      final systemPrompt = AISystemPrompt.getPromptForContext(
+        projectPath: currentProjectPath,
+        conservative: true, // Modo conservador activado por defecto
+      );
+      
+      if (mounted) {
+        setState(() {
+          _loadingStatus = 'Analizando el contexto...';
+        });
+      }
       
       String projectContext = '';
       String projectSummary = '';
-      try {
-        projectContext = await ProjectContextService.getProjectContext();
-        projectSummary = await ProjectContextService.getProjectSummary();
-        
-        if (projectContext.length > 50000) {
-          projectContext = projectContext.substring(0, 50000) + '\n...[Contexto truncado]';
+      // Evitar cargar contexto pesado cuando solo se reportan errores
+      if (!isErrorReport) {
+        try {
+          projectContext = await ProjectContextService.getProjectContext();
+          projectSummary = await ProjectContextService.getProjectSummary();
+          
+          if (projectContext.length > 50000) {
+            projectContext = projectContext.substring(0, 50000) + '\n...[Contexto truncado]';
+          }
+        } catch (e) {
+          print('⚠️ Error al obtener contexto: $e');
         }
-      } catch (e) {
-        print('⚠️ Error al obtener contexto: $e');
       }
       
-      setState(() {
-        _loadingStatus = 'Pensando en la solución...';
-      });
+      if (mounted) {
+        setState(() {
+          _loadingStatus = 'Pensando en la solución...';
+        });
+      }
 
       String? fileContent;
       if (_selectedFilePath != null) {
@@ -227,26 +352,84 @@ $projectContext
 
 ⚠️ ACTÚA DIRECTAMENTE - Proporciona código completo cuando se solicite.
 ''';
-        }
+        } else if (isErrorReport) {
+          enhancedMessage = '''
+$userMessage
 
-      final projectPath = widget.projectPath ?? await ProjectService.getProjectPath();
+⚠️ IMPORTANTE: Solo analiza los errores y sugiere soluciones.
+NO uses herramientas ni propongas acciones automáticas.
+''';
+        }
       
+      // Guardar mensaje del usuario para reenviar después de confirmación
+      _lastUserMessage = {
+        'message': enhancedMessage,
+        'imagePaths': imagesToSend,
+        'conversationHistory': conversationHistory,
+        'fileContent': fileContent,
+        'systemPrompt': systemPrompt.isNotEmpty ? systemPrompt : null,
+        'projectPath': currentProjectPath,
+      };
+
+      final bool allowTools = !isErrorReport;
       final response = await _openAIService!.sendMessage(
-          message: enhancedMessage,
+        message: enhancedMessage,
         imagePaths: imagesToSend.isNotEmpty ? imagesToSend : null,
-          conversationHistory: conversationHistory,
-          fileContent: fileContent,
-          systemPrompt: systemPrompt.isNotEmpty ? systemPrompt : null,
-        projectPath: projectPath, // CRÍTICO: Necesario para Function Calling
-        onFileOperation: (operation, filePath) {
+        conversationHistory: conversationHistory,
+        fileContent: fileContent,
+        systemPrompt: systemPrompt.isNotEmpty ? systemPrompt : null,
+        projectPath: currentProjectPath, // CRÍTICO: Necesario para Function Calling
+        allowTools: allowTools,
+        onFileOperation: allowTools ? (operation, filePath) {
           // Actualizar estado cuando se ejecuta una operación de archivo
           if (mounted) {
-      setState(() {
+            setState(() {
               _currentFileOperation = operation;
               _currentFilePath = filePath;
-      });
+            });
           }
-        },
+        } : null,
+        onPendingActions: allowTools ? (pendingActionsList) {
+          // Convertir a objetos PendingAction y mostrar diálogo de confirmación
+          print('🔔 onPendingActions callback recibido con ${pendingActionsList.length} acciones');
+          if (mounted) {
+            final pendingActions = pendingActionsList.map((action) {
+              return PendingAction(
+                id: action['id'] as String,
+                functionName: action['functionName'] as String,
+                arguments: Map<String, dynamic>.from(action['arguments']),
+                description: action['description'] as String,
+                timestamp: action['timestamp'] != null 
+                    ? DateTime.parse(action['timestamp'])
+                    : DateTime.now(),
+                toolCallId: action['toolCallId'] as String?,
+                reasoning: action['reasoning'] as String?,
+                diff: action['diff'] as String?,
+                oldContent: action['oldContent'] as String?,
+                newContent: action['newContent'] as String?,
+              );
+            }).toList();
+            
+            print('✅ ${pendingActions.length} acciones convertidas a PendingAction');
+            
+            if (mounted) {
+              setState(() {
+                _isLoading = false; // Detener loading para mostrar diálogo
+              });
+              
+              print('🔔 Llamando a _showConfirmationDialog...');
+              // Mostrar diálogo de confirmación después del frame actual
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _showConfirmationDialog(pendingActions);
+                  print('✅ _showConfirmationDialog llamado después de build');
+                }
+              });
+            }
+          } else {
+            print('❌ Widget no está montado, no se puede mostrar diálogo');
+          }
+        } : null,
       );
 
       final assistantMsg = Message(
@@ -255,26 +438,28 @@ $projectContext
         timestamp: DateTime.now(),
       );
 
-      setState(() {
-        _messages.add(assistantMsg);
-        _isLoading = false;
-        _loadingStatus = '';
-        _currentFileOperation = null;
-        _currentFilePath = null;
-        _explorerRefreshCounter++; // Forzar refresh del explorador después de crear/editar archivos
-      });
-
-      await _saveConversation();
-      _scrollToBottom();
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _loadingStatus = '';
-        _currentFileOperation = null;
-        _currentFilePath = null;
-      });
-
       if (mounted) {
+        setState(() {
+          _messages.add(assistantMsg);
+          _isLoading = false;
+          _loadingStatus = '';
+          _currentFileOperation = null;
+          _currentFilePath = null;
+          _isErrorReportDraft = false;
+        });
+        await _saveConversation();
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadingStatus = '';
+          _currentFileOperation = null;
+          _currentFilePath = null;
+          _isErrorReportDraft = false;
+        });
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error: $e'),
@@ -285,14 +470,147 @@ $projectContext
     }
   }
 
-  void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
+  void _showConfirmationDialog(List<PendingAction> pendingActions) {
+    showDialog(
+      context: context,
+      barrierDismissible: false, // No permitir cerrar sin decidir
+      builder: (context) => ConfirmationDialog(
+        pendingActions: pendingActions,
+        onConfirm: (acceptedActions) async {
+          // Ejecutar acciones confirmadas
+          await _executeConfirmedActions(acceptedActions);
+        },
+        onReject: () {
+          // Cancelar acciones
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Acciones canceladas'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _executeConfirmedActions(List<PendingAction> acceptedActions) async {
+    if (_openAIService == null || _lastUserMessage == null) return;
+    if (!mounted) return;
+    
+    setState(() {
+      _isLoading = true;
+      _loadingStatus = 'Ejecutando acciones confirmadas...';
+    });
+
+    try {
+      // Reenviar el mensaje pero SIN el callback onPendingActions para que se ejecuten directamente
+      // Esto es un workaround - en una implementación ideal necesitaríamos un método separado
+      final response = await _openAIService!.sendMessage(
+        message: _lastUserMessage!['message'] as String,
+        imagePaths: _lastUserMessage!['imagePaths'] as List<String>?,
+        conversationHistory: _lastUserMessage!['conversationHistory'] as List<Map<String, dynamic>>?,
+        fileContent: _lastUserMessage!['fileContent'] as String?,
+        systemPrompt: _lastUserMessage!['systemPrompt'] as String?,
+        projectPath: _lastUserMessage!['projectPath'] as String?,
+        onFileOperation: (operation, filePath) {
+          if (mounted) {
+            setState(() {
+              _currentFileOperation = operation;
+              _currentFilePath = filePath;
+            });
+          }
+        },
+        // NO pasar onPendingActions - esto hará que se ejecuten directamente
+      );
+
+      final assistantMsg = Message(
+        role: 'assistant',
+        content: response,
+        timestamp: DateTime.now(),
+      );
+
+      if (mounted) {
+        setState(() {
+          _messages.add(assistantMsg);
+          _isLoading = false;
+          _loadingStatus = '';
+          _currentFileOperation = null;
+          _currentFilePath = null;
+        });
+        await _saveConversation();
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadingStatus = '';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al ejecutar acciones: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
+      }
+    }
+  }
+
+  void _stopRequest() {
+    print('🛑 Deteniendo petición...');
+    _openAIService?.cancelRequest();
+    
+    // Detener proceso en ejecución si existe
+    if (_runningProcess != null) {
+      print('🛑 Deteniendo proceso en ejecución...');
+      try {
+        _runningProcess!.kill();
+        _runningProcess = null;
+      } catch (e) {
+        print('⚠️ Error al detener proceso: $e');
+      }
+    }
+    
+    setState(() {
+      _isLoading = false;
+      _loadingStatus = '';
+      _currentFileOperation = null;
+      _currentFilePath = null;
+      _isRunning = false;
+      _isDebugging = false;
+    });
+    
+    _debugService.setRunning(false);
+    _debugService.setCompilationProgress(0.0, 'Detenido');
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Operación cancelada'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _scrollToBottom() {
+    // Usar microtask para asegurar que se ejecute después del frame actual
+    // y evitar conflictos con el layout
+    Future.microtask(() {
+      if (!mounted) return;
+      if (_scrollController.hasClients && _scrollController.position.maxScrollExtent > 0) {
+        try {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        } catch (e) {
+          print('⚠️ Error en _scrollToBottom: $e');
+        }
       }
     });
   }
@@ -328,6 +646,1405 @@ $projectContext
     }
   }
 
+  // Métodos de Run and Debug
+  Future<void> _handleRun() async {
+    try {
+      // Obtener projectPath con logging detallado
+      final widgetProjectPath = widget.projectPath;
+      final serviceProjectPath = await ProjectService.getProjectPath();
+      final projectPath = widgetProjectPath ?? serviceProjectPath;
+      
+      print('🔍 ChatScreen._handleRun: VERIFICACIÓN DE PROYECTO');
+      print('   widget.projectPath: $widgetProjectPath');
+      print('   ProjectService.getProjectPath(): $serviceProjectPath');
+      print('   projectPath final a usar: $projectPath');
+      
+      if (projectPath == null || projectPath.isEmpty) {
+        print('❌ ChatScreen._handleRun: NO HAY PROYECTO');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No hay proyecto cargado'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Verificar que el directorio existe
+      final projectDir = Directory(projectPath);
+      if (!await projectDir.exists()) {
+        print('❌ ChatScreen._handleRun: EL DIRECTORIO NO EXISTE: $projectPath');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('El proyecto no existe: $projectPath'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // DETECCIÓN UNIVERSAL DE TIPO DE PROYECTO (como Cursor IDE)
+      print('🔍 Detectando tipo de proyecto...');
+      final projectType = await ProjectTypeDetector.detectProjectType(projectPath);
+      
+      if (projectType == ProjectType.unknown) {
+        print('❌ ChatScreen._handleRun: TIPO DE PROYECTO DESCONOCIDO: $projectPath');
+        
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Tipo de proyecto no reconocido'),
+              content: Text(
+                'No se pudo detectar el tipo de proyecto.\n\n'
+                'Ruta: $projectPath\n\n'
+                'Tipos de proyecto soportados:\n'
+                '• Flutter (pubspec.yaml)\n'
+                '• Python (main.py, app.py, requirements.txt)\n'
+                '• Node.js / React / Next.js / Vue (package.json)\n'
+                '• Django (manage.py)\n'
+                '• Go (go.mod)\n'
+                '• Rust (Cargo.toml)\n'
+                '• HTML estático (index.html)\n'
+                '• Java (pom.xml, build.gradle)\n\n'
+                'Asegúrate de que el proyecto contiene los archivos necesarios.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Entendido'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+      
+      final projectTypeName = ProjectTypeDetector.getProjectTypeName(projectType);
+      final projectTypeIcon = ProjectTypeDetector.getProjectTypeIcon(projectType);
+      print('✅ Tipo de proyecto: $projectTypeIcon $projectTypeName');
+      
+      // Obtener comando de ejecución para el tipo de proyecto
+      final runCommand = await ProjectTypeDetector.getRunCommand(
+        projectPath, 
+        projectType,
+        isDebug: false,
+      );
+      
+      print('🚀 Comando a ejecutar: $runCommand');
+      print('   Requiere dispositivo: ${runCommand.requiresDevice}');
+      
+      // Configurar estado de ejecución
+      setState(() {
+        _isRunning = true;
+        _isDebugging = false;
+      });
+      
+      _debugService.setRunning(true);
+      _debugService.resetCompilationProgress();
+      _debugService.setCompilationProgress(0.05, 'Iniciando $projectTypeName...');
+      _debugService.clearAll();
+      
+      // Obtener nombre del proyecto
+      final projectName = projectPath.split('/').last;
+      print('✅ ChatScreen._handleRun: Proyecto válido encontrado');
+      print('   Nombre del proyecto: $projectName');
+      print('   Tipo: $projectTypeIcon $projectTypeName');
+      print('   Ruta del proyecto: $projectPath');
+
+      // Detectar URL para proyectos web
+      String? detectedUrl;
+
+      // Analizar progreso
+      String currentStatus = 'Iniciando $projectTypeName...';
+      
+      // Para Flutter, usar el sistema existente con dispositivos
+      if (projectType == ProjectType.flutter) {
+        final result = await AdvancedDebuggingService.runFlutterApp(
+          projectPath: projectPath,
+          platform: _selectedPlatform,
+          mode: 'release',
+          onOutput: (line) {
+            _debugService.addOutput(line);
+            _debugService.addDebugConsole(line);
+            
+            // Detectar errores
+            final lowerLine = line.toLowerCase();
+            if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
+                (lowerLine.contains('error:') && !lowerLine.contains('no error')) ||
+                (lowerLine.contains('failed') && !lowerLine.contains('no devices found')) ||
+                lowerLine.contains('undefined name') ||
+                lowerLine.contains('undefined class') ||
+                lowerLine.contains('undefined method') ||
+                lowerLine.contains('undefined getter') ||
+                lowerLine.contains('syntax error') ||
+                (lowerLine.contains('cannot') && (lowerLine.contains('find') || lowerLine.contains('resolve')))) {
+              _debugService.addProblem(line);
+              print('🔴 Error detectado: $line');
+            }
+            
+            // Analizar progreso
+            double progress = _debugService.compilationProgress;
+            String status = currentStatus;
+            
+            if (line.contains('Running Gradle task') || line.contains('Running pod install')) {
+              status = 'Configurando dependencias...';
+              progress = 0.15;
+            } else if (line.contains('Resolving dependencies') || line.contains('Downloading')) {
+              status = 'Descargando dependencias...';
+              progress = 0.25;
+            } else if (line.contains('Building') || line.contains('Compiling') || line.contains('Assembling')) {
+              status = 'Compilando código...';
+              progress = 0.45;
+            } else if (line.contains('Running') && line.contains('flutter')) {
+              status = 'Ejecutando aplicación...';
+              progress = 0.75;
+            } else if (line.contains('Launching') || line.contains('Starting')) {
+              status = 'Iniciando aplicación...';
+              progress = 0.85;
+            } else if (line.contains('Flutter run key commands') || line.contains('An Observatory debugger')) {
+              status = 'Aplicación ejecutándose';
+              progress = 1.0;
+            } else if (line.contains('Syncing files') || line.contains('Waiting for')) {
+              status = 'Sincronizando archivos...';
+              progress = 0.35;
+            } else if (line.contains('%')) {
+              final percentMatch = RegExp(r'(\d+)%').firstMatch(line);
+              if (percentMatch != null) {
+                final percent = int.parse(percentMatch.group(1)!);
+                progress = percent / 100.0;
+                status = 'Compilando... $percent%';
+              }
+            }
+            
+            if (progress > _debugService.compilationProgress) {
+              _debugService.setCompilationProgress(progress, status);
+              currentStatus = status;
+            }
+            
+            // Detectar URL para web
+            if (_selectedPlatform == 'web') {
+              RegExpMatch? urlMatch;
+              urlMatch = RegExp(r'http://localhost:(\d+)').firstMatch(line);
+              if (urlMatch != null) {
+                detectedUrl = 'http://localhost:${urlMatch.group(1)}';
+                _debugService.setAppUrl(detectedUrl);
+                print('🌐 URL detectada (localhost): $detectedUrl');
+              } else {
+                urlMatch = RegExp(r'http://127\.0\.0\.1:(\d+)').firstMatch(line);
+                if (urlMatch != null) {
+                  detectedUrl = 'http://127.0.0.1:${urlMatch.group(1)}';
+                  _debugService.setAppUrl(detectedUrl);
+                  print('🌐 URL detectada (127.0.0.1): $detectedUrl');
+                } else {
+                  urlMatch = RegExp(r'available at:\s*(http://[^\s]+)').firstMatch(line);
+                  if (urlMatch != null) {
+                    detectedUrl = urlMatch.group(1)!.trim();
+                    _debugService.setAppUrl(detectedUrl);
+                    print('🌐 URL detectada (available at): $detectedUrl');
+                  } else {
+                    urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
+                    if (urlMatch != null) {
+                      detectedUrl = urlMatch.group(1)!.trim();
+                      _debugService.setAppUrl(detectedUrl);
+                      print('🌐 URL detectada (genérico): $detectedUrl');
+                    }
+                  }
+                }
+              }
+            }
+          },
+          onError: (error) {
+            _debugService.addProblem(error.toString());
+            _debugService.setCompilationProgress(0.0, 'Error en compilación');
+          },
+        );
+        
+        if (detectedUrl != null) {
+          _debugService.setAppUrl(detectedUrl);
+        }
+
+        setState(() {
+          _isRunning = false;
+        });
+        
+        _debugService.setRunning(false);
+        _debugService.setCompilationProgress(1.0, result.success ? 'Completado' : 'Error');
+        
+        if (!result.success && mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => ErrorConfirmationDialog(
+              title: 'Compilación fallida',
+              message: result.errors.isNotEmpty 
+                  ? result.errors.join('\n')
+                  : 'La compilación falló. Revisa el Debug Console para más detalles.',
+              showViewErrorsButton: true,
+              onViewErrors: () {
+                _debugService.openPanel();
+              },
+            ),
+          );
+        }
+      } else {
+        // EJECUCIÓN UNIVERSAL para otros lenguajes
+        print('🎯 Ejecutando comando personalizado: ${runCommand.command} ${runCommand.args.join(' ')}');
+        
+        // Detectar si es un proceso de servidor de larga duración
+        final isLongRunningServer = projectType == ProjectType.fastapi ||
+            projectType == ProjectType.django ||
+            projectType == ProjectType.flask ||
+            projectType == ProjectType.nodejs ||
+            projectType == ProjectType.react ||
+            projectType == ProjectType.nextjs ||
+            projectType == ProjectType.vue ||
+            projectType == ProjectType.vite ||
+            runCommand.command.contains('uvicorn') ||
+            runCommand.command.contains('gunicorn') ||
+            runCommand.command.contains('runserver') ||
+            runCommand.command.contains('npm') && (runCommand.args.contains('start') || runCommand.args.contains('dev')) ||
+            runCommand.command.contains('yarn') && (runCommand.args.contains('start') || runCommand.args.contains('dev'));
+        
+        try {
+          final process = await Process.start(
+            runCommand.command,
+            runCommand.args,
+            workingDirectory: runCommand.workingDirectory,
+            runInShell: true,
+            environment: runCommand.environment,
+          );
+          
+          // Guardar referencia al proceso para poder detenerlo
+          _runningProcess = process;
+          
+          _debugService.addOutput('$projectTypeIcon Ejecutando: ${runCommand.description}');
+          _debugService.addOutput('📁 Directorio: ${runCommand.workingDirectory}');
+          _debugService.addOutput('🚀 Comando: ${runCommand.command} ${runCommand.args.join(' ')}');
+          _debugService.addOutput('');
+          _debugService.setCompilationProgress(0.2, 'Ejecutando...');
+          
+          // Variables para rastrear el estado del proceso
+          bool hasReceivedOutput = false;
+          bool urlDetected = false; // Flag para detectar URL solo una vez
+          
+          // Verificar si ya hay una URL establecida (por si acaso)
+          if (_debugService.appUrl != null && _debugService.appUrl!.isNotEmpty) {
+            urlDetected = true;
+            detectedUrl = _debugService.appUrl;
+            print('🌐 URL ya establecida previamente: $detectedUrl');
+          }
+          
+          // Limpiar timeout anterior si existe
+          if (_startupTimeout != null) {
+            _startupTimeout!.cancel();
+            _startupTimeout = null;
+          }
+          
+          // Escuchar stdout
+          process.stdout.transform(utf8.decoder).listen((data) {
+            hasReceivedOutput = true;
+            if (_startupTimeout != null) {
+              _startupTimeout!.cancel();
+              _startupTimeout = null;
+            }
+            
+            print('📥 STDOUT recibido (${data.length} chars)');
+            
+            for (var line in data.split('\n')) {
+              if (line.trim().isEmpty) continue;
+              _debugService.addOutput(line);
+              _debugService.addDebugConsole(line);
+              
+              print('🔍 Analizando línea STDOUT: "$line"');
+              
+              // Detectar URL SOLO UNA VEZ y solo en mensajes específicos de inicio de servidor
+              // NO detectar en logs de peticiones HTTP (GET, POST, etc)
+              // También verificar si ya hay una URL establecida en el servicio
+              if (!urlDetected && (_debugService.appUrl == null || _debugService.appUrl!.isEmpty)) {
+                final lowerLine = line.toLowerCase();
+                
+                // Solo buscar URL si la línea contiene indicadores claros de inicio de servidor
+                // Y NO contiene indicadores de peticiones HTTP
+                final isServerStartupMessage = (lowerLine.contains('uvicorn running on') || 
+                    lowerLine.contains('starting development server at') ||
+                    lowerLine.contains('server running on') ||
+                    lowerLine.contains('serving on') ||
+                    lowerLine.contains('listening on'));
+                
+                final isHttpRequestLog = lowerLine.contains('get ') || 
+                    lowerLine.contains('post ') || 
+                    lowerLine.contains('put ') || 
+                    lowerLine.contains('delete ') ||
+                    lowerLine.contains('" 200 ') ||
+                    lowerLine.contains('" 404 ') ||
+                    lowerLine.contains('" 500 ');
+                
+                if (isServerStartupMessage && !isHttpRequestLog) {
+                  print('✅ Línea contiene indicador de inicio de servidor (no es log de petición)');
+                  
+                  if (line.contains('0.0.0.0:')) {
+                    final portMatch = RegExp(r'0\.0\.0\.0:(\d+)').firstMatch(line);
+                    if (portMatch != null) {
+                      final port = portMatch.group(1);
+                      detectedUrl = 'http://localhost:$port';
+                      _debugService.setAppUrl(detectedUrl);
+                      urlDetected = true;
+                      print('🌐 ✅✅✅ URL DETECTADA EN STDOUT: 0.0.0.0:$port -> $detectedUrl (detección bloqueada para futuras líneas)');
+                    }
+                  } else if (line.contains('localhost:')) {
+                    final portMatch = RegExp(r'localhost:(\d+)').firstMatch(line);
+                    if (portMatch != null) {
+                      final port = portMatch.group(1);
+                      detectedUrl = 'http://localhost:$port';
+                      _debugService.setAppUrl(detectedUrl);
+                      urlDetected = true;
+                      print('🌐 ✅✅✅ URL DETECTADA EN STDOUT: localhost:$port -> $detectedUrl (detección bloqueada)');
+                    }
+                  } else if (line.contains('127.0.0.1:')) {
+                    final portMatch = RegExp(r'127\.0\.0\.1:(\d+)').firstMatch(line);
+                    if (portMatch != null) {
+                      final port = portMatch.group(1);
+                      detectedUrl = 'http://127.0.0.1:$port';
+                      _debugService.setAppUrl(detectedUrl);
+                      urlDetected = true;
+                      print('🌐 ✅✅✅ URL DETECTADA EN STDOUT: 127.0.0.1:$port -> $detectedUrl (detección bloqueada)');
+                    }
+                  }
+                } else if (!isServerStartupMessage && !isHttpRequestLog && line.contains(':') && RegExp(r'\d+').hasMatch(line)) {
+                  print('⚠️ Línea ignorada: no es mensaje de inicio de servidor ni petición HTTP');
+                }
+              }
+              
+              // Actualizar progreso basado en palabras clave
+              final lowerLine = line.toLowerCase();
+              if (lowerLine.contains('uvicorn running on') || 
+                  lowerLine.contains('application startup complete')) {
+                // La URL ya fue establecida cuando se detectó, no es necesario establecerla de nuevo
+                // Esto evita notificaciones innecesarias que podrían causar múltiples aperturas del navegador
+                _debugService.setCompilationProgress(1.0, 'Servidor ejecutándose ✅');
+                _debugService.setRunning(true);
+                print('✅ Servidor listo con URL: ${detectedUrl ?? "pendiente"}');
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true; // Mantener en ejecución para servidores
+                  });
+                }
+              } else if (lowerLine.contains('started server process')) {
+                _debugService.setCompilationProgress(0.8, 'Iniciando servidor...');
+              } else if (lowerLine.contains('waiting for application startup')) {
+                _debugService.setCompilationProgress(0.9, 'Preparando aplicación...');
+              } else if (lowerLine.contains('server') && (lowerLine.contains('running') || lowerLine.contains('started'))) {
+                _debugService.setCompilationProgress(1.0, 'Servidor ejecutándose');
+                _debugService.setRunning(true);
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true;
+                  });
+                }
+              } else if (lowerLine.contains('listening') || lowerLine.contains('ready')) {
+                _debugService.setCompilationProgress(0.9, 'Servidor listo');
+                _debugService.setRunning(true);
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true;
+                  });
+                }
+              } else if (lowerLine.contains('compil')) {
+                _debugService.setCompilationProgress(0.5, 'Compilando...');
+              } else if (lowerLine.contains('build')) {
+                _debugService.setCompilationProgress(0.6, 'Construyendo...');
+              }
+            }
+          });
+          
+          // Escuchar stderr
+          process.stderr.transform(utf8.decoder).listen((data) {
+            hasReceivedOutput = true;
+            if (_startupTimeout != null) {
+              _startupTimeout!.cancel();
+              _startupTimeout = null;
+            }
+            
+            print('📥 STDERR recibido (${data.length} chars)');
+            
+            for (var line in data.split('\n')) {
+              if (line.trim().isEmpty) continue;
+              _debugService.addOutput(line);
+              _debugService.addDebugConsole(line);
+              
+              print('🔍 Analizando línea STDERR: "$line"');
+              
+              // IMPORTANTE: Uvicorn envía sus logs INFO a stderr!
+              // Detectar URL SOLO UNA VEZ en mensajes específicos de inicio de servidor
+              // También verificar si ya hay una URL establecida en el servicio
+              if (!urlDetected && (_debugService.appUrl == null || _debugService.appUrl!.isEmpty)) {
+                final lowerLine = line.toLowerCase();
+                
+                // Solo buscar URL si la línea contiene indicadores claros de inicio de servidor
+                // Y NO contiene indicadores de peticiones HTTP
+                final isServerStartupMessage = (lowerLine.contains('uvicorn running on') || 
+                    lowerLine.contains('starting development server at') ||
+                    lowerLine.contains('server running on') ||
+                    lowerLine.contains('serving on') ||
+                    lowerLine.contains('listening on'));
+                
+                final isHttpRequestLog = lowerLine.contains('get ') || 
+                    lowerLine.contains('post ') || 
+                    lowerLine.contains('put ') || 
+                    lowerLine.contains('delete ') ||
+                    lowerLine.contains('" 200 ') ||
+                    lowerLine.contains('" 404 ') ||
+                    lowerLine.contains('" 500 ');
+                
+                if (isServerStartupMessage && !isHttpRequestLog) {
+                  print('✅ Línea STDERR contiene indicador de inicio de servidor (no es log de petición)');
+                  
+                  if (line.contains('0.0.0.0:')) {
+                    final portMatch = RegExp(r'0\.0\.0\.0:(\d+)').firstMatch(line);
+                    if (portMatch != null) {
+                      final port = portMatch.group(1);
+                      detectedUrl = 'http://localhost:$port';
+                      _debugService.setAppUrl(detectedUrl);
+                      urlDetected = true;
+                      print('🌐 ✅✅✅ URL DETECTADA EN STDERR: 0.0.0.0:$port -> $detectedUrl (detección bloqueada)');
+                    }
+                  } else if (line.contains('localhost:')) {
+                    final portMatch = RegExp(r'localhost:(\d+)').firstMatch(line);
+                    if (portMatch != null) {
+                      final port = portMatch.group(1);
+                      detectedUrl = 'http://localhost:$port';
+                      _debugService.setAppUrl(detectedUrl);
+                      urlDetected = true;
+                      print('🌐 ✅✅✅ URL detectada EN STDERR (localhost): $detectedUrl (detección bloqueada)');
+                    }
+                  } else if (line.contains('127.0.0.1:')) {
+                    final portMatch = RegExp(r'127\.0\.0\.1:(\d+)').firstMatch(line);
+                    if (portMatch != null) {
+                      final port = portMatch.group(1);
+                      detectedUrl = 'http://127.0.0.1:$port';
+                      _debugService.setAppUrl(detectedUrl);
+                      urlDetected = true;
+                      print('🌐 ✅✅✅ URL detectada EN STDERR (127.0.0.1): $detectedUrl (detección bloqueada)');
+                    }
+                  }
+                }
+              }
+              
+              // Detectar errores críticos que impiden el inicio
+              final lowerLine = line.toLowerCase();
+              if (lowerLine.contains('error') || lowerLine.contains('failed') || 
+                  lowerLine.contains('cannot') || lowerLine.contains('not found') ||
+                  lowerLine.contains('command not found') || lowerLine.contains('no such file')) {
+                _debugService.addProblem(line);
+                
+                // Si es un error crítico, detener el proceso
+                if (lowerLine.contains('command not found') || 
+                    lowerLine.contains('no such file') ||
+                    lowerLine.contains('cannot find')) {
+                  print('❌ Error crítico detectado, deteniendo proceso...');
+                  if (mounted) {
+                    setState(() {
+                      _isRunning = false;
+                    });
+                  }
+                  _debugService.setRunning(false);
+                  _debugService.setCompilationProgress(0.0, 'Error: Comando no encontrado');
+                  
+                  // Intentar terminar el proceso
+                  try {
+                    process.kill();
+                    _runningProcess = null;
+                  } catch (e) {
+                    print('⚠️ Error al terminar proceso: $e');
+                  }
+                  
+                  if (mounted) {
+                    showDialog(
+                      context: context,
+                      builder: (context) => ErrorConfirmationDialog(
+                        title: 'Error de ejecución',
+                        message: 'No se pudo ejecutar el comando:\n\n$line\n\nVerifica que el comando existe y está instalado.',
+                        showViewErrorsButton: true,
+                        onViewErrors: () {
+                          _debugService.openPanel();
+                        },
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+          });
+          
+          if (isLongRunningServer) {
+            // Para servidores de larga duración, esperar a confirmar que inició
+            
+            // Timeout de 30 segundos para detectar si el proceso no inicia
+            _startupTimeout = Timer(const Duration(seconds: 30), () {
+              if (!hasReceivedOutput && mounted) {
+                print('⚠️ Timeout: El proceso no ha producido output después de 30 segundos');
+                _debugService.addProblem('⚠️ Timeout: El proceso no ha producido output después de 30 segundos');
+                _debugService.setCompilationProgress(0.0, 'Error: Timeout al iniciar');
+                
+                setState(() {
+                  _isRunning = false;
+                });
+                _debugService.setRunning(false);
+                
+                try {
+                  process.kill();
+                  _runningProcess = null;
+                } catch (e) {
+                  print('⚠️ Error al terminar proceso: $e');
+                }
+                
+                showDialog(
+                  context: context,
+                  builder: (context) => ErrorConfirmationDialog(
+                    title: 'Error de inicio',
+                    message: 'El servidor no ha iniciado después de 30 segundos.\n\n'
+                        'Posibles causas:\n'
+                        '• El comando no existe o no está instalado\n'
+                        '• Faltan dependencias\n'
+                        '• Error en la configuración\n\n'
+                        'Revisa el Debug Console para más detalles.',
+                    showViewErrorsButton: true,
+                    onViewErrors: () {
+                      _debugService.openPanel();
+                    },
+                  ),
+                );
+              }
+            });
+            
+            // Monitorear si el proceso termina inesperadamente
+            process.exitCode.then((exitCode) {
+              if (_startupTimeout != null) {
+                _startupTimeout!.cancel();
+                _startupTimeout = null;
+              }
+              
+              print('⚠️ Proceso terminó con código: $exitCode');
+              _runningProcess = null;
+              
+              if (mounted) {
+                setState(() {
+                  _isRunning = false;
+                });
+              }
+              
+              _debugService.setRunning(false);
+              
+              if (exitCode != 0 && mounted) {
+                showDialog(
+                  context: context,
+                  builder: (context) => ErrorConfirmationDialog(
+                    title: 'Servidor detenido',
+                    message: 'El servidor terminó inesperadamente con código: $exitCode\n\nRevisa el Debug Console para más detalles.',
+                    showViewErrorsButton: true,
+                    onViewErrors: () {
+                      _debugService.openPanel();
+                    },
+                  ),
+                );
+              }
+            });
+          } else {
+            // Para procesos que deben terminar, esperar el código de salida
+            final exitCode = await process.exitCode;
+            _runningProcess = null;
+            
+            if (mounted) {
+              setState(() {
+                _isRunning = false;
+              });
+            }
+            
+            _debugService.setRunning(false);
+            _debugService.setCompilationProgress(1.0, exitCode == 0 ? 'Completado' : 'Error');
+            
+            if (exitCode != 0 && mounted) {
+              showDialog(
+                context: context,
+                builder: (context) => ErrorConfirmationDialog(
+                  title: 'Ejecución fallida',
+                  message: 'El proceso terminó con código de error: $exitCode\n\nRevisa el Debug Console para más detalles.',
+                  showViewErrorsButton: true,
+                  onViewErrors: () {
+                    _debugService.openPanel();
+                  },
+                ),
+              );
+            }
+          }
+        } catch (e) {
+          print('❌ Error al ejecutar comando: $e');
+          _debugService.addProblem('Error: $e');
+          _debugService.setCompilationProgress(0.0, 'Error en ejecución');
+          _runningProcess = null;
+          
+          if (mounted) {
+            setState(() {
+              _isRunning = false;
+            });
+            _debugService.setRunning(false);
+            
+            showDialog(
+              context: context,
+              builder: (context) => ErrorConfirmationDialog(
+                title: 'Error de ejecución',
+                message: 'No se pudo ejecutar el proyecto:\n\n$e\n\nAsegúrate de que las dependencias están instaladas:\n'
+                    '${_getSuggestedCommand(projectType)}',
+                showViewErrorsButton: true,
+                onViewErrors: () {
+                  _debugService.openPanel();
+                },
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error general en _handleRun: $e');
+      if (mounted) {
+        setState(() {
+          _isRunning = false;
+        });
+        _debugService.setRunning(false);
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al ejecutar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Método auxiliar para sugerir comandos de instalación
+  String _getSuggestedCommand(ProjectType type) {
+    switch (type) {
+      case ProjectType.python:
+      case ProjectType.django:
+      case ProjectType.fastapi:
+      case ProjectType.flask:
+        return '• Python: pip install -r requirements.txt';
+      case ProjectType.nodejs:
+      case ProjectType.react:
+      case ProjectType.nextjs:
+      case ProjectType.vue:
+      case ProjectType.vite:
+        return '• Node.js: npm install';
+      case ProjectType.golang:
+        return '• Go: go mod download';
+      case ProjectType.rust:
+        return '• Rust: cargo build';
+      default:
+        return '• Verifica la documentación del proyecto';
+    }
+  }
+
+  Future<void> _handleDebug() async {
+    try {
+      // Obtener projectPath con logging detallado
+      final widgetProjectPath = widget.projectPath;
+      final serviceProjectPath = await ProjectService.getProjectPath();
+      final projectPath = widgetProjectPath ?? serviceProjectPath;
+      
+      print('🔍 ChatScreen._handleDebug: VERIFICACIÓN DE PROYECTO');
+      print('   widget.projectPath: $widgetProjectPath');
+      print('   ProjectService.getProjectPath(): $serviceProjectPath');
+      print('   projectPath final a usar: $projectPath');
+      
+      if (projectPath == null || projectPath.isEmpty) {
+        print('❌ ChatScreen._handleDebug: NO HAY PROYECTO');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No hay proyecto cargado'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Verificar que el directorio existe
+      final projectDir = Directory(projectPath);
+      if (!await projectDir.exists()) {
+        print('❌ ChatScreen._handleDebug: EL DIRECTORIO NO EXISTE: $projectPath');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('El proyecto no existe: $projectPath'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // DETECCIÓN UNIVERSAL DE TIPO DE PROYECTO (como Cursor IDE)
+      print('🔍 Detectando tipo de proyecto...');
+      final projectType = await ProjectTypeDetector.detectProjectType(projectPath);
+      
+      if (projectType == ProjectType.unknown) {
+        print('❌ ChatScreen._handleDebug: TIPO DE PROYECTO DESCONOCIDO: $projectPath');
+        
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Tipo de proyecto no reconocido'),
+              content: Text(
+                'No se pudo detectar el tipo de proyecto.\n\n'
+                'Ruta: $projectPath\n\n'
+                'Tipos de proyecto soportados:\n'
+                '• Flutter (pubspec.yaml)\n'
+                '• Python (main.py, app.py, requirements.txt)\n'
+                '• Node.js / React / Next.js / Vue (package.json)\n'
+                '• Django (manage.py)\n'
+                '• Go (go.mod)\n'
+                '• Rust (Cargo.toml)\n'
+                '• HTML estático (index.html)\n'
+                '• Java (pom.xml, build.gradle)\n\n'
+                'Asegúrate de que el proyecto contiene los archivos necesarios.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Entendido'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+      
+      final projectTypeName = ProjectTypeDetector.getProjectTypeName(projectType);
+      final projectTypeIcon = ProjectTypeDetector.getProjectTypeIcon(projectType);
+      print('✅ Tipo de proyecto: $projectTypeIcon $projectTypeName');
+      
+      // Obtener comando de ejecución para el tipo de proyecto (modo debug)
+      final runCommand = await ProjectTypeDetector.getRunCommand(
+        projectPath, 
+        projectType,
+        isDebug: true,
+      );
+      
+      print('🚀 Comando a ejecutar (DEBUG): $runCommand');
+      print('   Requiere dispositivo: ${runCommand.requiresDevice}');
+      
+      // Configurar estado de ejecución
+      setState(() {
+        _isRunning = true;
+        _isDebugging = true;
+      });
+      
+      _debugService.setRunning(true);
+      _debugService.resetCompilationProgress();
+      _debugService.setCompilationProgress(0.05, 'Iniciando $projectTypeName (DEBUG)...');
+      _debugService.clearAll();
+      
+      // Obtener nombre del proyecto
+      final projectName = projectPath.split('/').last;
+      print('✅ ChatScreen._handleDebug: Proyecto válido encontrado');
+      print('   Nombre del proyecto: $projectName');
+      print('   Tipo: $projectTypeIcon $projectTypeName');
+      print('   Ruta del proyecto: $projectPath');
+      print('   Modo: DEBUG');
+
+      // Detectar URL para proyectos web
+      String? detectedUrl;
+
+      // Analizar progreso
+      String currentStatus = 'Iniciando $projectTypeName (DEBUG)...';
+      
+      // Para Flutter, usar el sistema existente con dispositivos
+      if (projectType == ProjectType.flutter) {
+        final result = await AdvancedDebuggingService.runFlutterApp(
+          projectPath: projectPath,
+          platform: _selectedPlatform,
+          mode: 'debug',
+          onOutput: (line) {
+            _debugService.addOutput(line);
+            _debugService.addDebugConsole(line);
+            
+            // Detectar errores
+            final lowerLine = line.toLowerCase();
+            if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
+                (lowerLine.contains('error:') && !lowerLine.contains('no error')) ||
+                (lowerLine.contains('failed') && !lowerLine.contains('no devices found')) ||
+                lowerLine.contains('undefined name') ||
+                lowerLine.contains('undefined class') ||
+                lowerLine.contains('undefined method') ||
+                lowerLine.contains('undefined getter') ||
+                lowerLine.contains('syntax error') ||
+                (lowerLine.contains('cannot') && (lowerLine.contains('find') || lowerLine.contains('resolve')))) {
+              _debugService.addProblem(line);
+              print('🔴 Error detectado: $line');
+            }
+            
+            // Analizar progreso
+            double progress = _debugService.compilationProgress;
+            String status = currentStatus;
+            
+            if (line.contains('Running Gradle task') || line.contains('Running pod install')) {
+              status = 'Configurando dependencias...';
+              progress = 0.15;
+            } else if (line.contains('Resolving dependencies') || line.contains('Downloading')) {
+              status = 'Descargando dependencias...';
+              progress = 0.25;
+            } else if (line.contains('Building') || line.contains('Compiling') || line.contains('Assembling')) {
+              status = 'Compilando código...';
+              progress = 0.45;
+            } else if (line.contains('Running') && line.contains('flutter')) {
+              status = 'Ejecutando aplicación...';
+              progress = 0.75;
+            } else if (line.contains('Launching') || line.contains('Starting')) {
+              status = 'Iniciando aplicación...';
+              progress = 0.85;
+            } else if (line.contains('Flutter run key commands') || line.contains('An Observatory debugger')) {
+              status = 'Aplicación ejecutándose (DEBUG)';
+              progress = 1.0;
+            } else if (line.contains('Syncing files') || line.contains('Waiting for')) {
+              status = 'Sincronizando archivos...';
+              progress = 0.35;
+            } else if (line.contains('%')) {
+              final percentMatch = RegExp(r'(\d+)%').firstMatch(line);
+              if (percentMatch != null) {
+                final percent = int.parse(percentMatch.group(1)!);
+                progress = percent / 100.0;
+                status = 'Compilando... $percent%';
+              }
+            }
+            
+            if (progress > _debugService.compilationProgress) {
+              _debugService.setCompilationProgress(progress, status);
+              currentStatus = status;
+            }
+            
+            // Detectar URL para web
+            if (_selectedPlatform == 'web') {
+              RegExpMatch? urlMatch;
+              urlMatch = RegExp(r'http://localhost:(\d+)').firstMatch(line);
+              if (urlMatch != null) {
+                detectedUrl = 'http://localhost:${urlMatch.group(1)}';
+                _debugService.setAppUrl(detectedUrl);
+                print('🌐 URL detectada (localhost): $detectedUrl');
+              } else {
+                urlMatch = RegExp(r'http://127\.0\.0\.1:(\d+)').firstMatch(line);
+                if (urlMatch != null) {
+                  detectedUrl = 'http://127.0.0.1:${urlMatch.group(1)}';
+                  _debugService.setAppUrl(detectedUrl);
+                  print('🌐 URL detectada (127.0.0.1): $detectedUrl');
+                } else {
+                  urlMatch = RegExp(r'available at:\s*(http://[^\s]+)').firstMatch(line);
+                  if (urlMatch != null) {
+                    detectedUrl = urlMatch.group(1)!.trim();
+                    _debugService.setAppUrl(detectedUrl);
+                    print('🌐 URL detectada (available at): $detectedUrl');
+                  } else {
+                    urlMatch = RegExp(r'(http://[^\s:]+:\d+)').firstMatch(line);
+                    if (urlMatch != null) {
+                      detectedUrl = urlMatch.group(1)!.trim();
+                      _debugService.setAppUrl(detectedUrl);
+                      print('🌐 URL detectada (genérico): $detectedUrl');
+                    }
+                  }
+                }
+              }
+            }
+          },
+          onError: (error) {
+            _debugService.addProblem(error.toString());
+            _debugService.setCompilationProgress(0.0, 'Error en compilación');
+          },
+        );
+        
+        if (detectedUrl != null) {
+          _debugService.setAppUrl(detectedUrl);
+        }
+
+        setState(() {
+          _isRunning = false;
+          _isDebugging = false;
+        });
+        
+        _debugService.setRunning(false);
+        _debugService.setCompilationProgress(1.0, result.success ? 'Completado (DEBUG)' : 'Error');
+        
+        if (!result.success && mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => ErrorConfirmationDialog(
+              title: 'Compilación fallida',
+              message: result.errors.isNotEmpty 
+                  ? result.errors.join('\n')
+                  : 'La compilación falló. Revisa el Debug Console para más detalles.',
+              showViewErrorsButton: true,
+              onViewErrors: () {
+                _debugService.openPanel();
+              },
+            ),
+          );
+        }
+      } else {
+        // EJECUCIÓN UNIVERSAL para otros lenguajes (modo debug)
+        print('🎯 Ejecutando comando personalizado (DEBUG): ${runCommand.command} ${runCommand.args.join(' ')}');
+        
+        // Detectar si es un proceso de servidor de larga duración
+        final isLongRunningServer = projectType == ProjectType.fastapi ||
+            projectType == ProjectType.django ||
+            projectType == ProjectType.flask ||
+            projectType == ProjectType.nodejs ||
+            projectType == ProjectType.react ||
+            projectType == ProjectType.nextjs ||
+            projectType == ProjectType.vue ||
+            projectType == ProjectType.vite ||
+            runCommand.command.contains('uvicorn') ||
+            runCommand.command.contains('gunicorn') ||
+            runCommand.command.contains('runserver') ||
+            runCommand.command.contains('npm') && (runCommand.args.contains('start') || runCommand.args.contains('dev')) ||
+            runCommand.command.contains('yarn') && (runCommand.args.contains('start') || runCommand.args.contains('dev'));
+        
+        try {
+          final process = await Process.start(
+            runCommand.command,
+            runCommand.args,
+            workingDirectory: runCommand.workingDirectory,
+            runInShell: true,
+            environment: runCommand.environment,
+          );
+          
+          // Guardar referencia al proceso para poder detenerlo
+          _runningProcess = process;
+          
+          _debugService.addOutput('$projectTypeIcon Ejecutando (DEBUG): ${runCommand.description}');
+          _debugService.addOutput('📁 Directorio: ${runCommand.workingDirectory}');
+          _debugService.addOutput('🚀 Comando: ${runCommand.command} ${runCommand.args.join(' ')}');
+          _debugService.addOutput('');
+          _debugService.setCompilationProgress(0.2, 'Ejecutando (DEBUG)...');
+          
+          // Variables para rastrear el estado del proceso
+          bool hasReceivedOutputDebug = false;
+          bool urlDetectedDebug = false; // Flag para detectar URL solo una vez
+          
+          // Verificar si ya hay una URL establecida (por si acaso)
+          if (_debugService.appUrl != null && _debugService.appUrl!.isNotEmpty) {
+            urlDetectedDebug = true;
+            detectedUrl = _debugService.appUrl;
+            print('🌐 URL ya establecida previamente (DEBUG): $detectedUrl');
+          }
+          
+          // Limpiar timeout anterior si existe
+          if (_startupTimeoutDebug != null) {
+            _startupTimeoutDebug!.cancel();
+            _startupTimeoutDebug = null;
+          }
+          
+          // Escuchar stdout
+          process.stdout.transform(utf8.decoder).listen((data) {
+            hasReceivedOutputDebug = true;
+            if (_startupTimeoutDebug != null) {
+              _startupTimeoutDebug!.cancel();
+              _startupTimeoutDebug = null;
+            }
+            
+            print('📥 STDOUT recibido (${data.length} chars): "${data.substring(0, data.length > 100 ? 100 : data.length)}..."');
+            
+            for (var line in data.split('\n')) {
+              if (line.trim().isEmpty) continue;
+              _debugService.addOutput(line);
+              _debugService.addDebugConsole(line);
+              
+              print('🔍 Analizando línea STDOUT: "$line"');
+              
+              // Detectar URLs en el output SOLO UNA VEZ
+              // Método simple y directo: buscar 0.0.0.0:PORT y convertir a localhost
+              // También verificar si ya hay una URL establecida
+              if (!urlDetectedDebug && (_debugService.appUrl == null || _debugService.appUrl!.isEmpty)) {
+                if (line.contains('0.0.0.0:')) {
+                print('✅ Línea contiene "0.0.0.0:" - intentando extraer puerto...');
+                final portMatch = RegExp(r'0\.0\.0\.0:(\d+)').firstMatch(line);
+                  if (portMatch != null) {
+                    final port = portMatch.group(1);
+                    detectedUrl = 'http://localhost:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetectedDebug = true;
+                    print('🌐 ✅✅✅ URL DETECTADA (DEBUG STDOUT): 0.0.0.0:$port -> $detectedUrl (detección bloqueada)');
+                  } else {
+                    print('❌ No se pudo extraer puerto de: "$line"');
+                  }
+                } else if (line.contains('localhost:')) {
+                  print('✅ Línea contiene "localhost:" - intentando extraer puerto...');
+                  final portMatch = RegExp(r'localhost:(\d+)').firstMatch(line);
+                  if (portMatch != null) {
+                    final port = portMatch.group(1);
+                    detectedUrl = 'http://localhost:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetectedDebug = true;
+                    print('🌐 ✅✅✅ URL detectada (DEBUG STDOUT localhost): $detectedUrl (detección bloqueada)');
+                  }
+                } else if (line.contains('127.0.0.1:')) {
+                  print('✅ Línea contiene "127.0.0.1:" - intentando extraer puerto...');
+                  final portMatch = RegExp(r'127\.0\.0\.1:(\d+)').firstMatch(line);
+                  if (portMatch != null) {
+                    final port = portMatch.group(1);
+                    detectedUrl = 'http://127.0.0.1:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetectedDebug = true;
+                    print('🌐 ✅✅✅ URL detectada (DEBUG STDOUT 127.0.0.1): $detectedUrl (detección bloqueada)');
+                  }
+                }
+              }
+              
+              // Actualizar progreso basado en palabras clave
+              final lowerLine = line.toLowerCase();
+              if (lowerLine.contains('uvicorn running on') || 
+                  lowerLine.contains('application startup complete')) {
+                // Asegurar que la URL esté establecida antes de marcar como completo
+                if (detectedUrl != null && detectedUrl!.isNotEmpty) {
+                  _debugService.setAppUrl(detectedUrl);
+                  print('🌐 ✅ URL confirmada al detectar servidor listo (DEBUG): $detectedUrl');
+                }
+                _debugService.setCompilationProgress(1.0, 'Servidor ejecutándose (DEBUG) ✅');
+                _debugService.setRunning(true);
+                print('✅ Servidor DEBUG listo con URL: ${detectedUrl ?? "pendiente"}');
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true;
+                    _isDebugging = true;
+                  });
+                }
+              } else if (lowerLine.contains('started server process')) {
+                _debugService.setCompilationProgress(0.8, 'Iniciando servidor (DEBUG)...');
+              } else if (lowerLine.contains('waiting for application startup')) {
+                _debugService.setCompilationProgress(0.9, 'Preparando aplicación (DEBUG)...');
+              } else if (lowerLine.contains('server') && (lowerLine.contains('running') || lowerLine.contains('started'))) {
+                _debugService.setCompilationProgress(1.0, 'Servidor ejecutándose (DEBUG)');
+                _debugService.setRunning(true);
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true;
+                    _isDebugging = true;
+                  });
+                }
+              } else if (lowerLine.contains('listening') || lowerLine.contains('ready')) {
+                _debugService.setCompilationProgress(0.9, 'Servidor listo (DEBUG)');
+                _debugService.setRunning(true);
+                if (mounted) {
+                  setState(() {
+                    _isRunning = true;
+                    _isDebugging = true;
+                  });
+                }
+              } else if (lowerLine.contains('compil')) {
+                _debugService.setCompilationProgress(0.5, 'Compilando...');
+              } else if (lowerLine.contains('build')) {
+                _debugService.setCompilationProgress(0.6, 'Construyendo...');
+              }
+            }
+          });
+          
+          // Escuchar stderr
+          process.stderr.transform(utf8.decoder).listen((data) {
+            hasReceivedOutputDebug = true;
+            if (_startupTimeoutDebug != null) {
+              _startupTimeoutDebug!.cancel();
+              _startupTimeoutDebug = null;
+            }
+            
+            print('📥 STDERR recibido (${data.length} chars): "${data.substring(0, data.length > 100 ? 100 : data.length)}..."');
+            
+            for (var line in data.split('\n')) {
+              if (line.trim().isEmpty) continue;
+              _debugService.addOutput(line);
+              _debugService.addDebugConsole(line);
+              
+              print('🔍 Analizando línea STDERR: "$line"');
+              
+              // IMPORTANTE: Uvicorn envía sus logs INFO a stderr, no stdout!
+              // Detectar URLs en el output de stderr también SOLO UNA VEZ
+              // También verificar si ya hay una URL establecida
+              if (!urlDetectedDebug && (_debugService.appUrl == null || _debugService.appUrl!.isEmpty)) {
+                if (line.contains('0.0.0.0:')) {
+                  print('✅ Línea STDERR contiene "0.0.0.0:" - intentando extraer puerto...');
+                  final portMatch = RegExp(r'0\.0\.0\.0:(\d+)').firstMatch(line);
+                  if (portMatch != null) {
+                    final port = portMatch.group(1);
+                    detectedUrl = 'http://localhost:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetectedDebug = true;
+                    print('🌐 ✅✅✅ URL DETECTADA EN STDERR (DEBUG): 0.0.0.0:$port -> $detectedUrl (detección bloqueada)');
+                  } else {
+                    print('❌ No se pudo extraer puerto de STDERR: "$line"');
+                  }
+                } else if (line.contains('localhost:')) {
+                  print('✅ Línea STDERR contiene "localhost:" - intentando extraer puerto...');
+                  final portMatch = RegExp(r'localhost:(\d+)').firstMatch(line);
+                  if (portMatch != null) {
+                    final port = portMatch.group(1);
+                    detectedUrl = 'http://localhost:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetectedDebug = true;
+                    print('🌐 ✅✅✅ URL detectada EN STDERR (DEBUG localhost): $detectedUrl (detección bloqueada)');
+                  }
+                } else if (line.contains('127.0.0.1:')) {
+                  print('✅ Línea STDERR contiene "127.0.0.1:" - intentando extraer puerto...');
+                  final portMatch = RegExp(r'127\.0\.0\.1:(\d+)').firstMatch(line);
+                  if (portMatch != null) {
+                    final port = portMatch.group(1);
+                    detectedUrl = 'http://127.0.0.1:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetectedDebug = true;
+                    print('🌐 ✅✅✅ URL detectada EN STDERR (DEBUG 127.0.0.1): $detectedUrl (detección bloqueada)');
+                  }
+                }
+              }
+              
+              // Detectar errores críticos que impiden el inicio
+              final lowerLine = line.toLowerCase();
+              if (lowerLine.contains('error') || lowerLine.contains('failed') || 
+                  lowerLine.contains('cannot') || lowerLine.contains('not found') ||
+                  lowerLine.contains('command not found') || lowerLine.contains('no such file')) {
+                _debugService.addProblem(line);
+                
+                // Si es un error crítico, detener el proceso
+                if (lowerLine.contains('command not found') || 
+                    lowerLine.contains('no such file') ||
+                    lowerLine.contains('cannot find')) {
+                  print('❌ Error crítico detectado (DEBUG), deteniendo proceso...');
+                  if (mounted) {
+                    setState(() {
+                      _isRunning = false;
+                      _isDebugging = false;
+                    });
+                  }
+                  _debugService.setRunning(false);
+                  _debugService.setCompilationProgress(0.0, 'Error: Comando no encontrado');
+                  
+                  // Intentar terminar el proceso
+                  try {
+                    process.kill();
+                    _runningProcess = null;
+                  } catch (e) {
+                    print('⚠️ Error al terminar proceso: $e');
+                  }
+                  
+                  if (mounted) {
+                    showDialog(
+                      context: context,
+                      builder: (context) => ErrorConfirmationDialog(
+                        title: 'Error de ejecución',
+                        message: 'No se pudo ejecutar el comando:\n\n$line\n\nVerifica que el comando existe y está instalado.',
+                        showViewErrorsButton: true,
+                        onViewErrors: () {
+                          _debugService.openPanel();
+                        },
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+          });
+          
+          if (isLongRunningServer) {
+            // Para servidores de larga duración, esperar a confirmar que inició
+            
+            // Timeout de 30 segundos para detectar si el proceso no inicia
+            _startupTimeoutDebug = Timer(const Duration(seconds: 30), () {
+              if (!hasReceivedOutputDebug && mounted) {
+                print('⚠️ Timeout (DEBUG): El proceso no ha producido output después de 30 segundos');
+                _debugService.addProblem('⚠️ Timeout: El proceso no ha producido output después de 30 segundos');
+                _debugService.setCompilationProgress(0.0, 'Error: Timeout al iniciar');
+                
+                setState(() {
+                  _isRunning = false;
+                  _isDebugging = false;
+                });
+                _debugService.setRunning(false);
+                
+                try {
+                  process.kill();
+                  _runningProcess = null;
+                } catch (e) {
+                  print('⚠️ Error al terminar proceso: $e');
+                }
+                
+                showDialog(
+                  context: context,
+                  builder: (context) => ErrorConfirmationDialog(
+                    title: 'Error de inicio',
+                    message: 'El servidor no ha iniciado después de 30 segundos.\n\n'
+                        'Posibles causas:\n'
+                        '• El comando no existe o no está instalado\n'
+                        '• Faltan dependencias\n'
+                        '• Error en la configuración\n\n'
+                        'Revisa el Debug Console para más detalles.',
+                    showViewErrorsButton: true,
+                    onViewErrors: () {
+                      _debugService.openPanel();
+                    },
+                  ),
+                );
+              }
+            });
+            
+            // Monitorear si el proceso termina inesperadamente
+            process.exitCode.then((exitCode) {
+              if (_startupTimeoutDebug != null) {
+                _startupTimeoutDebug!.cancel();
+                _startupTimeoutDebug = null;
+              }
+              
+              print('⚠️ Proceso terminó con código: $exitCode');
+              _runningProcess = null;
+              
+              if (mounted) {
+                setState(() {
+                  _isRunning = false;
+                  _isDebugging = false;
+                });
+              }
+              
+              _debugService.setRunning(false);
+              
+              if (exitCode != 0 && mounted) {
+                showDialog(
+                  context: context,
+                  builder: (context) => ErrorConfirmationDialog(
+                    title: 'Servidor detenido',
+                    message: 'El servidor terminó inesperadamente con código: $exitCode\n\nRevisa el Debug Console para más detalles.',
+                    showViewErrorsButton: true,
+                    onViewErrors: () {
+                      _debugService.openPanel();
+                    },
+                  ),
+                );
+              }
+            });
+          } else {
+            // Para procesos que deben terminar, esperar el código de salida
+            final exitCode = await process.exitCode;
+            _runningProcess = null;
+            
+            if (mounted) {
+              setState(() {
+                _isRunning = false;
+                _isDebugging = false;
+              });
+            }
+            
+            _debugService.setRunning(false);
+            _debugService.setCompilationProgress(1.0, exitCode == 0 ? 'Completado (DEBUG)' : 'Error');
+            
+            if (exitCode != 0 && mounted) {
+              showDialog(
+                context: context,
+                builder: (context) => ErrorConfirmationDialog(
+                  title: 'Ejecución fallida',
+                  message: 'El proceso terminó con código de error: $exitCode\n\nRevisa el Debug Console para más detalles.',
+                  showViewErrorsButton: true,
+                  onViewErrors: () {
+                    _debugService.openPanel();
+                  },
+                ),
+              );
+            }
+          }
+        } catch (e) {
+          print('❌ Error al ejecutar comando: $e');
+          _debugService.addProblem('Error: $e');
+          _debugService.setCompilationProgress(0.0, 'Error en ejecución');
+          _runningProcess = null;
+          
+          if (mounted) {
+            setState(() {
+              _isRunning = false;
+              _isDebugging = false;
+            });
+            _debugService.setRunning(false);
+            
+            showDialog(
+              context: context,
+              builder: (context) => ErrorConfirmationDialog(
+                title: 'Error de ejecución',
+                message: 'No se pudo ejecutar el proyecto:\n\n$e\n\nAsegúrate de que las dependencias están instaladas:\n'
+                    '${_getSuggestedCommand(projectType)}',
+                showViewErrorsButton: true,
+                onViewErrors: () {
+                  _debugService.openPanel();
+                },
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error general en _handleDebug: $e');
+      if (mounted) {
+        setState(() {
+          _isRunning = false;
+          _isDebugging = false;
+        });
+        _debugService.setRunning(false);
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al ejecutar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _handleStop() {
+    // Limpiar timeouts
+    if (_startupTimeout != null) {
+      _startupTimeout!.cancel();
+      _startupTimeout = null;
+    }
+    if (_startupTimeoutDebug != null) {
+      _startupTimeoutDebug!.cancel();
+      _startupTimeoutDebug = null;
+    }
+    
+    // Detener proceso si está ejecutándose
+    if (_runningProcess != null) {
+      try {
+        _runningProcess!.kill();
+        _runningProcess = null;
+      } catch (e) {
+        print('⚠️ Error al detener proceso: $e');
+      }
+    }
+    
+    setState(() {
+      _isRunning = false;
+      _isDebugging = false;
+    });
+    _debugService.setRunning(false);
+    _debugService.setAppUrl(null); // Limpiar URL al detener
+    _debugService.setCompilationProgress(0.0, '');
+    _debugService.addDebugConsole('🛑 Ejecución detenida por el usuario');
+  }
+
+  Future<void> _handleRestart() async {
+    _handleStop();
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _handleRun();
+  }
+
   void _openSettings() {
     Navigator.push(
       context,
@@ -337,156 +2054,7 @@ $projectContext
     });
   }
 
-  void _onFileSelected(String path) {
-    // Acción cuando se selecciona un archivo
-  }
 
-  void _onFileDoubleClick(String path) {
-    // Acción cuando se hace doble clic en un archivo - abrir código
-    _openFileEditor(path);
-  }
-
-  void _onFileViewCode(String path) {
-    _openFileEditor(path);
-  }
-
-  void _onFileViewScreen(String path) {
-    // Mostrar vista previa de pantalla
-    if (!path.endsWith('.dart')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('La vista previa solo está disponible para archivos .dart'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-    
-    showDialog(
-      context: context,
-      builder: (context) => ScreenPreview(filePath: path),
-    );
-  }
-
-  void _onFileCopy(String path) {
-    Clipboard.setData(ClipboardData(text: path));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Ruta copiada al portapapeles'),
-        duration: Duration(seconds: 1),
-      ),
-    );
-  }
-
-  Future<void> _onFileDelete(String path) async {
-    try {
-      final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
-        setState(() {
-          _explorerRefreshCounter++; // Refrescar explorador
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ Archivo eliminado: ${path.split('/').last}'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al eliminar archivo: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _openFileEditor(String path) async {
-    try {
-      final content = await FileService.readFile(path);
-      if (!mounted) return;
-      
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(20),
-          child: Container(
-            width: MediaQuery.of(context).size.width * 0.8,
-            height: MediaQuery.of(context).size.height * 0.8,
-            decoration: BoxDecoration(
-              color: CursorTheme.surface,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: CursorTheme.explorerBackground,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(8),
-                      topRight: Radius.circular(8),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          path.split('/').last,
-                          style: const TextStyle(
-                            color: CursorTheme.textPrimary,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close, size: 18),
-                        color: CursorTheme.textSecondary,
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                    ],
-                  ),
-                ),
-                // Editor
-                Expanded(
-                  child: CodeEditorPanel(
-                    filePath: path,
-                    initialContent: content,
-                    onSave: (savedPath) {
-                      setState(() {
-                        _explorerRefreshCounter++; // Refrescar explorador
-                      });
-                      Navigator.of(context).pop();
-                    },
-                    onClose: () => Navigator.of(context).pop(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al abrir archivo: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
 
   Widget _buildEmptyChatArea() {
     return Center(
@@ -508,64 +2076,163 @@ $projectContext
   }
 
   Widget _buildChatArea() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToBottom();
-    });
+    // NO llamar _scrollToBottom aquí - causa problemas de layout
+    // Se llamará después de agregar mensajes en _sendMessage
     
     return ListView.builder(
             controller: _scrollController,
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16), // Más padding horizontal como Cursor
+            shrinkWrap: false, // Asegurar que no use shrinkWrap
+            physics: const AlwaysScrollableScrollPhysics(),
             itemCount: _messages.length + (_isLoading ? 1 : 0),
             itemBuilder: (context, index) {
               if (index == _messages.length) {
                 // Tarjeta compacta para "pensando" o "trabajando con archivos" - estilo Cursor
+                // Mostrar tarjeta de trabajo en tiempo real si hay operación de archivo
+                if (_currentFileOperation != null && _currentFilePath != null) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Icono del proyecto (robot azul)
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF007ACC),
+                            shape: BoxShape.circle,
+                          ),
+                          child: CustomPaint(
+                            painter: RobotIconPainter(),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        // Tarjeta de trabajo en tiempo real estilo Cursor
+                        Container(
+                          constraints: const BoxConstraints(maxWidth: 500),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: CursorTheme.surface,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: CursorTheme.border, width: 1),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                children: [
+                                  SizedBox(
+                                    width: 12,
+                                    height: 12,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 1.5,
+                                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _currentFileOperation == 'creando' 
+                                          ? 'Creando archivo'
+                                          : _currentFileOperation == 'editando' 
+                                              ? 'Editando archivo'
+                                              : _currentFileOperation == 'leyendo'
+                                                  ? 'Leyendo archivo'
+                                                  : 'Trabajando',
+                                      style: const TextStyle(
+                                        color: CursorTheme.textPrimary,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: CursorTheme.background,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      _currentFileOperation == 'creando'
+                                          ? Icons.add_circle_outline
+                                          : _currentFileOperation == 'editando'
+                                              ? Icons.edit_outlined
+                                              : Icons.description_outlined,
+                                      size: 14,
+                                      color: CursorTheme.textSecondary,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _currentFilePath!.split('/').last,
+                                        style: const TextStyle(
+                                          color: CursorTheme.textSecondary,
+                                          fontSize: 12,
+                                          fontFamily: 'monospace',
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                // Indicador de "pensando" simple
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      CircleAvatar(
-                        radius: 12,
-                        backgroundColor: const Color(0xFF007ACC),
-                        child: const Icon(Icons.smart_toy, size: 14, color: Colors.white),
-                      ),
-                      const SizedBox(width: 8),
+                      // Icono del proyecto (robot azul)
                       Container(
-                        constraints: const BoxConstraints(maxWidth: 350),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: CursorTheme.assistantMessageBg,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: CursorTheme.assistantMessageBorder, width: 1),
+                        width: 24,
+                        height: 24,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF007ACC),
+                          shape: BoxShape.circle,
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const SizedBox(
-                              width: 10,
-                              height: 10,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                _currentFileOperation != null && _currentFilePath != null
-                                    ? '${_currentFileOperation == 'creando' ? 'Creando' : _currentFileOperation == 'editando' ? 'Editando' : 'Leyendo'} ${_currentFilePath!.split('/').last}'
-                                    : (_loadingStatus.isNotEmpty ? _loadingStatus : 'Pensando...'),
-                                style: const TextStyle(
-                                  color: CursorTheme.textPrimary,
-                                  fontSize: 12,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
+                        child: CustomPaint(
+                          painter: RobotIconPainter(),
                         ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Texto simple sin contenedor
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _loadingStatus.isNotEmpty ? _loadingStatus : 'Pensando...',
+                            style: const TextStyle(
+                              color: CursorTheme.textPrimary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -600,19 +2267,22 @@ $projectContext
                   ],
                 ),
         actions: [
-          // Toggle Project Explorer
-          IconButton(
-            icon: Icon(
-              _showProjectExplorer ? Icons.folder_open : Icons.folder,
-              size: 18,
-            ),
-            color: _showProjectExplorer ? CursorTheme.primary : CursorTheme.textSecondary,
-            onPressed: () {
-              setState(() {
-                _showProjectExplorer = !_showProjectExplorer;
-              });
+          // Toggle Debug Console (ahora funciona)
+          AnimatedBuilder(
+            animation: _debugService,
+            builder: (context, child) {
+              return IconButton(
+                icon: Icon(
+                  _debugService.isVisible ? Icons.terminal : Icons.terminal_outlined,
+                  size: 18,
+                ),
+                color: _debugService.isVisible ? CursorTheme.primary : CursorTheme.textSecondary,
+                onPressed: () {
+                  _debugService.togglePanel();
+                },
+                tooltip: _debugService.isVisible ? 'Ocultar Debug Console' : 'Mostrar Debug Console',
+              );
             },
-            tooltip: _showProjectExplorer ? 'Ocultar Explorador' : 'Mostrar Explorador',
           ),
           IconButton(
             icon: const Icon(Icons.settings, size: 18),
@@ -621,69 +2291,57 @@ $projectContext
           ),
         ],
       ),
-      body: Row(
-                  children: [
-                if (_showProjectExplorer) ...[
-            Container(
-              width: _explorerWidth,
-              decoration: BoxDecoration(
-                color: CursorTheme.explorerBackground,
-                border: Border(right: BorderSide(color: CursorTheme.border, width: 1)),
-              ),
-              child: ProjectExplorer(
-                key: ValueKey('${widget.projectPath ?? _lastProjectPath ?? 'no-project'}_$_explorerRefreshCounter'),
-                onFileSelected: _onFileSelected,
-                onFileDoubleClick: _onFileDoubleClick,
-                onFileDelete: _onFileDelete,
-                onFileViewCode: _onFileViewCode,
-                onFileViewScreen: _onFileViewScreen,
-                onFileCopy: _onFileCopy,
-              ),
-            ),
-            GestureDetector(
-              onHorizontalDragUpdate: (details) {
+      body: Column(
+        children: [
+          // Barra de Run and Debug en la esquina superior derecha
+          Container(
+            height: 36,
+            padding: const EdgeInsets.only(right: 8, top: 4),
+            alignment: Alignment.topRight,
+            child: RunDebugToolbar(
+              onRun: _handleRun,
+              onDebug: _handleDebug,
+              onStop: _handleStop,
+              onRestart: _handleRestart,
+              onPlatformChanged: (platform) {
+                print('🔧 Plataforma seleccionada: $platform');
                 setState(() {
-                  _explorerWidth += details.delta.dx;
-                  if (_explorerWidth < 200) _explorerWidth = 200;
-                  if (_explorerWidth > 600) _explorerWidth = 600;
+                  _selectedPlatform = platform;
                 });
+                // Actualizar el servicio compartido
+                _platformService.setPlatform(platform);
               },
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeColumn,
-                child: Container(width: 4, color: CursorTheme.border),
+              selectedPlatform: _selectedPlatform,
+              isRunning: _isRunning,
+              isDebugging: _isDebugging,
+            ),
+          ),
+          
+          Expanded(
+            child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
+          ),
+          if (_selectedImages.isNotEmpty || _selectedFilePath != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: CursorTheme.surface,
+              child: Row(
+                children: [
+                  if (_selectedImages.isNotEmpty)
+                    Text('${_selectedImages.length} imagen(es)', style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
+                  if (_selectedFilePath != null)
+                    Text(_selectedFilePath!.split('/').last, style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
+                ],
               ),
             ),
-          ],
-          Expanded(
-                  child: Column(
-                    children: [
-                Expanded(
-                  child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
-                ),
-                if (_selectedImages.isNotEmpty || _selectedFilePath != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    color: CursorTheme.surface,
-                    child: Row(
-                          children: [
-                            if (_selectedImages.isNotEmpty)
-                          Text('${_selectedImages.length} imagen(es)', style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                            if (_selectedFilePath != null)
-                          Text(_selectedFilePath!.split('/').last, style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                                  ],
-                                ),
-                              ),
           CursorChatInput(
             controller: _messageController,
             onSend: _sendMessage,
             onAttachImage: _pickImage,
             onAttachFile: _pickFile,
             isLoading: _isLoading,
+            onStop: _stopRequest,
             placeholder: 'Plan, @ for context, / for commands',
           ),
-                    ],
-                  ),
-            ),
         ],
       ),
     );
@@ -691,6 +2349,26 @@ $projectContext
 
   @override
   void dispose() {
+    // Limpiar timeouts
+    if (_startupTimeout != null) {
+      _startupTimeout!.cancel();
+      _startupTimeout = null;
+    }
+    if (_startupTimeoutDebug != null) {
+      _startupTimeoutDebug!.cancel();
+      _startupTimeoutDebug = null;
+    }
+    
+    // Detener proceso si está ejecutándose
+    if (_runningProcess != null) {
+      try {
+        _runningProcess!.kill();
+        _runningProcess = null;
+      } catch (e) {
+        print('⚠️ Error al detener proceso en dispose: $e');
+      }
+    }
+    
     _messageController.dispose();
     _scrollController.dispose();
     _openAIService?.dispose();

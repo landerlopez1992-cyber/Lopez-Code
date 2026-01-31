@@ -7,6 +7,7 @@ class CursorChatInput extends StatelessWidget {
   final VoidCallback? onAttachImage;
   final VoidCallback? onAttachFile;
   final bool isLoading;
+  final VoidCallback? onStop;
   final String? placeholder;
 
   const CursorChatInput({
@@ -16,13 +17,14 @@ class CursorChatInput extends StatelessWidget {
     this.onAttachImage,
     this.onAttachFile,
     this.isLoading = false,
+    this.onStop,
     this.placeholder,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), // Más padding como Cursor
       decoration: BoxDecoration(
         color: CursorTheme.surface,
         border: Border(
@@ -32,43 +34,60 @@ class CursorChatInput extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Botones de adjuntar (compactos)
+          // Botones de adjuntar (más discretos como Cursor)
           if (onAttachImage != null || onAttachFile != null) ...[
             if (onAttachImage != null)
-              IconButton(
-                icon: const Icon(Icons.image_outlined, size: 18),
-                color: CursorTheme.textSecondary,
-                padding: const EdgeInsets.all(8),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                onPressed: onAttachImage,
-                tooltip: 'Imagen',
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onAttachImage,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.image_outlined,
+                      size: 18,
+                      color: CursorTheme.textSecondary.withOpacity(0.8),
+                    ),
+                  ),
+                ),
               ),
             if (onAttachFile != null)
-              IconButton(
-                icon: const Icon(Icons.insert_drive_file_outlined, size: 18),
-                color: CursorTheme.textSecondary,
-                padding: const EdgeInsets.all(8),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                onPressed: onAttachFile,
-                tooltip: 'Archivo',
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onAttachFile,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.insert_drive_file_outlined,
+                      size: 18,
+                      color: CursorTheme.textSecondary.withOpacity(0.8),
+                    ),
+                  ),
+                ),
               ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 6),
           ],
-          // Campo de texto
+          // Campo de texto (estilo Cursor)
           Expanded(
             child: Container(
-              constraints: const BoxConstraints(maxHeight: 120),
+              constraints: const BoxConstraints(maxHeight: 150),
               decoration: BoxDecoration(
                 color: CursorTheme.background,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: CursorTheme.border, width: 1),
+                border: Border.all(
+                  color: CursorTheme.border.withOpacity(0.5),
+                  width: 1,
+                ),
               ),
               child: TextField(
                 controller: controller,
                 style: const TextStyle(
                   color: CursorTheme.textPrimary,
                   fontSize: 13,
-                  height: 1.4,
+                  height: 1.5, // Mejor interlineado
                 ),
                 maxLines: null,
                 minLines: 1,
@@ -76,44 +95,40 @@ class CursorChatInput extends StatelessWidget {
                 onSubmitted: (_) => onSend(),
                 decoration: InputDecoration(
                   hintText: placeholder ?? 'Plan, @ for context, / for commands',
-                  hintStyle: const TextStyle(
-                    color: CursorTheme.textDisabled,
+                  hintStyle: TextStyle(
+                    color: CursorTheme.textDisabled.withOpacity(0.7),
                     fontSize: 13,
                   ),
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+                    horizontal: 14,
+                    vertical: 12,
                   ),
                   isDense: true,
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          // Botón enviar (compacto)
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: isLoading ? CursorTheme.textDisabled : CursorTheme.primary,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: IconButton(
-              icon: isLoading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Icon(Icons.send, size: 16, color: Colors.white),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: isLoading ? null : onSend,
-              tooltip: 'Enviar',
+          const SizedBox(width: 10),
+          // Botón enviar/stop (estilo Cursor más pulido)
+          Material(
+            color: isLoading 
+                ? Colors.red.withOpacity(0.9)
+                : CursorTheme.primary,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: isLoading 
+                  ? (onStop ?? () {})
+                  : onSend,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                child: isLoading
+                    ? const Icon(Icons.stop, size: 18, color: Colors.white)
+                    : const Icon(Icons.send, size: 18, color: Colors.white),
+              ),
             ),
           ),
         ],

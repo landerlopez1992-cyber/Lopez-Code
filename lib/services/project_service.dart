@@ -6,14 +6,22 @@ class ProjectService {
 
   // Guardar ruta del proyecto actual
   static Future<void> saveProjectPath(String path) async {
+    print('💾 ProjectService.saveProjectPath: Guardando path: $path');
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_projectPathKey, path);
+    print('✅ ProjectService.saveProjectPath: Path guardado exitosamente');
+    
+    // Verificar inmediatamente que se guardó
+    final verification = prefs.getString(_projectPathKey);
+    print('🔍 ProjectService.saveProjectPath: Verificación - path guardado: $verification');
   }
 
   // Obtener ruta del proyecto actual
   static Future<String?> getProjectPath() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_projectPathKey);
+    final path = prefs.getString(_projectPathKey);
+    print('📖 ProjectService.getProjectPath: Path leído: $path');
+    return path;
   }
 
   // Verificar si hay un proyecto seleccionado
@@ -23,6 +31,34 @@ class ProjectService {
     
     final dir = Directory(path);
     return await dir.exists();
+  }
+
+  // Verificar si una ruta es un proyecto Flutter válido
+  static Future<bool> isFlutterProject(String path) async {
+    if (path.isEmpty) return false;
+    
+    final dir = Directory(path);
+    if (!await dir.exists()) return false;
+    
+    final pubspecFile = File('$path/pubspec.yaml');
+    return await pubspecFile.exists();
+  }
+
+  // Obtener el nombre del proyecto desde pubspec.yaml
+  static Future<String?> getProjectName(String path) async {
+    if (path.isEmpty) return null;
+    
+    final pubspecFile = File('$path/pubspec.yaml');
+    if (!await pubspecFile.exists()) return null;
+    
+    try {
+      final content = await pubspecFile.readAsString();
+      final nameMatch = RegExp(r'^name:\s*(.+)$', multiLine: true).firstMatch(content);
+      return nameMatch?.group(1)?.trim();
+    } catch (e) {
+      print('⚠️ Error al leer nombre del proyecto: $e');
+      return null;
+    }
   }
 
   // Verificar si una ruta está dentro del proyecto

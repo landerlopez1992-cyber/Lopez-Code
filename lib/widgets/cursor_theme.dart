@@ -1,31 +1,31 @@
 import 'package:flutter/material.dart';
 
 class CursorTheme {
-  // Colores principales de Cursor
-  static const Color background = Color(0xFF1E1E1E);
-  static const Color surface = Color(0xFF252526);
-  static const Color surfaceHover = Color(0xFF2A2D2E);
-  static const Color border = Color(0xFF3E3E42);
-  static const Color primary = Color(0xFF007ACC);
+  // Colores principales de Cursor IDE (exactos)
+  static const Color background = Color(0xFF1E1E1E); // VS Code/Cursor background
+  static const Color surface = Color(0xFF252526); // Sidebar background
+  static const Color surfaceHover = Color(0xFF2A2D2E); // Hover state
+  static const Color border = Color(0xFF3E3E42); // Borders
+  static const Color primary = Color(0xFF007ACC); // Blue accent
   static const Color primaryHover = Color(0xFF1A8CD8);
-  static const Color textPrimary = Color(0xFFCCCCCC);
-  static const Color textSecondary = Color(0xFF858585);
-  static const Color textDisabled = Color(0xFF6A6A6A);
+  static const Color textPrimary = Color(0xFFCCCCCC); // Main text
+  static const Color textSecondary = Color(0xFF858585); // Secondary text
+  static const Color textDisabled = Color(0xFF6A6A6A); // Disabled text
   
   // Colores para código
   static const Color codeBackground = Color(0xFF1E1E1E);
   static const Color codeBorder = Color(0xFF3E3E42);
   static const Color codeText = Color(0xFFD4D4D4);
   
-  // Colores para mensajes
-  static const Color userMessageBg = Color(0xFF0E639C);
-  static const Color assistantMessageBg = Color(0xFF2D2D30);
-  static const Color assistantMessageBorder = Color(0xFF3E3E42);
+  // Colores para mensajes (estilo Cursor)
+  static const Color userMessageBg = Color(0xFF0E639C); // User message blue
+  static const Color assistantMessageBg = Color(0xFF2D2D30); // Assistant message dark gray
+  static const Color assistantMessageBorder = Color(0xFF3E3E42); // Subtle border
   
   // Colores para el explorador
-  static const Color explorerBackground = Color(0xFF252526);
-  static const Color explorerItemHover = Color(0xFF2A2D2E);
-  static const Color explorerItemSelected = Color(0xFF37373D);
+  static const Color explorerBackground = Color(0xFF252526); // Sidebar background
+  static const Color explorerItemHover = Color(0xFF2A2D2E); // Item hover
+  static const Color explorerItemSelected = Color(0xFF37373D); // Selected item
   
   // Colores para el editor
   static const Color editorBackground = Color(0xFF1E1E1E);

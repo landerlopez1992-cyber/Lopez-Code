@@ -55,36 +55,36 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
       final result = await RunDebugService.runFlutterProject(
         mode: _selectedMode,
         platform: _selectedPlatform,
-        onOutput: (output) {
-          setState(() {
-            _output += output;
-            // Auto-scroll al final
-            Future.delayed(const Duration(milliseconds: 100), () {
-              if (_scrollController.hasClients) {
-                _scrollController.animateTo(
-                  _scrollController.position.maxScrollExtent,
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOut,
-                );
-              }
-            });
-          });
-        },
-        onError: (error) {
-          setState(() {
-            _output += 'ERROR: $error\n';
-            // Auto-scroll al final
-            Future.delayed(const Duration(milliseconds: 100), () {
-              if (_scrollController.hasClients) {
-                _scrollController.animateTo(
-                  _scrollController.position.maxScrollExtent,
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOut,
-                );
-              }
-            });
-          });
-        },
+            onOutput: (output) {
+              setState(() {
+                _output += output;
+                // Auto-scroll al final después de un breve delay
+                Future.delayed(const Duration(milliseconds: 50), () {
+                  if (_scrollController.hasClients) {
+                    _scrollController.animateTo(
+                      _scrollController.position.maxScrollExtent,
+                      duration: const Duration(milliseconds: 100),
+                      curve: Curves.easeOut,
+                    );
+                  }
+                });
+              });
+            },
+            onError: (error) {
+              setState(() {
+                _output += 'ERROR: $error\n';
+                // Auto-scroll al final después de un breve delay
+                Future.delayed(const Duration(milliseconds: 50), () {
+                  if (_scrollController.hasClients) {
+                    _scrollController.animateTo(
+                      _scrollController.position.maxScrollExtent,
+                      duration: const Duration(milliseconds: 100),
+                      curve: Curves.easeOut,
+                    );
+                  }
+                });
+              });
+            },
       );
 
       // El proceso se ejecuta en background, no esperamos que termine aquí
@@ -318,28 +318,95 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
             ),
           ),
 
-          // Output
+          // Output con tabs (Problems, Output, Debug Console) estilo IDE
           Expanded(
             child: Container(
               color: CursorTheme.background,
-              padding: const EdgeInsets.all(12),
-              child: SingleChildScrollView(
-                reverse: true,
-                child: SelectableText(
-                  _output.isEmpty 
-                      ? 'Output aparecerá aquí...\n\nPresiona "Ejecutar" para iniciar el proyecto.'
-                      : _output,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    color: CursorTheme.codeText,
-                    height: 1.4,
+              child: Column(
+                children: [
+                  // Tabs
+                  Container(
+                    decoration: BoxDecoration(
+                      color: CursorTheme.surface,
+                      border: Border(
+                        bottom: BorderSide(color: CursorTheme.border, width: 1),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        _buildTabButton('Problems', Icons.warning_amber_rounded, false),
+                        _buildTabButton('Output', Icons.terminal, false),
+                        _buildTabButton('Debug Console', Icons.bug_report, true),
+                      ],
+                    ),
                   ),
-                ),
+                  // Console content
+                  Expanded(
+                    child: Container(
+                      color: CursorTheme.background,
+                      padding: const EdgeInsets.all(12),
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        reverse: false, // Cambiar a false para mostrar desde arriba
+                        child: SelectableText(
+                          _output.isEmpty 
+                              ? 'Output aparecerá aquí...\n\nPresiona "Ejecutar" para iniciar el proyecto.'
+                              : _output,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            color: CursorTheme.codeText,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTabButton(String label, IconData icon, bool isActive) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: isActive ? CursorTheme.primary : Colors.transparent,
+            width: 2,
+          ),
+        ),
+      ),
+      child: InkWell(
+        onTap: () {
+          // Por ahora solo Debug Console está activo
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: isActive ? CursorTheme.primary : CursorTheme.textSecondary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isActive ? CursorTheme.primary : CursorTheme.textSecondary,
+                  fontSize: 12,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
