@@ -57,7 +57,21 @@ class _CursorChatInputState extends State<CursorChatInput> {
     if (renderBox == null) return;
 
     final offset = renderBox.localToGlobal(Offset.zero);
-    final size = renderBox.size;
+    final screenSize = MediaQuery.of(context).size;
+
+    // Calcular posición: arriba del input, alineado a la izquierda del botón
+    final selectorWidth = 340.0;
+    final selectorHeight = _autoMode ? 180.0 : 520.0;
+    
+    // Posición X: alineado con el botón (esquina izquierda del chat)
+    final left = offset.dx;
+    
+    // Posición Y: arriba del input (debajo del botón)
+    final top = offset.dy - selectorHeight - 8; // 8px de margen
+    
+    // Asegurar que no se salga de la pantalla
+    final finalLeft = left.clamp(8.0, screenSize.width - selectorWidth - 8);
+    final finalTop = top.clamp(8.0, screenSize.height - selectorHeight - 8);
 
     _overlayEntry = OverlayEntry(
       builder: (context) => Stack(
@@ -74,8 +88,8 @@ class _CursorChatInputState extends State<CursorChatInput> {
           ),
           // Selector de modelos
           Positioned(
-            left: offset.dx - 320 + size.width,
-            top: offset.dy - 500,
+            left: finalLeft,
+            top: finalTop,
             child: Material(
               color: Colors.transparent,
               child: ModelSelector(

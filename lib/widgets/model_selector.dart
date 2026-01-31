@@ -92,10 +92,12 @@ class _ModelSelectorState extends State<ModelSelector> {
 
   @override
   Widget build(BuildContext context) {
+    final maxHeight = _autoMode ? 180.0 : 520.0;
+    
     return Container(
       width: 340,
       constraints: BoxConstraints(
-        maxHeight: _autoMode ? 180 : 520, // Más compacto cuando Auto está activo
+        maxHeight: maxHeight,
       ),
       decoration: BoxDecoration(
         color: CursorTheme.surface,
@@ -179,70 +181,80 @@ class _ModelSelectorState extends State<ModelSelector> {
           
           // Mensaje cuando Auto está activo
           if (_autoMode)
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.auto_awesome,
-                    size: 48,
-                    color: CursorTheme.primary,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Modo Automático',
-                    style: TextStyle(
-                      color: CursorTheme.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.auto_awesome,
+                      size: 40,
+                      color: CursorTheme.primary,
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'El sistema seleccionará el mejor modelo según el contexto',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: CursorTheme.textSecondary,
-                      fontSize: 12,
+                    const SizedBox(height: 10),
+                    Text(
+                      'Modo Automático',
+                      style: TextStyle(
+                        color: CursorTheme.textPrimary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      'El sistema seleccionará el mejor modelo según el contexto',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 11,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
             ),
           
           // Lista de modelos (solo visible cuando Auto está desactivado)
           if (!_autoMode)
             Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                itemCount: _availableModels.length,
-                separatorBuilder: (context, index) => Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: CursorTheme.border.withOpacity(0.3),
-                  indent: 16,
-                  endIndent: 16,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: maxHeight - 120, // Restar altura de búsqueda + toggle
                 ),
-                itemBuilder: (context, index) {
-                  final model = _availableModels[index];
-                  final isSelected = _selectedModel == model.id;
-                  
-                  return _ModelSelectorItem(
-                    model: model,
-                    isSelected: isSelected,
-                    onTap: () {
-                      print('🎯 Modelo seleccionado en ModelSelector: ${model.id} (${model.name})');
-                      setState(() {
-                        _selectedModel = model.id;
-                      });
-                      widget.onModelChanged(model.id);
-                      SettingsService.saveSelectedModel(model.id);
-                      print('💾 Modelo guardado en SettingsService: ${model.id}');
-                      // No cerramos aquí, el padre lo hace
-                    },
-                  );
-                },
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: _availableModels.length,
+                  separatorBuilder: (context, index) => Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: CursorTheme.border.withOpacity(0.3),
+                    indent: 16,
+                    endIndent: 16,
+                  ),
+                  itemBuilder: (context, index) {
+                    final model = _availableModels[index];
+                    final isSelected = _selectedModel == model.id;
+                    
+                    return _ModelSelectorItem(
+                      model: model,
+                      isSelected: isSelected,
+                      onTap: () {
+                        print('🎯 Modelo seleccionado en ModelSelector: ${model.id} (${model.name})');
+                        setState(() {
+                          _selectedModel = model.id;
+                        });
+                        widget.onModelChanged(model.id);
+                        SettingsService.saveSelectedModel(model.id);
+                        print('💾 Modelo guardado en SettingsService: ${model.id}');
+                        // No cerramos aquí, el padre lo hace
+                      },
+                    );
+                  },
+                ),
               ),
             ),
         ],
