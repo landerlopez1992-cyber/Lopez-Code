@@ -7,11 +7,8 @@ import 'package:file_picker/file_picker.dart';
 import '../models/message.dart';
 import '../services/openai_service.dart';
 import '../services/settings_service.dart';
-import '../services/ai_system_prompt.dart';
 import '../services/project_service.dart';
 import '../services/chat_storage_service.dart';
-import '../services/project_context_service.dart';
-import '../services/file_service.dart';
 import '../services/advanced_debugging_service.dart';
 import '../services/project_type_detector.dart';
 import '../widgets/message_bubble.dart';
@@ -22,7 +19,8 @@ import '../widgets/error_confirmation_dialog.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
 import '../models/pending_action.dart';
-import '../services/documentation_service.dart';
+import '../services/conversation_memory_service.dart';
+import '../services/smart_context_manager.dart';
 import 'settings_screen.dart';
 
 // Custom painter para el icono de código (corchetes angulares <>)
@@ -310,104 +308,58 @@ class _ChatScreenState extends State<ChatScreen> {
       // Obtener projectPath antes de usarlo
       final currentProjectPath = widget.projectPath ?? await ProjectService.getProjectPath();
       
-      // Usar el nuevo System Prompt Master con reglas inviolables
-      final systemPrompt = AISystemPrompt.getPromptForContext(
-        projectPath: currentProjectPath,
-        conservative: true, // Modo conservador activado por defecto
+      if (mounted) {
+        setState(() {
+          _loadingStatus = 'Construyendo contexto optimizado...';
+        });
+      }
+      
+      // ✨ NUEVO SISTEMA INTELIGENTE DE CONTEXTO ✨
+      // Construye contexto optimizado automáticamente
+      final contextBundle = await SmartContextManager.buildOptimizedContext(
+        userMessage: userMessage,
+        projectPath: currentProjectPath ?? '',
+        sessionId: _currentSessionId,
+        selectedFiles: _selectedFilePath != null ? [_selectedFilePath!] : null,
+        includeDocumentation: SmartContextManager.needsDocumentation(userMessage),
+        includeHistory: true,
+        includeProjectStructure: SmartContextManager.needsFullContext(userMessage),
       );
       
-      if (mounted) {
-        setState(() {
-          _loadingStatus = 'Analizando el contexto...';
-        });
-      }
-      
-      String projectContext = '';
-      String projectSummary = '';
-      // Evitar cargar contexto pesado cuando solo se reportan errores
-      if (!isErrorReport) {
-        try {
-          projectContext = await ProjectContextService.getProjectContext();
-          projectSummary = await ProjectContextService.getProjectSummary();
-          
-          if (projectContext.length > 50000) {
-            projectContext = projectContext.substring(0, 50000) + '\n...[Contexto truncado]';
-          }
-        } catch (e) {
-          print('⚠️ Error al obtener contexto: $e');
-        }
-      }
+      print('📊 Contexto: ${contextBundle.summary}, ${contextBundle.estimatedTokens} tokens');
       
       if (mounted) {
         setState(() {
-          _loadingStatus = 'Pensando en la solución...';
+          _loadingStatus = 'Pensando en la solución... (${contextBundle.estimatedTokens} tokens)';
         });
       }
-
-      String? fileContent;
-      if (_selectedFilePath != null) {
-        try {
-          fileContent = await FileService.readFile(_selectedFilePath!);
-        } catch (e) {
-          print('⚠️ Error al leer archivo: $e');
-        }
-      }
-
-        final conversationHistory = _messages.map((msg) {
-          return {
-            'role': msg.role,
-            'content': msg.content,
-          };
-        }).toList();
-
-        // Obtener documentación seleccionada
-        String documentationContext = '';
-        if (_selectedDocumentation.isNotEmpty) {
-          final sources = await DocumentationService.getDocumentationSources();
-          final activeSources = sources.where((s) => _selectedDocumentation.contains(s.url)).toList();
-          
-          if (activeSources.isNotEmpty) {
-            documentationContext = '\n\n--- DOCUMENTACIÓN DE REFERENCIA ---\n';
-            for (var source in activeSources) {
-              documentationContext += '📚 ${source.name} (${source.url})\n';
-              if (source.description != null && source.description!.isNotEmpty) {
-                documentationContext += '   ${source.description}\n';
-              }
-            }
-            documentationContext += '\n⚠️ Usa esta documentación como referencia para enriquecer tus respuestas.\n';
-          }
-        }
-        
-        String enhancedMessage = userMessage;
-        if (projectContext.isNotEmpty) {
-          enhancedMessage = '''
-$userMessage
-
---- CONTEXTO DEL PROYECTO ---
-$projectSummary
-
-ESTRUCTURA Y ARCHIVOS:
-$projectContext
-$documentationContext
-
-⚠️ ACTÚA DIRECTAMENTE - Proporciona código completo cuando se solicite.
-''';
-        } else if (isErrorReport) {
-          enhancedMessage = '''
-$userMessage
-$documentationContext
-
-⚠️ IMPORTANTE: Solo analiza los errores y sugiere soluciones.
-NO uses herramientas ni propongas acciones automáticas.
-''';
-        } else if (documentationContext.isNotEmpty) {
-          enhancedMessage = '''
-$userMessage
-$documentationContext
-
-⚠️ ACTÚA DIRECTAMENTE - Proporciona código completo cuando se solicite.
-''';
-        }
+      
+      // Guardar mensaje en memoria persistente
+      await ConversationMemoryService.addMessage(
+        role: 'user',
+        content: userMessage,
+        sessionId: _currentSessionId,
+        metadata: {
+          'hasImages': imagesToSend.isNotEmpty,
+          'hasFiles': _selectedFilePath != null,
+        },
+      );
+      
+      // El contexto ya está optimizado y listo para enviar
+      final enhancedMessage = contextBundle.content;
+      
+      // Usar system prompt del contexto optimizado
+      final systemPrompt = ''; // Ya está incluido en enhancedMessage
+      
+      final conversationHistory = _messages.map((msg) {
+        return {
+          'role': msg.role,
+          'content': msg.content,
+        };
+      }).toList();
+      
+      // fileContent ya no se usa - el contexto está optimizado
+      final fileContent = null; // Para compatibilidad con código existente
       
       // Guardar mensaje del usuario para reenviar después de confirmación
       _lastUserMessage = {
@@ -535,6 +487,13 @@ $documentationContext
         content: response,
         timestamp: DateTime.now(),
       );
+      
+      // Guardar respuesta del asistente en memoria persistente
+      await ConversationMemoryService.addMessage(
+        role: 'assistant',
+        content: response,
+        sessionId: _currentSessionId,
+      );
 
       if (mounted) {
         setState(() {
@@ -650,6 +609,13 @@ $documentationContext
         role: 'assistant',
         content: response,
         timestamp: DateTime.now(),
+      );
+      
+      // Guardar respuesta del asistente en memoria persistente
+      await ConversationMemoryService.addMessage(
+        role: 'assistant',
+        content: response,
+        sessionId: _currentSessionId,
       );
 
       if (mounted) {
