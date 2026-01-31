@@ -158,20 +158,49 @@ class _CursorChatInputState extends State<CursorChatInput> {
               color: Colors.transparent,
               child: DocumentationSelector(
                 onDocumentationSelected: (url) {
-                  // Insertar @url en el campo de texto
-                  final text = widget.controller.text;
-                  final selection = widget.controller.selection;
-                  final newText = text.replaceRange(
-                    selection.start,
-                    selection.end,
-                    '@$url ',
-                  );
-                  widget.controller.text = newText;
-                  widget.controller.selection = TextSelection.collapsed(
-                    offset: selection.start + url.length + 2,
-                  );
-                  widget.onDocumentationSelected?.call(url);
-                  _closeOverlay(); // Cerrar el overlay después de seleccionar
+                  try {
+                    // Insertar @url en el campo de texto
+                    final text = widget.controller.text;
+                    final selection = widget.controller.selection;
+                    
+                    // Validar la selección - verificar que los índices sean válidos
+                    final textLength = text.length;
+                    final start = (selection.start >= 0 && selection.start <= textLength) 
+                        ? selection.start 
+                        : textLength;
+                    final end = (selection.end >= 0 && selection.end <= textLength) 
+                        ? selection.end 
+                        : textLength;
+                    
+                    // Asegurar que start <= end
+                    final validStart = start <= end ? start : end;
+                    final validEnd = end >= start ? end : start;
+                    
+                    // Insertar el tag
+                    final tag = '@$url ';
+                    final newText = text.replaceRange(validStart, validEnd, tag);
+                    widget.controller.text = newText;
+                    
+                    // Posicionar el cursor después del tag insertado
+                    final newOffset = (validStart + tag.length).clamp(0, newText.length);
+                    widget.controller.selection = TextSelection.collapsed(
+                      offset: newOffset,
+                    );
+                    
+                    widget.onDocumentationSelected?.call(url);
+                    _closeOverlay(); // Cerrar el overlay después de seleccionar
+                  } catch (e, stackTrace) {
+                    print('❌ Error al insertar tag de documentación: $e');
+                    print('Stack trace: $stackTrace');
+                    // Si hay error, simplemente agregar al final
+                    final text = widget.controller.text;
+                    widget.controller.text = '$text@$url ';
+                    widget.controller.selection = TextSelection.collapsed(
+                      offset: widget.controller.text.length,
+                    );
+                    widget.onDocumentationSelected?.call(url);
+                    _closeOverlay();
+                  }
                 },
               ),
             ),

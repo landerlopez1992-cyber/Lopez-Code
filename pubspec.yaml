@@ -60,6 +60,16 @@ dependencies:
   
   # URL launcher for opening URLs in system browser
   url_launcher: ^6.3.1
+  
+  # HTML parsing for web scraping
+  html: ^0.15.4
+  
+  # SQLite for local vector database
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.3
+  
+  # Crypto for hashing
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:

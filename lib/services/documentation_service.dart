@@ -1,9 +1,11 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'web_scraping_service.dart';
 
-/// Servicio para gestionar direcciones de documentación
+/// Servicio profesional para gestionar documentación con scraping
 class DocumentationService {
   static const String _documentationKey = 'documentation_sources';
+  static const String _contentKey = 'documentation_content';
   
   /// Obtiene todas las fuentes de documentación almacenadas
   static Future<List<DocumentationSource>> getDocumentationSources() async {
@@ -23,24 +25,151 @@ class DocumentationService {
     }
   }
   
-  /// Guarda una nueva fuente de documentación
+  /// Guarda una nueva fuente de documentación Y extrae su contenido
   static Future<bool> addDocumentationSource(DocumentationSource source) async {
-    final sources = await getDocumentationSources();
-    
-    // Verificar que no exista ya
-    if (sources.any((s) => s.url == source.url)) {
-      return false; // Ya existe
+    try {
+      final sources = await getDocumentationSources();
+      
+      // Verificar que no exista ya
+      if (sources.any((s) => s.url == source.url)) {
+        return false; // Ya existe
+      }
+      
+      // Extraer contenido de la URL
+      print('📥 Extrayendo contenido de documentación...');
+      final content = await WebScrapingService.extractContent(source.url);
+      
+      if (content != null) {
+        // Guardar contenido extraído
+        await _saveDocumentationContent(source.url, content);
+        print('✅ Contenido extraído y guardado: ${content.wordCount} palabras');
+      } else {
+        print('⚠️ No se pudo extraer contenido, pero se guardará la URL');
+      }
+      
+      sources.add(source);
+      return await _saveDocumentationSources(sources);
+    } catch (e) {
+      print('❌ Error en addDocumentationSource: $e');
+      return false;
     }
-    
-    sources.add(source);
-    return await _saveDocumentationSources(sources);
   }
   
-  /// Elimina una fuente de documentación
+  /// Guarda el contenido extraído de una documentación
+  static Future<bool> _saveDocumentationContent(
+    String url,
+    DocumentationContent content,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '$_contentKey\_${content.contentHash}';
+      final jsonString = jsonEncode(content.toJson());
+      return await prefs.setString(key, jsonString);
+    } catch (e) {
+      print('❌ Error al guardar contenido: $e');
+      return false;
+    }
+  }
+  
+  /// Obtiene el contenido extraído de una URL
+  static Future<DocumentationContent?> getDocumentationContent(String url) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Buscar por URL
+      final keys = prefs.getKeys();
+      for (final key in keys) {
+        if (key.startsWith(_contentKey)) {
+          final jsonString = prefs.getString(key);
+          if (jsonString != null) {
+            final content = DocumentationContent.fromJson(jsonDecode(jsonString));
+            if (content.url == url) {
+              return content;
+            }
+          }
+        }
+      }
+      
+      return null;
+    } catch (e) {
+      print('❌ Error al obtener contenido: $e');
+      return null;
+    }
+  }
+  
+  /// Obtiene el contenido formateado de todas las documentaciones activas
+  static Future<String> getActiveDocumentationContent() async {
+    try {
+      final sources = await getDocumentationSources();
+      final activeSources = sources.where((s) => s.isActive).toList();
+      
+      if (activeSources.isEmpty) {
+        return '';
+      }
+      
+      final buffer = StringBuffer();
+      buffer.writeln('=== DOCUMENTACIÓN DE REFERENCIA ===\n');
+      
+      for (final source in activeSources) {
+        final content = await getDocumentationContent(source.url);
+        
+        if (content != null) {
+          buffer.writeln('📚 ${content.title}');
+          buffer.writeln('🔗 ${content.url}');
+          if (content.description != null) {
+            buffer.writeln('📝 ${content.description}');
+          }
+          buffer.writeln();
+          buffer.writeln(content.content);
+          buffer.writeln('\n---\n');
+        }
+      }
+      
+      return buffer.toString();
+    } catch (e) {
+      print('❌ Error al obtener contenido activo: $e');
+      return '';
+    }
+  }
+  
+  /// Refresca el contenido de una documentación (re-scraping)
+  static Future<bool> refreshDocumentation(String url) async {
+    try {
+      print('🔄 Refrescando contenido de: $url');
+      final content = await WebScrapingService.extractContent(url);
+      
+      if (content != null) {
+        await _saveDocumentationContent(url, content);
+        print('✅ Contenido refrescado correctamente');
+        return true;
+      }
+      
+      return false;
+    } catch (e) {
+      print('❌ Error al refrescar documentación: $e');
+      return false;
+    }
+  }
+  
+  /// Elimina una fuente de documentación y su contenido
   static Future<bool> removeDocumentationSource(String url) async {
-    final sources = await getDocumentationSources();
-    sources.removeWhere((s) => s.url == url);
-    return await _saveDocumentationSources(sources);
+    try {
+      // Remover de la lista
+      final sources = await getDocumentationSources();
+      sources.removeWhere((s) => s.url == url);
+      
+      // Remover contenido almacenado
+      final content = await getDocumentationContent(url);
+      if (content != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('$_contentKey\_${content.contentHash}');
+      }
+      
+      return await _saveDocumentationSources(sources);
+    } catch (e) {
+      print('❌ Error al remover documentación: $e');
+      return false;
+    }
   }
   
   /// Actualiza una fuente de documentación
@@ -62,9 +191,16 @@ class DocumentationService {
       final prefs = await SharedPreferences.getInstance();
       final jsonList = sources.map((s) => s.toJson()).toList();
       final jsonString = jsonEncode(jsonList);
-      return await prefs.setString(_documentationKey, jsonString);
-    } catch (e) {
+      final success = await prefs.setString(_documentationKey, jsonString);
+      
+      if (success) {
+        print('✅ Documentación guardada correctamente: ${sources.length} fuentes');
+      }
+      
+      return success;
+    } catch (e, stackTrace) {
       print('❌ Error al guardar documentación: $e');
+      print('Stack trace: $stackTrace');
       return false;
     }
   }

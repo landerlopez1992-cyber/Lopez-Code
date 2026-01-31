@@ -52,61 +52,34 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
   }
 
   Future<void> _addDocumentation() async {
+    if (!mounted) return;
+    
     try {
-      final result = await showDialog<Map<String, String>>(
+      // Mostrar diálogo - ahora el diálogo guarda directamente
+      final saved = await showDialog<bool>(
         context: context,
+        barrierDismissible: true,
         builder: (context) => _AddDocumentationDialog(),
       );
 
-      if (result != null && mounted) {
-        final source = DocumentationSource(
-          name: result['name']!,
-          url: result['url']!,
-          indexedAt: DateTime.now(),
-          description: result['description'],
-        );
-
-        // Mostrar loading
+      // Si saved es true, significa que se guardó exitosamente
+      if (saved == true && mounted) {
+        // Recargar documentación
+        await _loadDocumentation();
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Guardando documentación...'),
-              duration: Duration(seconds: 1),
+              content: Text('✅ Documentación agregada correctamente'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
             ),
           );
         }
-
-        final success = await DocumentationService.addDocumentationSource(source);
-        
-        if (!mounted) return;
-        
-        if (success) {
-          // Recargar documentación de forma segura
-          await _loadDocumentation();
-          
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('✅ Documentación agregada'),
-                backgroundColor: Colors.green,
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('⚠️ Esta documentación ya existe'),
-                backgroundColor: Colors.orange,
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        }
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
       print('❌ Error al agregar documentación: $e');
+      print('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -143,7 +116,7 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 8,
             offset: const Offset(0, 4),
           ),
@@ -309,7 +282,7 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
                                 vertical: 10,
                               ),
                               color: isSelected
-                                  ? CursorTheme.primary.withOpacity(0.1)
+                                  ? CursorTheme.primary.withValues(alpha: 0.1)
                                   : Colors.transparent,
                               child: Row(
                                 children: [
@@ -386,6 +359,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
   final _nameController = TextEditingController();
   final _urlController = TextEditingController();
   final _descriptionController = TextEditingController();
+  bool _isSaving = false;
 
   @override
   void dispose() {
@@ -393,6 +367,95 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
     _urlController.dispose();
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleSave() async {
+    if (_isSaving) return;
+    
+    final name = _nameController.text.trim();
+    final url = _urlController.text.trim();
+    final description = _descriptionController.text.trim();
+    
+    // Validación
+    if (name.isEmpty || url.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ Nombre y URL son requeridos'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+    
+    // Validar URL básica
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ La URL debe comenzar con http:// o https://'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+    
+    // Iniciar guardado
+    if (!mounted) return;
+    setState(() {
+      _isSaving = true;
+    });
+    
+    try {
+      final source = DocumentationSource(
+        name: name,
+        url: url,
+        indexedAt: DateTime.now(),
+        description: description.isEmpty ? null : description,
+      );
+      
+      // Guardar directamente
+      final success = await DocumentationService.addDocumentationSource(source);
+      
+      if (!mounted) return;
+      
+      if (success) {
+        // Cerrar diálogo solo si el guardado fue exitoso
+        Navigator.of(context).pop(true);
+      } else {
+        // Mostrar error y permitir reintentar
+        setState(() {
+          _isSaving = false;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Esta documentación ya existe'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ Error al guardar en diálogo: $e');
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al guardar: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -408,6 +471,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
         children: [
           TextField(
             controller: _nameController,
+            enabled: !_isSaving,
             style: TextStyle(color: CursorTheme.textPrimary),
             decoration: InputDecoration(
               labelText: 'Nombre',
@@ -420,6 +484,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
           const SizedBox(height: 12),
           TextField(
             controller: _urlController,
+            enabled: !_isSaving,
             style: TextStyle(color: CursorTheme.textPrimary),
             decoration: InputDecoration(
               labelText: 'URL',
@@ -432,6 +497,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
           const SizedBox(height: 12),
           TextField(
             controller: _descriptionController,
+            enabled: !_isSaving,
             style: TextStyle(color: CursorTheme.textPrimary),
             decoration: InputDecoration(
               labelText: 'Descripción (opcional)',
@@ -442,49 +508,30 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
             ),
             maxLines: 2,
           ),
+          if (_isSaving) ...[
+            const SizedBox(height: 16),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 8),
+            Text(
+              'Guardando...',
+              style: TextStyle(
+                color: CursorTheme.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ],
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(false),
           child: Text(
             'Cancelar',
             style: TextStyle(color: CursorTheme.textSecondary),
           ),
         ),
         TextButton(
-          onPressed: () {
-            final name = _nameController.text.trim();
-            final url = _urlController.text.trim();
-            
-            if (name.isNotEmpty && url.isNotEmpty) {
-              // Validar URL básica
-              if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('⚠️ La URL debe comenzar con http:// o https://'),
-                    backgroundColor: Colors.orange,
-                  ),
-                );
-                return;
-              }
-              
-              Navigator.of(context).pop({
-                'name': name,
-                'url': url,
-                'description': _descriptionController.text.trim().isEmpty
-                    ? null
-                    : _descriptionController.text.trim(),
-              });
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('⚠️ Nombre y URL son requeridos'),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            }
-          },
+          onPressed: _isSaving ? null : _handleSave,
           child: Text(
             'Agregar',
             style: TextStyle(color: CursorTheme.primary),
