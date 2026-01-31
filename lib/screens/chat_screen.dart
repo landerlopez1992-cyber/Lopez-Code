@@ -2839,19 +2839,6 @@ class _ChatScreenState extends State<ChatScreen> {
           Expanded(
             child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
           ),
-          if (_selectedImages.isNotEmpty || _selectedFilePath != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: CursorTheme.surface,
-              child: Row(
-                children: [
-                  if (_selectedImages.isNotEmpty)
-                    Text('${_selectedImages.length} imagen(es)', style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                  if (_selectedFilePath != null)
-                    Text(_selectedFilePath!.split('/').last, style: const TextStyle(color: CursorTheme.textSecondary, fontSize: 12)),
-                ],
-              ),
-            ),
           CursorChatInput(
             controller: _messageController,
             onSend: _sendMessage,
@@ -2860,6 +2847,20 @@ class _ChatScreenState extends State<ChatScreen> {
             isLoading: _isLoading,
             onStop: _stopRequest,
             placeholder: 'Plan, @ for context, / for commands',
+            selectedImages: _selectedImages,
+            selectedFilePath: _selectedFilePath,
+            onRemoveImage: (index) {
+              setState(() {
+                if (index >= 0 && index < _selectedImages.length) {
+                  _selectedImages.removeAt(index);
+                }
+              });
+            },
+            onRemoveFile: () {
+              setState(() {
+                _selectedFilePath = null;
+              });
+            },
             onModelChanged: (model) async {
               print('🔄 ChatScreen.onModelChanged recibido: $model');
               // Actualizar el modelo en el servicio OpenAI

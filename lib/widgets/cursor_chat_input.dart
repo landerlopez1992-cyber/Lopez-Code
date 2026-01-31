@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'cursor_theme.dart';
 import 'model_selector.dart';
@@ -14,6 +15,10 @@ class CursorChatInput extends StatefulWidget {
   final String? placeholder;
   final Function(String)? onModelChanged;
   final Function(String)? onDocumentationSelected;
+  final List<String>? selectedImages; // Imágenes seleccionadas para previsualizar
+  final String? selectedFilePath; // Archivo seleccionado para previsualizar
+  final Function(int)? onRemoveImage; // Callback para remover imagen (recibe índice)
+  final VoidCallback? onRemoveFile; // Callback para remover archivo
 
   const CursorChatInput({
     super.key,
@@ -26,6 +31,10 @@ class CursorChatInput extends StatefulWidget {
     this.placeholder,
     this.onModelChanged,
     this.onDocumentationSelected,
+    this.selectedImages,
+    this.selectedFilePath,
+    this.onRemoveImage,
+    this.onRemoveFile,
   });
 
   @override
@@ -239,6 +248,112 @@ class _CursorChatInputState extends State<CursorChatInput> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Previsualización de imágenes/archivos (si hay)
+            if (widget.selectedImages != null && widget.selectedImages!.isNotEmpty) ...[
+              Container(
+                height: 100,
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: widget.selectedImages!.length,
+                  itemBuilder: (context, index) {
+                    final imagePath = widget.selectedImages![index];
+                    return Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      child: Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(imagePath),
+                              width: 100,
+                              height: 100,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          // Botón para remover
+                          Positioned(
+                            top: 4,
+                            right: 4,
+                            child: Material(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(12),
+                              child: InkWell(
+                                onTap: widget.onRemoveImage != null
+                                    ? () => widget.onRemoveImage!(index)
+                                    : null,
+                                borderRadius: BorderRadius.circular(12),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.close,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+            
+            // Previsualización de archivo (si hay)
+            if (widget.selectedFilePath != null) ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: CursorTheme.background.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: CursorTheme.border.withOpacity(0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.insert_drive_file,
+                      size: 20,
+                      color: CursorTheme.textSecondary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        widget.selectedFilePath!.split('/').last,
+                        style: TextStyle(
+                          color: CursorTheme.textPrimary,
+                          fontSize: 12,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (widget.onRemoveFile != null)
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: widget.onRemoveFile,
+                          borderRadius: BorderRadius.circular(16),
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(
+                              Icons.close,
+                              size: 16,
+                              color: CursorTheme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            
             // Campo de texto ARRIBA (como Cursor)
             Container(
               constraints: const BoxConstraints(maxHeight: 150),
@@ -280,175 +395,188 @@ class _CursorChatInputState extends State<CursorChatInput> {
             
             const SizedBox(height: 8),
             
-            // Controles ABAJO (como Cursor)
+            // Controles ABAJO (como Cursor) - Row flexible para evitar overflow
             Row(
               children: [
-                // Selector de modelo (estilo Cursor - pill button)
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () {
-                      _closeOverlay();
-                      _showModelSelector();
-                    },
-                    borderRadius: BorderRadius.circular(16),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: CursorTheme.background.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: CursorTheme.border.withOpacity(0.3),
-                          width: 1,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.psychology_outlined,
-                            size: 14,
-                            color: CursorTheme.textSecondary.withOpacity(0.8),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _getModelDisplayName(_currentModel),
-                            style: TextStyle(
-                              color: CursorTheme.textSecondary.withOpacity(0.9),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
+                // Controles izquierda (flexibles)
+                Flexible(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Selector de modelo (estilo Cursor - pill button)
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () {
+                              _closeOverlay();
+                              _showModelSelector();
+                            },
+                            borderRadius: BorderRadius.circular(16),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: CursorTheme.background.withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: CursorTheme.border.withOpacity(0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.psychology_outlined,
+                                    size: 14,
+                                    color: CursorTheme.textSecondary.withOpacity(0.8),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _getModelDisplayName(_currentModel),
+                                    style: TextStyle(
+                                      color: CursorTheme.textSecondary.withOpacity(0.9),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.keyboard_arrow_down,
+                                    size: 14,
+                                    color: CursorTheme.textSecondary.withOpacity(0.6),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
+                        ),
+                        
+                        const SizedBox(width: 8),
+                        
+                        // Toggle Auto (estilo Cursor - pill button)
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () async {
+                              setState(() {
+                                _autoMode = !_autoMode;
+                              });
+                              await SettingsService.saveAutoMode(_autoMode);
+                            },
+                            borderRadius: BorderRadius.circular(16),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: _autoMode 
+                                    ? CursorTheme.primary.withOpacity(0.2)
+                                    : CursorTheme.background.withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: _autoMode
+                                      ? CursorTheme.primary.withOpacity(0.5)
+                                      : CursorTheme.border.withOpacity(0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Auto',
+                                    style: TextStyle(
+                                      color: _autoMode
+                                          ? CursorTheme.primary
+                                          : CursorTheme.textSecondary.withOpacity(0.9),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.keyboard_arrow_down,
+                                    size: 14,
+                                    color: _autoMode
+                                        ? CursorTheme.primary.withOpacity(0.8)
+                                        : CursorTheme.textSecondary.withOpacity(0.6),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        
+                        const SizedBox(width: 8),
+                        
+                        // Botón @ para documentación
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () {
+                              _closeOverlay();
+                              _showDocumentationSelector();
+                            },
+                            borderRadius: BorderRadius.circular(20),
+                            child: Padding(
+                              padding: const EdgeInsets.all(6),
+                              child: Text(
+                                '@',
+                                style: TextStyle(
+                                  color: CursorTheme.textSecondary.withOpacity(0.8),
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        
+                        // Botones de adjuntar
+                        if (widget.onAttachImage != null) ...[
                           const SizedBox(width: 4),
-                          Icon(
-                            Icons.keyboard_arrow_down,
-                            size: 14,
-                            color: CursorTheme.textSecondary.withOpacity(0.6),
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: widget.onAttachImage,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Icon(
+                                  Icons.image_outlined,
+                                  size: 18,
+                                  color: CursorTheme.textSecondary.withOpacity(0.8),
+                                ),
+                              ),
+                            ),
                           ),
                         ],
-                      ),
+                        if (widget.onAttachFile != null) ...[
+                          const SizedBox(width: 4),
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: widget.onAttachFile,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Icon(
+                                  Icons.insert_drive_file_outlined,
+                                  size: 18,
+                                  color: CursorTheme.textSecondary.withOpacity(0.8),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ),
                 
                 const SizedBox(width: 8),
                 
-                // Toggle Auto (estilo Cursor - pill button)
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () async {
-                      setState(() {
-                        _autoMode = !_autoMode;
-                      });
-                      await SettingsService.saveAutoMode(_autoMode);
-                    },
-                    borderRadius: BorderRadius.circular(16),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _autoMode 
-                            ? CursorTheme.primary.withOpacity(0.2)
-                            : CursorTheme.background.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: _autoMode
-                              ? CursorTheme.primary.withOpacity(0.5)
-                              : CursorTheme.border.withOpacity(0.3),
-                          width: 1,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            'Auto',
-                            style: TextStyle(
-                              color: _autoMode
-                                  ? CursorTheme.primary
-                                  : CursorTheme.textSecondary.withOpacity(0.9),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.keyboard_arrow_down,
-                            size: 14,
-                            color: _autoMode
-                                ? CursorTheme.primary.withOpacity(0.8)
-                                : CursorTheme.textSecondary.withOpacity(0.6),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                
-                const Spacer(),
-                
-                // Botón @ para documentación
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () {
-                      _closeOverlay();
-                      _showDocumentationSelector();
-                    },
-                    borderRadius: BorderRadius.circular(20),
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Text(
-                        '@',
-                        style: TextStyle(
-                          color: CursorTheme.textSecondary.withOpacity(0.8),
-                          fontSize: 18,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                
-                // Botones de adjuntar
-                if (widget.onAttachImage != null || widget.onAttachFile != null) ...[
-                  if (widget.onAttachImage != null)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: widget.onAttachImage,
-                        borderRadius: BorderRadius.circular(20),
-                        child: Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Icon(
-                            Icons.image_outlined,
-                            size: 18,
-                            color: CursorTheme.textSecondary.withOpacity(0.8),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (widget.onAttachFile != null)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: widget.onAttachFile,
-                        borderRadius: BorderRadius.circular(20),
-                        child: Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Icon(
-                            Icons.insert_drive_file_outlined,
-                            size: 18,
-                            color: CursorTheme.textSecondary.withOpacity(0.8),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-                
-                const SizedBox(width: 8),
-                
-                // Botón enviar/stop (estilo Cursor)
+                // Botón enviar/stop (estilo Cursor) - siempre visible a la derecha
                 Material(
                   color: widget.isLoading 
                       ? Colors.red.withOpacity(0.9)
