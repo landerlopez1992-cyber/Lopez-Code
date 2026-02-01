@@ -24,7 +24,24 @@ class ExplorerToolbar extends StatelessWidget {
         'selectedIcon': Icons.search,
         'action': 'search',
       },
-      // ✅ ELIMINADOS: Git, Supabase, Firebase - Solo mostraban "próximamente disponible"
+      {
+        'icon': Icons.source_outlined,
+        'tooltip': 'Git (Commit & Push)',
+        'selectedIcon': Icons.source,
+        'action': 'git',
+      },
+      {
+        'icon': Icons.cloud_outlined,
+        'tooltip': 'Supabase',
+        'selectedIcon': Icons.cloud,
+        'action': 'supabase',
+      },
+      {
+        'icon': Icons.local_fire_department_outlined,
+        'tooltip': 'Firebase',
+        'selectedIcon': Icons.local_fire_department,
+        'action': 'firebase',
+      },
     ];
 
     return Container(

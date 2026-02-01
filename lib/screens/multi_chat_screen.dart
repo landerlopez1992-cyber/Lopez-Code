@@ -4,6 +4,7 @@ import '../models/agent_chat.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/explorer_toolbar.dart';
 import '../widgets/project_explorer.dart';
+import 'git_settings_screen.dart';
 import '../widgets/debug_console_panel.dart';
 import '../widgets/phone_emulator.dart';
 import '../widgets/code_editor_panel.dart';
@@ -713,7 +714,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       case 'search':
         _showFileSearchDialog();
         break;
-      // ✅ ELIMINADOS: git, supabase, firebase - Solo mostraban "próximamente disponible"
+      case 'git':
+        _showGitDialog();
+        break;
+      case 'supabase':
+        _showSupabaseDialog();
+        break;
+      case 'firebase':
+        _showFirebaseDialog();
+        break;
     }
   }
 
@@ -758,8 +767,103 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  // ✅ ELIMINADOS: Métodos de diálogos no funcionales
-  // _showGitDialog, _showSupabaseDialog, _showFirebaseDialog
+  /// Muestra la pantalla de configuración de Git
+  void _showGitDialog() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const GitSettingsScreen(),
+      ),
+    );
+  }
+
+  /// Muestra información sobre Supabase
+  void _showSupabaseDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: CursorTheme.surface,
+        title: Row(
+          children: [
+            Icon(Icons.cloud, color: CursorTheme.primary, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Supabase',
+              style: TextStyle(
+                color: CursorTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Supabase es una plataforma de backend como servicio (BaaS) que proporciona:\n\n'
+          '• Base de datos PostgreSQL\n'
+          '• Autenticación\n'
+          '• Almacenamiento de archivos\n'
+          '• Funciones serverless\n\n'
+          'Para conectar tu proyecto con Supabase, configura las credenciales en tu código.',
+          style: TextStyle(color: CursorTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Cerrar',
+              style: TextStyle(color: CursorTheme.textPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Muestra información sobre Firebase
+  void _showFirebaseDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: CursorTheme.surface,
+        title: Row(
+          children: [
+            Icon(
+              Icons.local_fire_department,
+              color: CursorTheme.primary,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Firebase',
+              style: TextStyle(
+                color: CursorTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Firebase es una plataforma de Google que proporciona:\n\n'
+          '• Base de datos en tiempo real (Firestore)\n'
+          '• Autenticación\n'
+          '• Almacenamiento de archivos\n'
+          '• Hosting\n'
+          '• Cloud Functions\n\n'
+          'Para conectar tu proyecto con Firebase, configura las credenciales en tu código.',
+          style: TextStyle(color: CursorTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Cerrar',
+              style: TextStyle(color: CursorTheme.textPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Obtiene el estado del ChatScreen activo
   dynamic _getActiveChatScreenState() {
