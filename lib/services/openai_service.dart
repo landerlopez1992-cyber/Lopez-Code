@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'web_navigation_service.dart';
 import 'run_debug_service.dart';
@@ -62,10 +63,28 @@ class OpenAIService {
       final List<Map<String, dynamic>> messages = [];
 
       // Agregar system prompt si existe (reglas y comportamiento)
-      if (systemPrompt != null && systemPrompt.isNotEmpty) {
+      // Si hay imágenes, mejorar el prompt para análisis de imágenes
+      String finalSystemPrompt = systemPrompt ?? '';
+      if (imagePaths != null && imagePaths.isNotEmpty) {
+        finalSystemPrompt += '''
+        
+IMPORTANTE: El usuario ha enviado ${imagePaths.length} imagen(es). 
+DEBES analizar cada imagen en detalle y describir:
+- Lo que ves en la imagen
+- Elementos, objetos, texto, personas, lugares
+- Colores, formas, composición
+- Cualquier texto visible
+- Contexto y significado
+- Si es código, transcribe el código completo
+- Si es un diseño, describe el diseño detalladamente
+
+Responde en español y sé detallado en tu análisis.''';
+      }
+      
+      if (finalSystemPrompt.isNotEmpty) {
         messages.add({
           'role': 'system',
-          'content': systemPrompt,
+          'content': finalSystemPrompt,
         });
       }
 
@@ -82,17 +101,32 @@ class OpenAIService {
         }
       ];
 
-      // Agregar imágenes si existen
+      // Agregar imágenes si existen (con optimización)
       if (imagePaths != null && imagePaths.isNotEmpty) {
+        // Verificar que el modelo soporte visión
+        if (!_supportsVision(model)) {
+          print('⚠️ El modelo $model no soporta análisis de imágenes. Usando gpt-4o automáticamente.');
+          model = 'gpt-4o'; // Cambiar a modelo con visión
+        }
+        
+        print('🖼️ Procesando ${imagePaths.length} imagen(es)...');
+        
         for (var imagePath in imagePaths) {
           final file = File(imagePath);
           if (await file.exists()) {
-            final bytes = await file.readAsBytes();
-            final base64Image = base64Encode(bytes);
+            // Optimizar imagen antes de enviar
+            final optimizedBytes = await _optimizeImage(file);
+            final base64Image = base64Encode(optimizedBytes);
+            
+            // Calcular tokens aproximados de la imagen
+            final imageTokens = _estimateImageTokens(optimizedBytes.length);
+            print('📊 Imagen optimizada: ${(optimizedBytes.length / 1024).toStringAsFixed(1)}KB, ~$imageTokens tokens');
+            
             content.add({
               'type': 'image_url',
               'image_url': {
                 'url': 'data:image/jpeg;base64,$base64Image',
+                'detail': 'high', // Alta resolución para mejor análisis
               },
             });
           }
@@ -283,6 +317,24 @@ class OpenAIService {
       print('🔄 Enviando solicitud a OpenAI...');
       print('📊 Modelo: $model');
       print('💬 Mensajes: ${messages.length}');
+      
+      // Calcular tokens aproximados
+      int estimatedTokens = 0;
+      for (var msg in messages) {
+        if (msg['content'] is String) {
+          estimatedTokens += (msg['content'] as String).length ~/ 4;
+        } else if (msg['content'] is List) {
+          for (var item in msg['content'] as List) {
+            if (item['type'] == 'text') {
+              estimatedTokens += (item['text'] as String).length ~/ 4;
+            } else if (item['type'] == 'image_url') {
+              // Tokens de imagen ya calculados arriba
+              estimatedTokens += 170; // Aproximación para imagen
+            }
+          }
+        }
+      }
+      print('📊 Tokens estimados: ~$estimatedTokens');
 
       // Usar cliente HTTP reutilizable con timeout optimizado
       final response = await _httpClient
@@ -1093,5 +1145,60 @@ ${currentContent != null ? 'Contenido actual del archivo:\n```\n$currentContent\
     } catch (e) {
       throw Exception('Error al generar código: $e');
     }
+  }
+  
+  /// Verifica si un modelo soporta visión (análisis de imágenes)
+  bool _supportsVision(String modelName) {
+    final visionModels = [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'gpt-4-turbo',
+      'gpt-4-vision-preview',
+      'gpt-4',
+    ];
+    
+    return visionModels.any((m) => modelName.toLowerCase().contains(m.toLowerCase()));
+  }
+  
+  /// Optimiza una imagen antes de enviarla a OpenAI
+  /// Por ahora solo verifica tamaño y advierte si es muy grande
+  /// TODO: Implementar redimensionamiento con paquete de imágenes
+  Future<Uint8List> _optimizeImage(File imageFile) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final sizeKB = bytes.length / 1024;
+      
+      // Advertir si la imagen es muy grande (>5MB)
+      if (sizeKB > 5120) {
+        print('⚠️ Imagen muy grande: ${sizeKB.toStringAsFixed(1)}KB');
+        print('💡 Considera comprimir la imagen antes de enviarla para ahorrar tokens');
+      } else {
+        print('✅ Tamaño de imagen: ${sizeKB.toStringAsFixed(1)}KB');
+      }
+      
+      // Por ahora devolver imagen original
+      // TODO: Implementar redimensionamiento cuando se agregue paquete de imágenes
+      return bytes;
+    } catch (e) {
+      print('❌ Error procesando imagen: $e');
+      return await imageFile.readAsBytes();
+    }
+  }
+  
+  /// Estima tokens de una imagen según documentación de OpenAI
+  /// Fórmula: base_tokens + (tiles * 170) donde tiles = (width/512) * (height/512)
+  int _estimateImageTokens(int imageSizeBytes) {
+    // Estimación aproximada basada en tamaño
+    // Una imagen de 512x512 ≈ 85 tokens
+    // Una imagen de 1024x1024 ≈ 170 tokens (detail: high)
+    
+    // Estimación conservadora: ~1 token por 100 bytes de base64
+    // Base64 es ~33% más grande que binario
+    final base64Size = imageSizeBytes * 1.33;
+    final estimatedTokens = (base64Size / 100).ceil();
+    
+    // Mínimo 85 tokens (imagen pequeña)
+    // Máximo razonable: 2000 tokens (imagen muy grande)
+    return estimatedTokens.clamp(85, 2000);
   }
 }
