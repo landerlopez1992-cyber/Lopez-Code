@@ -97,6 +97,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _lastProjectPath;
   Map<String, dynamic>? _lastUserMessage; // Guardar último mensaje para reenviar después de confirmación
   List<String> _selectedDocumentation = []; // URLs de documentación seleccionadas
+  bool _isSending = false; // ✅ FIX: Protección contra envíos duplicados
   
   // Run and Debug
   String _selectedPlatform = 'macos';
@@ -244,7 +245,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasText = _messageController.text.trim().isNotEmpty;
     final hasImages = _selectedImages.isNotEmpty;
     
-    if ((!hasText && !hasImages) || _isLoading) return;
+    // ✅ FIX: Protección contra envíos duplicados y carga infinita
+    if ((!hasText && !hasImages) || _isLoading || _isSending) {
+      print('⚠️ Intento de envío duplicado bloqueado: _isLoading=$_isLoading, _isSending=$_isSending');
+      return;
+    }
+    
+    _isSending = true; // ✅ Marcar como enviando
     
     if (_openAIService == null) {
         try {
@@ -537,6 +544,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _currentFileOperation = null;
           _currentFilePath = null;
           _isErrorReportDraft = false;
+          _isSending = false; // ✅ FIX: Limpiar flag de envío
         });
         await _saveConversation();
         _scrollToBottom();
@@ -569,6 +577,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _currentFileOperation = null;
           _currentFilePath = null;
           _isErrorReportDraft = false;
+          _isSending = false; // ✅ FIX: Limpiar flag de envío
         });
         
         // ✅ FIX: Mensajes de error más amigables
@@ -579,6 +588,8 @@ class _ChatScreenState extends State<ChatScreen> {
           errorMessage = '⏱️ La solicitud tardó demasiado. Intenta con un mensaje más corto.';
         } else if (e.toString().contains('network') || e.toString().contains('Network')) {
           errorMessage = '🌐 Error de conexión. Verifica tu internet e intenta de nuevo.';
+        } else if (e.toString().contains('cancel') || e.toString().contains('Cancel')) {
+          errorMessage = '⏸️ Solicitud cancelada por el usuario.';
         } else {
           errorMessage = '❌ Error: ${e.toString().length > 100 ? e.toString().substring(0, 100) + "..." : e.toString()}';
         }
@@ -590,6 +601,11 @@ class _ChatScreenState extends State<ChatScreen> {
             duration: const Duration(seconds: 5),
           ),
         );
+      }
+    } finally {
+      // ✅ FIX: Asegurar que siempre se limpie el flag de envío
+      if (mounted) {
+        _isSending = false;
       }
     }
   }
@@ -746,9 +762,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _stopRequest() {
     print('🛑 Deteniendo petición...');
+    
+    // ✅ FIX: Cancelar petición HTTP
     _openAIService?.cancelRequest();
     
-    // Detener proceso en ejecución si existe
+    // ✅ FIX: Detener proceso en ejecución si existe
     if (_runningProcess != null) {
       print('🛑 Deteniendo proceso en ejecución...');
       try {
@@ -759,24 +777,34 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     
-    setState(() {
-      _isLoading = false;
-      _loadingStatus = '';
-      _currentFileOperation = null;
-      _currentFilePath = null;
-      _isRunning = false;
-      _isDebugging = false;
-    });
+    // ✅ FIX: Limpiar TODO el estado para evitar cuelgues
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _loadingStatus = '';
+        _currentFileOperation = null;
+        _currentFilePath = null;
+        _isRunning = false;
+        _isDebugging = false;
+        _isSending = false; // ✅ FIX: Limpiar flag de envío
+        _isErrorReportDraft = false;
+      });
+    }
     
     _debugService.setRunning(false);
     _debugService.setCompilationProgress(0.0, 'Detenido');
     
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Operación cancelada'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Operación cancelada'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+    
+    print('✅ Estado limpiado correctamente');
   }
 
   void _scrollToBottom() {

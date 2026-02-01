@@ -23,9 +23,22 @@ class OpenAIService {
   
   /// Cancela la petición actual
   void cancelRequest() {
+    print('🛑 OpenAIService: Cancelando petición...');
     _isCancelled = true;
-    _httpClient.close();
-    _httpClient = http.Client(); // Reiniciar cliente
+    try {
+      _httpClient.close();
+    } catch (e) {
+      print('⚠️ Error al cerrar cliente HTTP: $e');
+    }
+    // ✅ FIX: Reiniciar cliente solo si está cerrado
+    try {
+      _httpClient = http.Client();
+    } catch (e) {
+      print('⚠️ Error al reiniciar cliente HTTP: $e');
+      // Si falla, intentar crear uno nuevo
+      _httpClient = http.Client();
+    }
+    print('✅ OpenAIService: Petición cancelada');
   }
 
   // Método para cambiar el modelo
