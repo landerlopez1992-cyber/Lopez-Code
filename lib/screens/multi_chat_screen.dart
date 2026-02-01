@@ -36,8 +36,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   double _emulatorPanelWidth =
       550.0; // Ancho del panel del emulador - más grande para mostrar todos los controles
   double _chatPanelWidth = 400.0; // Ancho inicial del panel de chat
-  int _selectedToolbarIndex =
-      0; // Índice del toolbar seleccionado (0 = explorer, 1 = search)
+  int _selectedToolbarIndex = 0; // Índice del toolbar seleccionado (solo búsqueda ahora)
+  bool _isSearchMode = false; // Modo búsqueda activo
   bool _emulatorVisible = true; // Emulador visible por defecto
   double _emulatorScale =
       1.0; // Escala del emulador fija a 100% para mantener consistencia
@@ -100,7 +100,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           _inspectorMode = false;
         }
       });
-
+      
       // Si la URL se limpió (se detuvo el servidor), resetear el estado
       if (_debugService.appUrl == null || _debugService.appUrl!.isEmpty) {
         if (_lastOpenedUrl != null) {
@@ -110,11 +110,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           );
         }
       }
-
+      
       // NOTA: La apertura automática del navegador está desactivada.
       // La aplicación web se muestra dentro del WebView del emulador por defecto.
       // El usuario puede usar el botón flotante "Abrir en navegador" si prefiere verla en el navegador externo.
-
+      
       // Si quieres reactivar la apertura automática, descomenta el siguiente código:
       /*
       final isWebPlatform = _platformService.selectedPlatform.toLowerCase() == 'web';
@@ -178,7 +178,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     print(
       '📁 MultiChatScreen._loadProjectAndChats: Path obtenido: $projectPath',
     );
-
+    
     if (projectPath == null || projectPath.isEmpty) {
       print(
         '⚠️ MultiChatScreen._loadProjectAndChats: NO HAY PROYECTO SELECCIONADO',
@@ -187,12 +187,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       print('   1. El usuario no seleccionó un proyecto');
       print('   2. El proyecto no se guardó correctamente');
       print('   3. Hubo un error al guardar el proyecto');
-
+      
       setState(() {
         _currentProjectPath = null;
         _lastProjectPath = null;
       });
-
+      
       // Mostrar mensaje al usuario
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -205,11 +205,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           ),
         );
       }
-
+      
       // No crear chat si no hay proyecto
       return;
     }
-
+    
     // Verificar si es Flutter (solo para logging, no bloquea la carga)
     final isFlutter = await ProjectService.isFlutterProject(projectPath);
     if (isFlutter) {
@@ -224,12 +224,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       );
     }
     print('   Ruta: $projectPath');
-
+    
     setState(() {
       _currentProjectPath = projectPath;
       _lastProjectPath = projectPath;
     });
-
+    
     await _loadChatsForProject(projectPath);
   }
 
@@ -237,7 +237,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     print('📁 Cargando chats para proyecto: $projectPath');
     final allChats = await ChatStorageService.loadAgentChats();
     print('📁 Total de chats en almacenamiento: ${allChats.length}');
-
+    
     // Filtrar chats por proyecto - normalizar rutas para comparación
     final projectChats = allChats.where((chat) {
       final chatPath = chat.projectPath ?? '';
@@ -249,20 +249,20 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       }
       return matches;
     }).toList();
-
+    
     print('📁 Chats encontrados para este proyecto: ${projectChats.length}');
-
+    
     // Ordenar por última actualización (más reciente primero)
     projectChats.sort((a, b) {
       final aTime = a.lastUpdated ?? a.createdAt;
       final bTime = b.lastUpdated ?? b.createdAt;
       return bTime.compareTo(aTime);
     });
-
+    
     setState(() {
       _chats.clear();
       _chats.addAll(projectChats);
-
+      
       if (_chats.isEmpty) {
         print('📁 No hay chats para este proyecto, creando uno nuevo...');
         _createNewChat();
@@ -303,7 +303,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       _chats.add(newChat);
       _activeChatId = newChat.id;
     });
-
+    
     // Guardar el chat
     await ChatStorageService.saveAgentChat(newChat);
   }
@@ -418,74 +418,74 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               padding: EdgeInsets.zero,
               child: Align(
                 alignment: Alignment.topCenter,
-                child: AnimatedBuilder(
-                  animation: _debugService,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _emulatorScale,
+              child: AnimatedBuilder(
+                animation: _debugService,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: _emulatorScale,
                       alignment: Alignment.topCenter,
-                      child: PhoneEmulator(
-                        platform: _platformService.selectedPlatform,
-                        isRunning: _debugService.isRunning,
-                        appUrl: _debugService.appUrl,
-                        compilationProgress: _debugService.compilationProgress,
-                        compilationStatus: _debugService.compilationStatus,
-                        inspectorMode: _inspectorMode,
-                        onElementSelected: (element) {
+                    child: PhoneEmulator(
+                      platform: _platformService.selectedPlatform,
+                      isRunning: _debugService.isRunning,
+                      appUrl: _debugService.appUrl,
+                      compilationProgress: _debugService.compilationProgress,
+                      compilationStatus: _debugService.compilationStatus,
+                      inspectorMode: _inspectorMode,
+                      onElementSelected: (element) {
                           print(
                             '📥 Elemento seleccionado recibido: ${element.tagName}',
                           );
-                          setState(() {
-                            _selectedElement = element;
+                        setState(() {
+                          _selectedElement = element;
                             // NO cambiar automáticamente a Code - mantener Preview visible
                             // para que el usuario vea el elemento resaltado en el emulador
                             print('✅ Elemento guardado. Preview sigue activo para ver el resaltado.');
                           });
                           final elementInfo =
                               'Elemento seleccionado en el inspector:\n'
-                              'Tag: ${element.tagName}\n'
-                              '${element.id != null && element.id!.isNotEmpty ? "ID: ${element.id}\n" : ""}'
-                              '${element.className != null && element.className!.isNotEmpty ? "Clase: ${element.className}\n" : ""}'
-                              'Selector: ${element.fullSelector}\n'
-                              'Dimensiones: ${element.boundingRect?.width.toInt() ?? 0}x${element.boundingRect?.height.toInt() ?? 0}px';
+                            'Tag: ${element.tagName}\n'
+                            '${element.id != null && element.id!.isNotEmpty ? "ID: ${element.id}\n" : ""}'
+                            '${element.className != null && element.className!.isNotEmpty ? "Clase: ${element.className}\n" : ""}'
+                            'Selector: ${element.fullSelector}\n'
+                            'Dimensiones: ${element.boundingRect?.width.toInt() ?? 0}x${element.boundingRect?.height.toInt() ?? 0}px';
                           print(
                             '📤 Enviando elemento seleccionado al chat: $elementInfo',
                           );
-                          _sendMessageToActiveChat(elementInfo);
-                        },
+                        _sendMessageToActiveChat(elementInfo);
+                      },
                         child:
                             _debugService.isRunning &&
-                                _debugService.compilationProgress == 0.0 &&
-                                _debugService.appUrl == null
-                            ? Container(
-                                color: CursorTheme.surface,
-                                child: Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      CircularProgressIndicator(
-                                        color: CursorTheme.primary,
-                                      ),
-                                      const SizedBox(height: 16),
-                                      Text(
-                                        'Iniciando compilación...',
-                                        style: TextStyle(
-                                          color: CursorTheme.textPrimary,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ],
+                            _debugService.compilationProgress == 0.0 && 
+                            _debugService.appUrl == null
+                        ? Container(
+                            color: CursorTheme.surface,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  CircularProgressIndicator(
+                                    color: CursorTheme.primary,
                                   ),
-                                ),
-                              )
-                            : null,
-                      ),
-                    );
-                  },
-                ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'Iniciando compilación...',
+                                    style: TextStyle(
+                                      color: CursorTheme.textPrimary,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : null,
+                    ),
+                  );
+                },
               ),
             ),
           ),
+        ),
         ),
         // Debug Console Panel (si está visible) - pegado debajo del emulador sin espacio
         if (_debugService.isVisible && _debugPanelWidth > 0)
@@ -543,7 +543,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         },
       );
     }
-
+    
     // PRIORIDAD 2: Si hay un elemento seleccionado del inspector, mostrar su código HTML
     if (_selectedElement != null) {
       final code = _generateElementCode(_selectedElement!);
@@ -551,7 +551,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         '📝 _buildCodeTab: Generando código para elemento: ${_selectedElement!.tagName}',
       );
       print('📝 _buildCodeTab: Código generado (${code.length} caracteres)');
-
+      
       return CodeEditorPanel(
         key: ValueKey(
           'element_${_selectedElement!.tagName}_${_selectedElement!.hashCode}',
@@ -568,7 +568,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         },
       );
     }
-
+    
     // PRIORIDAD 3: Mensaje de ayuda
     return Center(
       child: SingleChildScrollView(
@@ -604,7 +604,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   /// Genera código HTML del elemento seleccionado
   String _generateElementCode(InspectorElement element) {
     final buffer = StringBuffer();
-
+    
     // Comentario con información del elemento
     buffer.writeln('<!-- Elemento seleccionado: ${element.tagName} -->');
     buffer.writeln('<!-- Selector: ${element.fullSelector} -->');
@@ -614,29 +614,29 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       );
     }
     buffer.writeln('');
-
+    
     // HTML del elemento
     buffer.writeln('<${element.tagName.toLowerCase()}');
-
+    
     // ID primero
     if (element.id != null && element.id!.isNotEmpty) {
       buffer.writeln('  id="${element.id}"');
     }
-
+    
     // Clases después
     if (element.className != null && element.className!.isNotEmpty) {
       buffer.writeln('  class="${element.className}"');
     }
-
+    
     // Otros atributos
     element.attributes.forEach((key, value) {
       if (key != 'id' && key != 'class') {
         buffer.writeln('  $key="$value"');
       }
     });
-
+    
     buffer.writeln('>');
-
+    
     // Contenido de texto (si existe)
     if (element.textContent != null && element.textContent!.isNotEmpty) {
       final text = element.textContent!.trim();
@@ -646,15 +646,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         buffer.writeln('  $text');
       }
     }
-
+    
     buffer.writeln('</${element.tagName.toLowerCase()}>');
-
+    
     // Estilos CSS calculados
     if (element.computedStyles.isNotEmpty) {
       buffer.writeln('');
       buffer.writeln('/* Estilos calculados */');
       buffer.writeln('${element.fullSelector} {');
-
+      
       // Agrupar estilos relacionados
       final styles = <String, String>{};
       element.computedStyles.forEach((key, value) {
@@ -665,7 +665,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           styles[key] = value;
         }
       });
-
+      
       // Ordenar estilos: layout primero, luego visuales
       final layoutProps = [
         'width',
@@ -679,14 +679,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         'bottom',
       ];
       final visualProps = ['color', 'background', 'border', 'font', 'text'];
-
+      
       for (final prop in layoutProps) {
         if (styles.containsKey(prop)) {
           buffer.writeln('  $prop: ${styles[prop]};');
           styles.remove(prop);
         }
       }
-
+      
       for (final prop in visualProps) {
         // Recopilar primero las claves que coinciden para evitar ConcurrentModificationError
         final matchingKeys = styles.keys.where((k) => k.contains(prop)).toList();
@@ -695,15 +695,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           styles.remove(key);
         }
       }
-
+      
       // Resto de estilos
       styles.forEach((key, value) {
         buffer.writeln('  $key: $value;');
       });
-
+      
       buffer.writeln('}');
     }
-
+    
     return buffer.toString();
   }
 
@@ -720,11 +720,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   /// Cambia entre modo explorador y búsqueda
   void _showFileSearchDialog() {
     setState(() {
-      // Cambiar entre explorer (0) y search (1)
-      _selectedToolbarIndex = _selectedToolbarIndex == 1 ? 0 : 1;
+      // Cambiar entre explorer y search
+      _isSearchMode = !_isSearchMode;
     });
   }
-
+  
   /// Maneja la visualización de código de un archivo
   void _handleFileViewCode(String path) async {
     print('📁 Ver código: $path');
@@ -850,7 +850,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     if (platformFromService.isNotEmpty) {
       return platformFromService;
     }
-
+    
     // Si no hay plataforma en el servicio, intentar obtenerla del ChatScreen activo
     final state = _getActiveChatScreenState();
     if (state != null) {
@@ -864,7 +864,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         // Ignorar errores
       }
     }
-
+    
     // Fallback a 'android' solo si no hay nada
     return 'android';
   }
@@ -872,7 +872,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   /// Envía un mensaje al chat activo
   void _sendMessageToActiveChat(String message) {
     if (_activeChatId == null || message.isEmpty) return;
-
+    
     try {
       // Obtener el GlobalKey del chat activo
       final chatKey = _chatScreenKeys[_activeChatId];
@@ -880,11 +880,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         print('⚠️ ChatScreen no está disponible aún');
         return;
       }
-
+      
       // Usar un microtask para evitar problemas de estado durante el build
       Future.microtask(() {
         if (!mounted) return;
-
+        
         try {
           // Enviar mensaje al ChatScreen de forma segura
           final state = chatKey.currentState;
@@ -919,7 +919,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     } else if (!_debugService.isVisible && _debugPanelWidth > 0) {
       _debugPanelWidth = 0.0;
     }
-
+    
     return Stack(
       clipBehavior: Clip
           .none, // Permitir que elementos flotantes se muestren fuera del Stack
@@ -927,85 +927,85 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         Scaffold(
           backgroundColor: CursorTheme.background,
           appBar: AppBar(
-            backgroundColor: CursorTheme.surface,
-            elevation: 0,
-            title: Text(
-              _currentProjectPath != null
-                  ? 'Proyecto: ${_currentProjectPath!.split('/').last}'
-                  : 'Lopez Code',
-              style: const TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            actions: [
-              // Toggle Emulador
-              AnimatedBuilder(
-                animation: _platformService,
-                builder: (context, child) {
-                  return IconButton(
-                    icon: Icon(
+        backgroundColor: CursorTheme.surface,
+        elevation: 0,
+        title: Text(
+          _currentProjectPath != null
+              ? 'Proyecto: ${_currentProjectPath!.split('/').last}'
+              : 'Lopez Code',
+          style: const TextStyle(
+            color: CursorTheme.textPrimary,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        actions: [
+          // Toggle Emulador
+          AnimatedBuilder(
+            animation: _platformService,
+            builder: (context, child) {
+              return IconButton(
+                icon: Icon(
                       _emulatorVisible
                           ? Icons.phone_android
                           : Icons.phone_android_outlined,
-                      size: 18,
-                    ),
+                  size: 18,
+                ),
                     color: _emulatorVisible
                         ? CursorTheme.primary
                         : CursorTheme.textSecondary,
-                    onPressed: () {
-                      setState(() {
-                        _emulatorVisible = !_emulatorVisible;
-                      });
-                    },
+                onPressed: () {
+                  setState(() {
+                    _emulatorVisible = !_emulatorVisible;
+                  });
+                },
                     tooltip: _emulatorVisible
                         ? 'Ocultar Emulador'
                         : 'Mostrar Emulador',
-                  );
-                },
-              ),
-              // Toggle Debug Console
-              AnimatedBuilder(
-                animation: _debugService,
-                builder: (context, child) {
-                  return IconButton(
-                    icon: Icon(
+              );
+            },
+          ),
+          // Toggle Debug Console
+          AnimatedBuilder(
+            animation: _debugService,
+            builder: (context, child) {
+              return IconButton(
+                icon: Icon(
                       _debugService.isVisible
                           ? Icons.terminal
                           : Icons.terminal_outlined,
-                      size: 18,
-                    ),
+                  size: 18,
+                ),
                     color: _debugService.isVisible
                         ? CursorTheme.primary
                         : CursorTheme.textSecondary,
-                    onPressed: () {
-                      _debugService.togglePanel();
-                      setState(() {
-                        if (_debugService.isVisible && _debugPanelWidth == 0) {
+                onPressed: () {
+                  _debugService.togglePanel();
+                  setState(() {
+                    if (_debugService.isVisible && _debugPanelWidth == 0) {
                           _debugPanelWidth = 350.0;
-                        } else if (!_debugService.isVisible) {
-                          _debugPanelWidth = 0.0;
-                        }
-                      });
-                    },
+                    } else if (!_debugService.isVisible) {
+                      _debugPanelWidth = 0.0;
+                    }
+                  });
+                },
                     tooltip: _debugService.isVisible
                         ? 'Ocultar Debug Console'
                         : 'Mostrar Debug Console',
-                  );
-                },
-              ),
-              IconButton(
+              );
+            },
+          ),
+          IconButton(
                 icon: const Icon(
                   Icons.folder_open,
                   size: 18,
                   color: CursorTheme.textPrimary,
                 ),
-                padding: const EdgeInsets.all(8),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                onPressed: _changeProject,
-                tooltip: 'Cambiar Proyecto',
-              ),
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: _changeProject,
+            tooltip: 'Cambiar Proyecto',
+          ),
             ],
           ),
           body: LayoutBuilder(
@@ -1029,161 +1029,174 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               }
 
               // Calcular ancho efectivo del chat (siempre fijo y movible por el usuario)
-              final maxChatWidth = (screenWidth -
-                      fixedWidth -
-                      (_emulatorVisible ? effectiveEmulatorWidth : 0.0) -
-                      safetyMargin)
-                  .clamp(minChatWidth, screenWidth);
+              // ✅ FIX: Asegurar que no exceda el espacio disponible
+              final availableForChat = screenWidth -
+                  fixedWidth -
+                  (_emulatorVisible ? effectiveEmulatorWidth : 0.0) -
+                  safetyMargin;
+              final maxChatWidth = availableForChat.clamp(minChatWidth, screenWidth);
               final effectiveChatWidth =
                   _chatPanelWidth.clamp(minChatWidth, maxChatWidth);
+              
+              // ✅ FIX: Verificar que el ancho total no exceda la pantalla
+              final totalWidth = _sidebarWidth + 
+                  dividerWidth + 
+                  (_emulatorVisible ? effectiveEmulatorWidth : 0.0) + 
+                  dividerWidth + 
+                  effectiveChatWidth;
+              
+              // Ajustar el ancho del chat si excede
+              double finalChatWidth = effectiveChatWidth;
+              if (totalWidth > screenWidth) {
+                final overflow = totalWidth - screenWidth;
+                finalChatWidth = (effectiveChatWidth - overflow).clamp(minChatWidth, maxChatWidth);
+              }
 
               return Row(
-                children: [
-                  // Panel lateral izquierdo (Explorador)
-                  Container(
-                    width: _sidebarWidth,
-                    decoration: BoxDecoration(
-                      color: CursorTheme.explorerBackground,
-                      border: Border(
-                        right: BorderSide(color: CursorTheme.border, width: 1),
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        // Barra de herramientas (foto 2)
-                        ExplorerToolbar(
-                          selectedIndex: _selectedToolbarIndex,
-                          onItemSelected: (index) {
-                            setState(() {
-                              _selectedToolbarIndex = index;
-                            });
-                          },
-                          onAction: (action) {
-                            _handleToolbarAction(action);
-                          },
-                        ),
-                        // Listado de carpetas o búsqueda (ProjectExplorer - foto 1)
-                        if (_currentProjectPath != null)
-                          Expanded(
-                            child: ProjectExplorer(
+        children: [
+          // Panel lateral izquierdo (Explorador)
+          Container(
+            width: _sidebarWidth,
+            decoration: BoxDecoration(
+              color: CursorTheme.explorerBackground,
+              border: Border(
+                right: BorderSide(color: CursorTheme.border, width: 1),
+              ),
+            ),
+            child: Column(
+              children: [
+                // Barra de herramientas (foto 2)
+                ExplorerToolbar(
+                          selectedIndex: _isSearchMode ? 0 : -1, // ✅ FIX: Mostrar seleccionado solo en modo búsqueda
+                  onItemSelected: (index) {
+                    setState(() {
+                      _selectedToolbarIndex = index;
+                    });
+                  },
+                  onAction: (action) {
+                    _handleToolbarAction(action);
+                  },
+                ),
+                // Listado de carpetas o búsqueda (ProjectExplorer - foto 1)
+                if (_currentProjectPath != null)
+                  Expanded(
+                    child: ProjectExplorer(
                               key: ValueKey(
                                 '${_currentProjectPath}_${_selectedToolbarIndex}',
                               ),
-                              mode: _selectedToolbarIndex == 1
-                                  ? 'search'
-                                  : 'explorer',
-                              onFileSelected: (path) {
-                                print('📁 Archivo seleccionado: $path');
-                              },
-                              onFileDoubleClick: (path) {
-                                print('📁 Doble clic en: $path');
-                                _handleFileViewCode(path);
-                              },
-                              onFileDelete: (path) {
-                                print('📁 Eliminar: $path');
-                              },
-                              onFileViewCode: _handleFileViewCode,
-                              onFileViewScreen: (path) {
-                                print('📁 Ver pantalla: $path');
-                              },
-                              onFileCopy: (path) {
-                                print('📁 Copiar: $path');
-                              },
-                            ),
-                          )
-                        else
-                          Expanded(
-                            child: Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.folder_outlined,
-                                    size: 48,
-                                    color: CursorTheme.textSecondary,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  const Text(
-                                    'No hay proyecto seleccionado',
-                                    style: TextStyle(
-                                      color: CursorTheme.textSecondary,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
+                              mode: _isSearchMode ? 'search' : 'explorer',
+                      onFileSelected: (path) {
+                        print('📁 Archivo seleccionado: $path');
+                      },
+                      onFileDoubleClick: (path) {
+                        print('📁 Doble clic en: $path');
+                        _handleFileViewCode(path);
+                      },
+                      onFileDelete: (path) {
+                        print('📁 Eliminar: $path');
+                      },
+                      onFileViewCode: _handleFileViewCode,
+                      onFileViewScreen: (path) {
+                        print('📁 Ver pantalla: $path');
+                      },
+                      onFileCopy: (path) {
+                        print('📁 Copiar: $path');
+                      },
                     ),
-                  ),
-                  // Divisor redimensionable entre explorador y contenido principal
-                  GestureDetector(
-                    onHorizontalDragUpdate: (details) {
-                      setState(() {
-                        // Redimensionar sidebar
-                        _sidebarWidth += details.delta.dx;
-                        if (_sidebarWidth < 150) _sidebarWidth = 150;
-                        if (_sidebarWidth > 400) _sidebarWidth = 400;
-                      });
-                    },
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeColumn,
-                      child: Container(
-                        width: 4,
-                        color: CursorTheme.border,
-                        child: Center(
-                          child: Container(
-                            width: 1,
-                            color: CursorTheme.textDisabled,
+                  )
+                else
+                  Expanded(
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.folder_outlined,
+                            size: 48,
+                            color: CursorTheme.textSecondary,
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'No hay proyecto seleccionado',
+                            style: TextStyle(
+                              color: CursorTheme.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
+              ],
+            ),
+          ),
+          // Divisor redimensionable entre explorador y contenido principal
+          GestureDetector(
+            onHorizontalDragUpdate: (details) {
+              setState(() {
+                // Redimensionar sidebar
+                _sidebarWidth += details.delta.dx;
+                if (_sidebarWidth < 150) _sidebarWidth = 150;
+                if (_sidebarWidth > 400) _sidebarWidth = 400;
+              });
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeColumn,
+              child: Container(
+                width: 4,
+                color: CursorTheme.border,
+                child: Center(
+                  child: Container(
+                    width: 1,
+                    color: CursorTheme.textDisabled,
+                  ),
+                ),
+              ),
+            ),
+          ),
                   // Panel del medio (columna vertical) - Emulador y Debug Console
                   // El emulador SIEMPRE debe estar visible por defecto
-                  if (_emulatorVisible)
+          if (_emulatorVisible)
                     SizedBox(
                       width: effectiveEmulatorWidth,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: CursorTheme.surface,
-                          border: Border(
+                child: Container(
+              decoration: BoxDecoration(
+                color: CursorTheme.surface,
+                border: Border(
                             right: BorderSide(
                               color: CursorTheme.border,
                               width: 1,
                             ),
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            // Pestañas Preview/Code
-                            Container(
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: CursorTheme.background,
-                                border: Border(
+                ),
+              ),
+              child: Column(
+                children: [
+                  // Pestañas Preview/Code
+                  Container(
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: CursorTheme.background,
+                      border: Border(
                                   bottom: BorderSide(
                                     color: CursorTheme.border,
                                     width: 1,
                                   ),
-                                ),
-                              ),
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                                     _buildTab(
                                       0,
                                       'Preview',
                                       Icons.phone_android,
                                     ),
-                                    _buildTab(1, 'Code', Icons.code),
-                                    const SizedBox(width: 16),
+                          _buildTab(1, 'Code', Icons.code),
+                          const SizedBox(width: 16),
                                     // Inspector (solo visible en Preview)
-                                    if (_selectedTab == 0)
+                          if (_selectedTab == 0)
                                       Builder(
                                         builder: (context) {
                                           final platform = _platformService
@@ -1202,26 +1215,26 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                       .vmServiceUri!.isNotEmpty;
 
                                           return Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
                                                 'Inspector',
-                                                style: TextStyle(
+                                  style: TextStyle(
                                                   color:
                                                       CursorTheme.textPrimary,
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
                                               if (canUseWebInspector)
                                                 Tooltip(
                                                   message: _inspectorMode
                                                       ? 'Desactivar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)'
                                                       : 'Activar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)',
                                                   child: GestureDetector(
-                                                    onTap: () {
-                                                      setState(() {
+                                  onTap: () {
+                                    setState(() {
                                                         _inspectorMode =
                                                             !_inspectorMode;
                                                       });
@@ -1241,33 +1254,33 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                           ),
                                                         );
                                                       }
-                                                    },
-                                                    child: Container(
-                                                      width: 44,
-                                                      height: 24,
-                                                      decoration: BoxDecoration(
+                                  },
+                                  child: Container(
+                                    width: 44,
+                                    height: 24,
+                                    decoration: BoxDecoration(
                                                         borderRadius:
                                                             BorderRadius
                                                                 .circular(12),
-                                                        color: _inspectorMode
+                                      color: _inspectorMode 
                                                             ? CursorTheme
                                                                 .primary
                                                             : CursorTheme
                                                                 .surface
                                                                 .withOpacity(
                                                                     0.5),
-                                                        border: Border.all(
-                                                          color: _inspectorMode
+                                      border: Border.all(
+                                        color: _inspectorMode 
                                                               ? CursorTheme
                                                                   .primary
                                                               : CursorTheme
                                                                   .border,
-                                                          width: 1,
-                                                        ),
-                                                      ),
-                                                      child: Stack(
-                                                        children: [
-                                                          AnimatedPositioned(
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Stack(
+                                      children: [
+                                        AnimatedPositioned(
                                                             duration:
                                                                 const Duration(
                                                               milliseconds: 200,
@@ -1277,10 +1290,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                             left: _inspectorMode
                                                                 ? 22
                                                                 : 2,
-                                                            top: 2,
-                                                            child: Container(
-                                                              width: 20,
-                                                              height: 20,
+                                          top: 2,
+                                          child: Container(
+                                            width: 20,
+                                            height: 20,
                                                               decoration:
                                                                   BoxDecoration(
                                                                 color:
@@ -1290,8 +1303,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                                         .circular(
                                                                   10,
                                                                 ),
-                                                                boxShadow: [
-                                                                  BoxShadow(
+                                              boxShadow: [
+                                                BoxShadow(
                                                                     color: Colors
                                                                         .black
                                                                         .withOpacity(
@@ -1304,13 +1317,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                                       0,
                                                                       2,
                                                                     ),
-                                                                  ),
-                                                                ],
-                                                              ),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                                     ),
                                                   ),
                                                 )
@@ -1419,9 +1432,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                                   : CursorTheme
                                                                       .textSecondary,
                                                               fontSize: 11,
-                                                            ),
-                                                          ),
-                                                        ],
+                                  ),
+                                ),
+                              ],
                                                       ),
                                                     ),
                                                   ),
@@ -1429,17 +1442,17 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                             ],
                                           );
                                         },
-                                      ),
-                                    const SizedBox(width: 8),
-                                    // Selector de tamaño del emulador (solo visible en Preview)
-                                    if (_selectedTab == 0)
-                                      Container(
+                            ),
+                          const SizedBox(width: 8),
+                          // Selector de tamaño del emulador (solo visible en Preview)
+                          if (_selectedTab == 0)
+                            Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 4,
                                           vertical: 4,
                                         ),
-                                        decoration: BoxDecoration(
-                                          color: CursorTheme.surface,
+                              decoration: BoxDecoration(
+                                color: CursorTheme.surface,
                                           borderRadius: BorderRadius.circular(
                                             4,
                                           ),
@@ -1447,10 +1460,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                             color: CursorTheme.border,
                                             width: 1,
                                           ),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
                                             // Botón de zoom out
                                             IconButton(
                                               icon: const Icon(
@@ -1480,12 +1493,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                   ),
                                               child: Text(
                                                 '${(_emulatorScale * 100).toInt()}%',
-                                                style: TextStyle(
+                                    style: TextStyle(
                                                   color:
                                                       CursorTheme.textPrimary,
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                               ),
                                             ),
                                             // Botón de zoom in
@@ -1508,23 +1521,23 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                 });
                                               },
                                               tooltip: 'Aumentar tamaño',
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
-                            // Contenido según la pestaña seleccionada
-                            Expanded(
-                              child: ClipRect(
-                                child: _buildTabContent(),
-                              ),
-                            ),
-                          ],
-                        ),
+                        ],
                       ),
+                    ),
+                  ),
+                  // Contenido según la pestaña seleccionada
+                  Expanded(
+                              child: ClipRect(
+                    child: _buildTabContent(),
+                              ),
+                  ),
+                ],
+              ),
+            ),
                     ),
                   // Panel central vacío - mostrar logo cuando el emulador no está visible
                   if (!_emulatorVisible)
@@ -1591,9 +1604,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                     // Spacer para mantener el chat anclado a la derecha cuando el emulador está visible
                     const Expanded(child: SizedBox.shrink()),
                   // Divisor redimensionable entre contenido (o espacio vacío) y chat
-                  GestureDetector(
-                    onHorizontalDragUpdate: (details) {
-                      setState(() {
+          GestureDetector(
+            onHorizontalDragUpdate: (details) {
+              setState(() {
                         // Mismo comportamiento que el divisor del explorador
                         // El chat está anclado a la derecha:
                         // Arrastrar hacia la derecha reduce el chat
@@ -1625,26 +1638,27 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         }
                         if (_chatPanelWidth > maxChatWidth) {
                           _chatPanelWidth = maxChatWidth;
-                        }
-                      });
-                    },
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeColumn,
-                      child: Container(
-                        width: 4,
-                        color: CursorTheme.border,
-                        child: Center(
-                          child: Container(
-                            width: 1,
-                            color: CursorTheme.textDisabled,
-                          ),
-                        ),
-                      ),
-                    ),
+                }
+              });
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.resizeColumn,
+              child: Container(
+                width: 4,
+                color: CursorTheme.border,
+                child: Center(
+                  child: Container(
+                    width: 1,
+                    color: CursorTheme.textDisabled,
                   ),
+                ),
+              ),
+            ),
+          ),
                   // Panel de chat con pestañas - ancho fijo y movible
+                  // ✅ FIX: Usar ancho final ajustado para evitar overflow
                   SizedBox(
-                    width: effectiveChatWidth,
+                    width: finalChatWidth,
                     child: Column(
                       children: [
                         // Barra de pestañas de chat - estilo marcadores/portafolio compacto
@@ -1664,7 +1678,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               // Pestañas de chat con scroll horizontal - estilo marcadores/portafolio
-                              Expanded(
+          Expanded(
                                 child: SingleChildScrollView(
                                   scrollDirection: Axis.horizontal,
                                   child: Row(
@@ -1851,43 +1865,43 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                               _activeChatId != null &&
                                   _chats.isNotEmpty &&
                                   _currentProjectPath != null
-                              ? ChatScreen(
-                                  key: _chatScreenKeys.putIfAbsent(
-                                    _activeChatId!,
-                                    () => GlobalKey(),
-                                  ),
-                                  chatId: _activeChatId!,
-                                  projectPath: _currentProjectPath,
-                                )
-                              : Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.smart_toy_outlined,
-                                        size: 48,
-                                        color: CursorTheme.textSecondary,
-                                      ),
-                                      const SizedBox(height: 16),
-                                      const Text(
-                                        'No hay chats activos',
-                                        style: TextStyle(
-                                          color: CursorTheme.textSecondary,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      TextButton.icon(
-                                        onPressed: _createNewChat,
-                                        icon: const Icon(Icons.add, size: 16),
-                                        label: const Text('Crear nuevo agente'),
-                                        style: TextButton.styleFrom(
-                                          foregroundColor: CursorTheme.primary,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      TextButton.icon(
-                                        onPressed: () {
+                ? ChatScreen(
+                    key: _chatScreenKeys.putIfAbsent(
+                      _activeChatId!,
+                      () => GlobalKey(),
+                    ),
+                    chatId: _activeChatId!,
+                    projectPath: _currentProjectPath,
+                  )
+                : Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.smart_toy_outlined,
+                          size: 48,
+                          color: CursorTheme.textSecondary,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'No hay chats activos',
+                          style: TextStyle(
+                            color: CursorTheme.textSecondary,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: _createNewChat,
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('Crear nuevo agente'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: CursorTheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextButton.icon(
+                          onPressed: () {
                                           Navigator.of(
                                             context,
                                           ).pushAndRemoveUntil(
@@ -1895,67 +1909,67 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                               builder: (context) =>
                                                   const WelcomeScreen(),
                                             ),
-                                            (route) => false,
-                                          );
-                                        },
-                                        icon: const Icon(Icons.home, size: 16),
-                                        label: const Text('Volver a inicio'),
-                                        style: TextButton.styleFrom(
+                              (route) => false,
+                            );
+                          },
+                          icon: const Icon(Icons.home, size: 16),
+                          label: const Text('Volver a inicio'),
+                          style: TextButton.styleFrom(
                                           foregroundColor:
                                               CursorTheme.textSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
+                          ),
                         ),
                       ],
+                    ),
+                  ),
+          ),
+        ],
                     ),
                   ),
                 ],
               );
             },
-          ),
         ),
+      ),
       // Barra de Run and Debug flotante (visible en toda la app)
       RunDebugToolbar(
-        onRun: _handleRun,
-        onDebug: _handleDebug,
-        onStop: _handleStop,
-        onRestart: _handleRestart,
-        onPlatformChanged: (platform) {
+          onRun: _handleRun,
+          onDebug: _handleDebug,
+          onStop: _handleStop,
+          onRestart: _handleRestart,
+          onPlatformChanged: (platform) {
           print(
             '🔧 Plataforma seleccionada desde MultiChatScreen: $platform',
           );
-
-          // Detener cualquier ejecución en curso antes de cambiar de plataforma
-          final state = _getActiveChatScreenState();
-          if (state != null) {
-            try {
-              final isRunning = (state as dynamic).isRunning ?? false;
-              if (isRunning) {
+            
+            // Detener cualquier ejecución en curso antes de cambiar de plataforma
+            final state = _getActiveChatScreenState();
+            if (state != null) {
+              try {
+                final isRunning = (state as dynamic).isRunning ?? false;
+                if (isRunning) {
                 print(
                   '⚠️ Deteniendo ejecución antes de cambiar de plataforma',
                 );
-                (state as dynamic).handleStop();
+                  (state as dynamic).handleStop();
+                }
+              } catch (e) {
+                print('⚠️ Error al detener ejecución: $e');
               }
-            } catch (e) {
-              print('⚠️ Error al detener ejecución: $e');
             }
-          }
-
-          // Actualizar plataforma en el servicio
-          _platformService.setPlatform(platform);
-
-          // Limpiar URL si no es web
-          if (platform.toLowerCase() != 'web') {
-            _debugService.setAppUrl(null);
-          }
-        },
-        selectedPlatform: _getSelectedPlatform(),
-        isRunning: _getIsRunning(),
-        isDebugging: _getIsDebugging(),
-      ),
+            
+            // Actualizar plataforma en el servicio
+            _platformService.setPlatform(platform);
+            
+            // Limpiar URL si no es web
+            if (platform.toLowerCase() != 'web') {
+              _debugService.setAppUrl(null);
+            }
+          },
+          selectedPlatform: _getSelectedPlatform(),
+          isRunning: _getIsRunning(),
+          isDebugging: _getIsDebugging(),
+        ),
       ],
     );
   }
