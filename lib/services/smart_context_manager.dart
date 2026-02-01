@@ -2,6 +2,7 @@ import 'dart:io';
 import 'conversation_memory_service.dart';
 import 'documentation_service.dart';
 import 'semantic_search_service.dart';
+import 'rule_service.dart';
 
 /// Context Manager profesional para optimizar uso de tokens
 /// ✨ AHORA CON BÚSQUEDA SEMÁNTICA (RAG) ✨
