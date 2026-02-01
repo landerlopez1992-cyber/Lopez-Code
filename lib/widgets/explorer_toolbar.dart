@@ -41,37 +41,36 @@ class ExplorerToolbar extends StatelessWidget {
           final isSelected = index == selectedIndex;
           final item = items[index];
           
-          return Expanded(
-            child: Tooltip(
-              message: item['tooltip'] as String,
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    onItemSelected?.call(index);
-                    // Ejecutar acción específica si está definida
-                    final action = item['action'] as String?;
-                    if (action != null) {
-                      onAction?.call(action);
-                    }
-                  },
-                  child: Container(
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? CursorTheme.surface
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Icon(
-                      isSelected
-                          ? item['selectedIcon'] as IconData
-                          : item['icon'] as IconData,
-                      size: 18,
-                      color: isSelected
-                          ? CursorTheme.primary
-                          : CursorTheme.textSecondary,
-                    ),
+          return Tooltip(
+            message: item['tooltip'] as String,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  onItemSelected?.call(index);
+                  // Ejecutar acción específica si está definida
+                  final action = item['action'] as String?;
+                  if (action != null) {
+                    onAction?.call(action);
+                  }
+                },
+                child: Container(
+                  width: 40, // ✅ FIX: Ancho fijo en lugar de Expanded
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? CursorTheme.surface
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Icon(
+                    isSelected
+                        ? item['selectedIcon'] as IconData
+                        : item['icon'] as IconData,
+                    size: 18,
+                    color: isSelected
+                        ? CursorTheme.primary
+                        : CursorTheme.textSecondary,
                   ),
                 ),
               ),
