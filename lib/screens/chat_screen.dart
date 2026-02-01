@@ -401,34 +401,51 @@ class _ChatScreenState extends State<ChatScreen> {
 
       final bool allowTools = !isErrorReport;
       
-      // Detectar si el mensaje del usuario es una solicitud simple de run/debug
-      final isSimpleRunRequest = userMessage.toLowerCase().contains('run') ||
-          userMessage.toLowerCase().contains('debug') ||
-          userMessage.toLowerCase().contains('ejecuta') ||
-          userMessage.toLowerCase().contains('compila') ||
-          userMessage.toLowerCase().contains('corre') ||
-          userMessage.toLowerCase().contains('inicia') ||
-          userMessage.toLowerCase().contains('rund and debug') ||
-          userMessage.toLowerCase().contains('run and debug');
+      // ✅ FIX: Detectar SOLO si es una solicitud DIRECTA de run/debug (no preguntas)
+      final lowerMessage = userMessage.toLowerCase();
+      final isQuestion = lowerMessage.contains('cómo') || 
+          lowerMessage.contains('como') ||
+          lowerMessage.contains('puedo') ||
+          lowerMessage.contains('debo') ||
+          lowerMessage.contains('necesito') ||
+          lowerMessage.contains('quiero') ||
+          lowerMessage.contains('?');
+      
+      final hasRunDebugWords = lowerMessage.contains('run') ||
+          lowerMessage.contains('debug') ||
+          lowerMessage.contains('ejecuta') ||
+          lowerMessage.contains('compila') ||
+          lowerMessage.contains('corre') ||
+          lowerMessage.contains('inicia');
+      
+      // Solo ejecutar directamente si tiene palabras de run/debug Y NO es una pregunta
+      final isSimpleRunRequest = hasRunDebugWords && !isQuestion;
       
       // Si es una solicitud simple de run/debug, ejecutar directamente sin esperar respuesta del agente
       if (isSimpleRunRequest) {
-        final lowerMessage = userMessage.toLowerCase();
-        print('🚀 Solicitud simple detectada, ejecutando directamente...');
+        print('🚀 Solicitud DIRECTA de run/debug detectada (no es pregunta), ejecutando...');
         
-        // Agregar mensaje del usuario al chat
+        // ✅ FIX: Agregar mensaje del usuario al chat
         final userMsg = Message(
           role: 'user',
           content: userMessage,
           timestamp: DateTime.now(),
+          imageUrls: imagesToSend.isNotEmpty ? imagesToSend : null,
+          filePath: filePathToSend,
         );
-        setState(() {
-          _messages.add(userMsg);
-          _isLoading = true;
-          _loadingStatus = 'Ejecutando...';
-        });
-        await _saveConversation();
-        _scrollToBottom();
+        
+        if (mounted) {
+          setState(() {
+            _messages.add(userMsg);
+            _selectedImages.clear();
+            _selectedFilePath = null;
+            _isLoading = true;
+            _loadingStatus = 'Ejecutando...';
+            _isSending = false; // ✅ FIX: Limpiar flag ya que se ejecuta directamente
+          });
+          await _saveConversation();
+          _scrollToBottom();
+        }
         
         // Ejecutar directamente según la solicitud
         if (lowerMessage.contains('debug') || lowerMessage.contains('depura')) {
@@ -858,6 +875,35 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // Métodos de Run and Debug
+  /// Verifica qué archivos faltan en el proyecto para poder ejecutarlo
+  Future<List<String>> _checkMissingProjectFiles(String projectPath) async {
+    final missingFiles = <String>[];
+    
+    // Verificar archivos clave para diferentes tipos de proyectos
+    final keyFiles = {
+      'pubspec.yaml': 'Flutter',
+      'package.json': 'Node.js/React/Next.js/Vue',
+      'main.py': 'Python',
+      'app.py': 'Python/Flask',
+      'requirements.txt': 'Python',
+      'manage.py': 'Django',
+      'go.mod': 'Go',
+      'Cargo.toml': 'Rust',
+      'pom.xml': 'Maven (Java)',
+      'build.gradle': 'Gradle (Java)',
+      'index.html': 'HTML estático',
+    };
+    
+    for (final entry in keyFiles.entries) {
+      final file = File('$projectPath/${entry.key}');
+      if (!await file.exists()) {
+        missingFiles.add('${entry.key} (${entry.value})');
+      }
+    }
+    
+    return missingFiles;
+  }
+  
   Future<void> _handleRun() async {
     try {
       // Obtener projectPath con logging detallado
@@ -905,29 +951,110 @@ class _ChatScreenState extends State<ChatScreen> {
       if (projectType == ProjectType.unknown) {
         print('❌ ChatScreen._handleRun: TIPO DE PROYECTO DESCONOCIDO: $projectPath');
         
+        // ✅ FIX: Verificar archivos faltantes y ofrecer sugerencias inteligentes
+        final missingFiles = await _checkMissingProjectFiles(projectPath);
+        
         if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _isSending = false;
+          });
+          
           showDialog(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('Tipo de proyecto no reconocido'),
-              content: Text(
-                'No se pudo detectar el tipo de proyecto.\n\n'
-                'Ruta: $projectPath\n\n'
-                'Tipos de proyecto soportados:\n'
-                '• Flutter (pubspec.yaml)\n'
-                '• Python (main.py, app.py, requirements.txt)\n'
-                '• Node.js / React / Next.js / Vue (package.json)\n'
-                '• Django (manage.py)\n'
-                '• Go (go.mod)\n'
-                '• Rust (Cargo.toml)\n'
-                '• HTML estático (index.html)\n'
-                '• Java (pom.xml, build.gradle)\n\n'
-                'Asegúrate de que el proyecto contiene los archivos necesarios.',
+              backgroundColor: CursorTheme.surface,
+              title: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.orange, size: 24),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Proyecto incompleto',
+                      style: TextStyle(color: CursorTheme.textPrimary),
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'No se pudo detectar el tipo de proyecto porque faltan archivos necesarios.',
+                      style: TextStyle(color: CursorTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    if (missingFiles.isNotEmpty) ...[
+                      Text(
+                        'Archivos faltantes:',
+                        style: const TextStyle(
+                          color: CursorTheme.textPrimary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...missingFiles.map((file) => Padding(
+                        padding: const EdgeInsets.only(left: 8, bottom: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning, color: Colors.orange, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                file,
+                                style: TextStyle(
+                                  color: CursorTheme.textSecondary,
+                                  fontFamily: 'monospace',
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )),
+                      const SizedBox(height: 16),
+                    ],
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.lightbulb_outline, color: Colors.blue, size: 16),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Sugerencia',
+                                style: const TextStyle(
+                                  color: Colors.blue,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Pide al agente que cree la estructura completa del proyecto. Por ejemplo:\n\n'
+                            '"Crea un proyecto Flutter completo para la calculadora con pubspec.yaml y main.dart"',
+                            style: TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Entendido'),
+                  child: const Text('Entendido', style: TextStyle(color: CursorTheme.primary)),
                 ),
               ],
             ),
@@ -1832,29 +1959,110 @@ class _ChatScreenState extends State<ChatScreen> {
       if (projectType == ProjectType.unknown) {
         print('❌ ChatScreen._handleDebug: TIPO DE PROYECTO DESCONOCIDO: $projectPath');
         
+        // ✅ FIX: Verificar archivos faltantes y ofrecer sugerencias
+        final missingFiles = await _checkMissingProjectFiles(projectPath);
+        
         if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _isSending = false;
+          });
+          
           showDialog(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('Tipo de proyecto no reconocido'),
-              content: Text(
-                'No se pudo detectar el tipo de proyecto.\n\n'
-                'Ruta: $projectPath\n\n'
-                'Tipos de proyecto soportados:\n'
-                '• Flutter (pubspec.yaml)\n'
-                '• Python (main.py, app.py, requirements.txt)\n'
-                '• Node.js / React / Next.js / Vue (package.json)\n'
-                '• Django (manage.py)\n'
-                '• Go (go.mod)\n'
-                '• Rust (Cargo.toml)\n'
-                '• HTML estático (index.html)\n'
-                '• Java (pom.xml, build.gradle)\n\n'
-                'Asegúrate de que el proyecto contiene los archivos necesarios.',
+              backgroundColor: CursorTheme.surface,
+              title: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.orange, size: 24),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Proyecto incompleto',
+                      style: TextStyle(color: CursorTheme.textPrimary),
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'No se pudo detectar el tipo de proyecto porque faltan archivos necesarios.',
+                      style: TextStyle(color: CursorTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    if (missingFiles.isNotEmpty) ...[
+                      Text(
+                        'Archivos faltantes:',
+                        style: const TextStyle(
+                          color: CursorTheme.textPrimary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...missingFiles.map((file) => Padding(
+                        padding: const EdgeInsets.only(left: 8, bottom: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning, color: Colors.orange, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                file,
+                                style: TextStyle(
+                                  color: CursorTheme.textSecondary,
+                                  fontFamily: 'monospace',
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )),
+                      const SizedBox(height: 16),
+                    ],
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.lightbulb_outline, color: Colors.blue, size: 16),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Sugerencia',
+                                style: const TextStyle(
+                                  color: Colors.blue,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Pide al agente que cree la estructura completa del proyecto. Por ejemplo:\n\n'
+                            '"Crea un proyecto Flutter completo con pubspec.yaml y main.dart"',
+                            style: TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Entendido'),
+                  child: const Text('Entendido', style: TextStyle(color: CursorTheme.primary)),
                 ),
               ],
             ),
