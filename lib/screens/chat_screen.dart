@@ -315,16 +315,37 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       
       // ✨ NUEVO SISTEMA INTELIGENTE DE CONTEXTO ✨
-      // Construye contexto optimizado automáticamente
-      final contextBundle = await SmartContextManager.buildOptimizedContext(
-        userMessage: userMessage,
-        projectPath: currentProjectPath ?? '',
-        sessionId: _currentSessionId,
-        selectedFiles: _selectedFilePath != null ? [_selectedFilePath!] : null,
-        includeDocumentation: SmartContextManager.needsDocumentation(userMessage),
-        includeHistory: true,
-        includeProjectStructure: SmartContextManager.needsFullContext(userMessage),
-      );
+      // Construye contexto optimizado automáticamente con timeout para evitar cuelgues
+      ContextBundle contextBundle;
+      try {
+        contextBundle = await SmartContextManager.buildOptimizedContext(
+          userMessage: userMessage,
+          projectPath: currentProjectPath ?? '',
+          sessionId: _currentSessionId,
+          selectedFiles: _selectedFilePath != null ? [_selectedFilePath!] : null,
+          includeDocumentation: SmartContextManager.needsDocumentation(userMessage),
+          includeHistory: true,
+          includeProjectStructure: SmartContextManager.needsFullContext(userMessage),
+        ).timeout(
+          const Duration(seconds: 10), // ✅ FIX: Timeout para evitar cuelgues
+          onTimeout: () {
+            print('⚠️ Timeout al construir contexto, usando contexto mínimo');
+            return ContextBundle(
+              content: userMessage,
+              estimatedTokens: SmartContextManager.estimateTokens(userMessage),
+              metadata: {'timeout': true},
+            );
+          },
+        );
+      } catch (e) {
+        print('❌ Error al construir contexto: $e');
+        // Usar contexto mínimo si falla
+        contextBundle = ContextBundle(
+          content: userMessage,
+          estimatedTokens: SmartContextManager.estimateTokens(userMessage),
+          metadata: {'error': e.toString()},
+        );
+      }
       
       print('📊 Contexto: ${contextBundle.summary}, ${contextBundle.estimatedTokens} tokens');
       
@@ -422,6 +443,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
       
+      // ✅ FIX: Agregar timeout para evitar cuelgues
       final response = await _openAIService!.sendMessage(
         message: enhancedMessage,
         imagePaths: imagesToSend.isNotEmpty ? imagesToSend : null,
@@ -480,6 +502,11 @@ class _ChatScreenState extends State<ChatScreen> {
             print('❌ Widget no está montado, no se puede mostrar diálogo');
           }
         } : null,
+      ).timeout(
+        const Duration(seconds: 120), // ✅ FIX: Timeout de 2 minutos para evitar cuelgues infinitos
+        onTimeout: () {
+          throw TimeoutException('La solicitud tardó demasiado. Intenta de nuevo con un mensaje más corto.');
+        },
       );
 
       final assistantMsg = Message(
@@ -537,10 +564,23 @@ class _ChatScreenState extends State<ChatScreen> {
           _isErrorReportDraft = false;
         });
         
+        // ✅ FIX: Mensajes de error más amigables
+        String errorMessage = 'Error al procesar la solicitud';
+        if (e is TimeoutException) {
+          errorMessage = '⏱️ La solicitud tardó demasiado. Intenta con un mensaje más corto o verifica tu conexión.';
+        } else if (e.toString().contains('timeout') || e.toString().contains('Timeout')) {
+          errorMessage = '⏱️ La solicitud tardó demasiado. Intenta con un mensaje más corto.';
+        } else if (e.toString().contains('network') || e.toString().contains('Network')) {
+          errorMessage = '🌐 Error de conexión. Verifica tu internet e intenta de nuevo.';
+        } else {
+          errorMessage = '❌ Error: ${e.toString().length > 100 ? e.toString().substring(0, 100) + "..." : e.toString()}';
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: $e'),
+            content: Text(errorMessage),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -603,6 +643,11 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         },
         // NO pasar onPendingActions - esto hará que se ejecuten directamente
+      ).timeout(
+        const Duration(seconds: 120), // ✅ FIX: Timeout de 2 minutos
+        onTimeout: () {
+          throw TimeoutException('La solicitud tardó demasiado. Intenta de nuevo con un mensaje más corto.');
+        },
       );
 
       final assistantMsg = Message(
@@ -2633,6 +2678,7 @@ class _ChatScreenState extends State<ChatScreen> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar overflow
           children: [
             Icon(Icons.chat_bubble_outline, size: 48, color: CursorTheme.textSecondary.withOpacity(0.5)),
             const SizedBox(height: 16),
@@ -2835,10 +2881,11 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Stack(
         children: [
           Column(
+            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar overflow
             children: [
-          Expanded(
-            child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
-          ),
+              Expanded(
+                child: _messages.isEmpty ? _buildEmptyChatArea() : _buildChatArea(),
+              ),
           CursorChatInput(
             controller: _messageController,
             onSend: _sendMessage,

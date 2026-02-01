@@ -264,6 +264,11 @@ Tu objetivo: ayudar al usuario de manera eficiente y amigable.''';
     return (text.length / _avgCharsPerToken).ceil();
   }
   
+  /// Estima tokens de un texto (método público)
+  static int estimateTokens(String text) {
+    return (text.length / _avgCharsPerToken).ceil();
+  }
+  
   /// Recorta texto para que no exceda un límite de tokens
   static String _trimToTokenLimit(String text, {required int maxTokens}) {
     final maxChars = maxTokens * _avgCharsPerToken;
