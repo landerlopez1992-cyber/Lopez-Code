@@ -97,6 +97,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Map<String, dynamic>? _lastUserMessage; // Guardar último mensaje para reenviar después de confirmación
   List<String> _selectedDocumentation = []; // URLs de documentación seleccionadas
   bool _isSending = false; // ✅ FIX: Protección contra envíos duplicados
+  bool _pendingActionsShown = false; // ✅ FIX: Evitar mensajes duplicados de confirmación
   
   // Run and Debug
   String _selectedPlatform = 'macos';
@@ -292,24 +293,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _messageController.clear();
 
-    final userMsg = Message(
-      role: 'user',
-      content: userMessage,
-      timestamp: DateTime.now(),
-      imageUrls: imagesToSend.isNotEmpty ? imagesToSend : null,
-      filePath: filePathToSend,
-    );
-
-    if (mounted) {
-      setState(() {
-        _messages.add(userMsg);
-        _isLoading = true;
-        _selectedImages.clear();
-        _selectedFilePath = null;
-      });
-      _scrollToBottom();
-    }
-
     try {
       // Obtener projectPath antes de usarlo
       final currentProjectPath = widget.projectPath ?? await ProjectService.getProjectPath();
@@ -466,6 +449,25 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
       
+      // ✅ FIX: Agregar mensaje del usuario (flujo normal)
+      final userMsg = Message(
+        role: 'user',
+        content: userMessage,
+        timestamp: DateTime.now(),
+        imageUrls: imagesToSend.isNotEmpty ? imagesToSend : null,
+        filePath: filePathToSend,
+      );
+
+      if (mounted) {
+        setState(() {
+          _messages.add(userMsg);
+          _isLoading = true;
+          _selectedImages.clear();
+          _selectedFilePath = null;
+        });
+        _scrollToBottom();
+      }
+
       // ✅ FIX: Agregar timeout para evitar cuelgues
       final response = await _openAIService!.sendMessage(
         message: enhancedMessage,
@@ -513,12 +515,13 @@ class _ChatScreenState extends State<ChatScreen> {
             
             if (mounted) {
               setState(() {
-                _isLoading = false; // Detener loading para mostrar diálogo
+                _isLoading = false; // Detener loading para mostrar tarjeta
               });
 
               if (allReadOnly) {
                 // ✅ FIX: Lecturas son seguras, ejecutar sin confirmación
                 print('✅ Acciones solo de lectura detectadas, ejecutando sin confirmación...');
+                _pendingActionsShown = false;
                 _executeConfirmedActions(pendingActions);
                 return;
               }
@@ -533,6 +536,7 @@ class _ChatScreenState extends State<ChatScreen> {
               );
               setState(() {
                 _messages.add(pendingActionsMsg);
+                _pendingActionsShown = true;
               });
               _scrollToBottom();
               print('✅ Mensaje con acciones pendientes agregado al chat');
@@ -547,6 +551,13 @@ class _ChatScreenState extends State<ChatScreen> {
           throw TimeoutException('La solicitud tardó demasiado. Intenta de nuevo con un mensaje más corto.');
         },
       );
+
+      // ✅ FIX: Evitar duplicado de "Esperando confirmación" cuando ya se mostró la tarjeta
+      if (_pendingActionsShown &&
+          response.trim().toLowerCase().startsWith('esperando tu confirmación')) {
+        _pendingActionsShown = false;
+        return;
+      }
 
       final assistantMsg = Message(
         role: 'assistant',
