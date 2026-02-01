@@ -18,6 +18,36 @@ class PendingActionsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rejectButton = TextButton(
+      onPressed: onReject,
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.red,
+        alignment: Alignment.center,
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.close, size: 16),
+          SizedBox(width: 4),
+          Text('Rechazar'),
+        ],
+      ),
+    );
+
+    final acceptButton = ElevatedButton.icon(
+      onPressed: () => onAccept(pendingActions),
+      icon: const Icon(Icons.check, size: 16),
+      label: const Text('Aceptar y Ejecutar'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: CursorTheme.primary,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
+      ),
+    );
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       constraints: const BoxConstraints(maxWidth: 600),
@@ -104,38 +134,28 @@ class PendingActionsCard extends StatelessWidget {
                 bottomRight: Radius.circular(12),
               ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: onReject,
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.red,
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final isNarrow = constraints.maxWidth < 420;
+                if (isNarrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(Icons.close, size: 16),
-                      SizedBox(width: 4),
-                      Text('Rechazar'),
+                      SizedBox(width: double.infinity, child: acceptButton),
+                      const SizedBox(height: 8),
+                      SizedBox(width: double.infinity, child: rejectButton),
                     ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: () => onAccept(pendingActions),
-                  icon: const Icon(Icons.check, size: 16),
-                  label: const Text('Aceptar y Ejecutar'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: CursorTheme.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                ),
-              ],
+                  );
+                }
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    rejectButton,
+                    const SizedBox(width: 8),
+                    acceptButton,
+                  ],
+                );
+              },
             ),
           ),
         ],

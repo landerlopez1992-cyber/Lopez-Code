@@ -14,7 +14,6 @@ import '../services/project_type_detector.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/cursor_chat_input.dart';
 import '../widgets/cursor_theme.dart';
-import '../widgets/confirmation_dialog.dart';
 import '../widgets/error_confirmation_dialog.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
@@ -507,27 +506,36 @@ class _ChatScreenState extends State<ChatScreen> {
             }).toList();
             
             print('✅ ${pendingActions.length} acciones convertidas a PendingAction');
+
+            final allReadOnly = pendingActions.every(
+              (action) => action.functionName == 'read_file',
+            );
             
             if (mounted) {
               setState(() {
                 _isLoading = false; // Detener loading para mostrar diálogo
               });
-              
+
+              if (allReadOnly) {
+                // ✅ FIX: Lecturas son seguras, ejecutar sin confirmación
+                print('✅ Acciones solo de lectura detectadas, ejecutando sin confirmación...');
+                _executeConfirmedActions(pendingActions);
+                return;
+              }
+
               print('🔔 Agregando mensaje con acciones pendientes al chat...');
               // ✅ NUEVO: Agregar mensaje especial con acciones pendientes en lugar de diálogo
-              if (mounted) {
-                final pendingActionsMsg = Message(
-                  role: 'assistant',
-                  content: 'Esperando tu confirmación para ejecutar ${pendingActions.length} acción(es).',
-                  timestamp: DateTime.now(),
-                  pendingActions: pendingActions, // ✅ Agregar acciones pendientes al mensaje
-                );
-                setState(() {
-                  _messages.add(pendingActionsMsg);
-                });
-                _scrollToBottom();
-                print('✅ Mensaje con acciones pendientes agregado al chat');
-              }
+              final pendingActionsMsg = Message(
+                role: 'assistant',
+                content: 'Esperando tu confirmación para ejecutar ${pendingActions.length} acción(es).',
+                timestamp: DateTime.now(),
+                pendingActions: pendingActions, // ✅ Agregar acciones pendientes al mensaje
+              );
+              setState(() {
+                _messages.add(pendingActionsMsg);
+              });
+              _scrollToBottom();
+              print('✅ Mensaje con acciones pendientes agregado al chat');
             }
           } else {
             print('❌ Widget no está montado, no se puede mostrar diálogo');
@@ -625,34 +633,6 @@ class _ChatScreenState extends State<ChatScreen> {
         _isSending = false;
       }
     }
-  }
-
-  void _showConfirmationDialog(List<PendingAction> pendingActions) {
-    showDialog(
-      context: context,
-      barrierDismissible: false, // No permitir cerrar sin decidir
-      builder: (context) => ConfirmationDialog(
-        pendingActions: pendingActions,
-        onConfirm: (acceptedActions) async {
-          // Ejecutar acciones confirmadas
-          await _executeConfirmedActions(acceptedActions);
-        },
-        onReject: () {
-          // Cancelar acciones
-          if (mounted) {
-            setState(() {
-              _isLoading = false;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Acciones canceladas'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        },
-      ),
-    );
   }
 
   // ✅ NUEVO: Manejar aceptación de acciones desde la tarjeta del chat
