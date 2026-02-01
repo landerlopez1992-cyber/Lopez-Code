@@ -1053,7 +1053,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               }
 
               return Row(
-        children: [
+                mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar que el Row exceda el ancho
+                children: [
           // Panel lateral izquierdo (Explorador)
           Container(
             width: _sidebarWidth,
@@ -1656,10 +1657,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             ),
           ),
                   // Panel de chat con pestañas - ancho fijo y movible
-                  // ✅ FIX: Usar ancho final ajustado para evitar overflow
-                  SizedBox(
-                    width: finalChatWidth,
-                    child: Column(
+                  // ✅ FIX: Usar Flexible para evitar overflow
+                  Flexible(
+                    fit: FlexFit.tight, // ✅ FIX: Respetar el ancho máximo disponible
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: finalChatWidth,
+                        minWidth: minChatWidth,
+                      ),
+                      child: Column(
                       children: [
                         // Barra de pestañas de chat - estilo marcadores/portafolio compacto
                         Container(
@@ -1865,7 +1871,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                               _activeChatId != null &&
                                   _chats.isNotEmpty &&
                                   _currentProjectPath != null
-                ? ChatScreen(
+                              ? ChatScreen(
                     key: _chatScreenKeys.putIfAbsent(
                       _activeChatId!,
                       () => GlobalKey(),
@@ -1921,12 +1927,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         ),
                       ],
                     ),
-                  ),
-          ),
-        ],
-                    ),
-                  ),
-                ],
+                  ), // ✅ Cierre de Center (del ternario)
+                        ), // ✅ Cierre de Expanded (contenido del chat)
+                      ], // ✅ Cierre de children del Column (del chat)
+                    ), // ✅ Cierre de Column (del chat)
+                      ), // ✅ Cierre de ConstrainedBox
+                    ), // ✅ Cierre de Flexible
+                ], // ✅ Cierre de children del Row principal
               );
             },
         ),
