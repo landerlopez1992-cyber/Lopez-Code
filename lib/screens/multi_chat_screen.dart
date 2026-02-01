@@ -576,6 +576,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evita altura infinita
             children: [
               Icon(
                 Icons.code,

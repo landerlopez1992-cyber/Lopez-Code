@@ -1314,6 +1314,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     
     // Contenido placeholder que va DENTRO del frame del teléfono
     // NO llamar a _buildPhoneFrame() aquí porque ya estamos dentro del frame
+    // Mostrar el logo de la app (igual que en la pantalla de bienvenida)
     return Container(
       color: CursorTheme.surface,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
@@ -1321,31 +1322,48 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Mostrar logo según la plataforma
-            widget.platform.toLowerCase() == 'ios'
-                ? Icon(
-                    Icons.apple,
-                    size: 64,
-                    color: CursorTheme.textSecondary.withOpacity(0.5),
-                  )
-                : widget.platform.toLowerCase() == 'android'
-                    ? Icon(
-                        Icons.android,
-                        size: 64,
-                        color: CursorTheme.textSecondary.withOpacity(0.5),
-                      )
-                    : Icon(
-                        Icons.web,
-                        size: 64,
-                        color: CursorTheme.textSecondary.withOpacity(0.5),
-                      ),
-            const SizedBox(height: 24),
+            // Logo de chevrones azules (igual que en welcome_screen)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.chevron_left,
+                  size: 48,
+                  color: CursorTheme.primary,
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.chevron_right,
+                  size: 48,
+                  color: CursorTheme.primary,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'LOPEZ CODE',
+              style: TextStyle(
+                color: CursorTheme.textPrimary,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Pro · Settings',
+              style: TextStyle(
+                color: CursorTheme.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 32),
             Text(
               'Presiona Run/Debug para iniciar',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: CursorTheme.textSecondary,
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w500,
               ),
             ),

@@ -516,6 +516,7 @@ Error original: $e''';
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evita altura infinita
             children: [
               // Logo y título - Logo de chevrones azules
               Row(
