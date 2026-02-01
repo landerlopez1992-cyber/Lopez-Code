@@ -2964,24 +2964,161 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildEmptyChatArea() {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar overflow
-          children: [
-            Icon(Icons.chat_bubble_outline, size: 48, color: CursorTheme.textSecondary.withOpacity(0.5)),
-            const SizedBox(height: 16),
-            Text(
-              'Comienza una conversación',
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(32.0),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 600),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icono de Lopez Code (robot azul profesional)
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF007ACC),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF007ACC).withOpacity(0.3),
+                      blurRadius: 20,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: CustomPaint(
+                  painter: RobotIconPainter(),
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Título
+              const Text(
+                'Lopez Code',
+                style: TextStyle(
+                  color: CursorTheme.textPrimary,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Tu asistente de IA para desarrollo de software',
+                style: TextStyle(
+                  color: CursorTheme.textSecondary,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 32),
+              // Capacidades
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  _buildCapabilityChip('📱 Apps iOS/Android', Colors.blue),
+                  _buildCapabilityChip('🌐 Sitios Web', Colors.green),
+                  _buildCapabilityChip('🐍 Backend', Colors.orange),
+                  _buildCapabilityChip('🔍 Code Review', Colors.purple),
+                  _buildCapabilityChip('🐛 Debugging', Colors.red),
+                  _buildCapabilityChip('🚀 Run & Debug', Colors.teal),
+                ],
+              ),
+              const SizedBox(height: 32),
+              // Mensaje de inicio
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: CursorTheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: CursorTheme.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.info_outline, color: CursorTheme.primary, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Puedo ayudarte con:',
+                          style: const TextStyle(
+                            color: CursorTheme.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildHelpItem('Crear apps y proyectos completos'),
+                    _buildHelpItem('Editar y optimizar código existente'),
+                    _buildHelpItem('Solucionar errores y bugs'),
+                    _buildHelpItem('Compilar y ejecutar tu proyecto'),
+                    _buildHelpItem('Descargar recursos desde internet'),
+                    _buildHelpItem('Ejecutar comandos en terminal'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Escribe un mensaje para comenzar',
+                style: TextStyle(
+                  color: CursorTheme.textSecondary.withOpacity(0.7),
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildCapabilityChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildHelpItem(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              color: CursorTheme.primary,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
               style: TextStyle(
                 color: CursorTheme.textSecondary,
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+                fontSize: 13,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
