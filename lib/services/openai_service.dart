@@ -272,6 +272,23 @@ Responde en español y sé detallado en tu análisis.''';
         {
           'type': 'function',
           'function': {
+            'name': 'create_folder',
+            'description': 'Crea una carpeta/directorio en el proyecto. Útil para estructurar el proyecto antes de crear archivos.',
+            'parameters': {
+              'type': 'object',
+              'properties': {
+                'folder_path': {
+                  'type': 'string',
+                  'description': 'Ruta de la carpeta a crear (ej: lib/screens, lib/widgets). Se crean directorios recursivamente si es necesario.',
+                },
+              },
+              'required': ['folder_path'],
+            },
+          },
+        },
+        {
+          'type': 'function',
+          'function': {
             'name': 'download_file',
             'description': 'Descarga un archivo desde una URL y lo guarda en el proyecto.',
             'parameters': {
@@ -512,6 +529,9 @@ Responde en español y sé detallado en tu análisis.''';
                   functionArgs['working_directory'] as String?,
                   projectPath,
                 );
+              } else if (functionName == 'create_folder') {
+                onFileOperation?.call('creando', functionArgs['folder_path'] as String);
+                result = await _executeCreateFolder(functionArgs['folder_path'] as String, projectPath);
               } else if (functionName == 'download_file') {
                 onFileOperation?.call('descargando', functionArgs['url'] as String);
                 result = await _executeDownloadFile(
@@ -706,6 +726,42 @@ Responde en español y sé detallado en tu análisis.''';
   }
 
   /// Ejecuta la función create_file (PROTEGIDO - solo archivos del proyecto)
+  /// Ejecuta create_folder para crear directorios
+  Future<String> _executeCreateFolder(String folderPath, String? projectPath) async {
+    try {
+      if (projectPath == null || projectPath.isEmpty) {
+        return 'Error: No hay proyecto cargado';
+      }
+      
+      // Construir ruta completa si es relativa
+      final fullPath = folderPath.startsWith('/') 
+          ? folderPath 
+          : '$projectPath/$folderPath';
+      
+      // PROTECCIÓN CRÍTICA: Verificar que la carpeta está dentro del proyecto
+      final normalizedFullPath = fullPath.replaceAll('\\', '/');
+      final normalizedProjectPath = projectPath.replaceAll('\\', '/');
+      
+      if (!normalizedFullPath.startsWith(normalizedProjectPath)) {
+        return 'Error: No se pueden crear carpetas fuera del proyecto';
+      }
+      
+      final directory = Directory(fullPath);
+      
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+        print('✅ Carpeta creada: $fullPath');
+        return 'Carpeta creada exitosamente: $folderPath';
+      } else {
+        print('ℹ️ La carpeta ya existe: $fullPath');
+        return 'La carpeta ya existe: $folderPath';
+      }
+    } catch (e) {
+      print('❌ Error creando carpeta: $e');
+      return 'Error al crear carpeta: $e';
+    }
+  }
+
   Future<String> _executeCreateFile(String filePath, String content, String? projectPath) async {
     try {
       if (projectPath == null || projectPath.isEmpty) {
@@ -731,6 +787,7 @@ Responde en español y sé detallado en tu análisis.''';
       final directory = file.parent;
       if (!await directory.exists()) {
         await directory.create(recursive: true);
+        print('ℹ️ Creando directorio automáticamente: ${directory.path}');
       }
       
       await file.writeAsString(content);

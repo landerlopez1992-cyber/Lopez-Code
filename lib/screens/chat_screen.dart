@@ -3134,6 +3134,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, // ✅ FIX: Tamaño mínimo
                     children: [
                         // Icono del proyecto (robot azul)
                         Container(
@@ -3152,8 +3153,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                         ),
                         const SizedBox(width: 12),
-                        // Tarjeta de trabajo en tiempo real estilo Cursor
-                      Container(
+                        // ✅ FIX: Usar Flexible para evitar overflow
+                        Flexible(
+                          child: Container(
                           constraints: const BoxConstraints(maxWidth: 500),
                           padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -3230,7 +3232,8 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                           ],
                         ),
-                        ),
+                          ), // ✅ Cierre de Container (tarjeta de trabajo)
+                        ), // ✅ Cierre de Flexible
                       ],
                     ),
                   );
