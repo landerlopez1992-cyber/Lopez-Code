@@ -1321,6 +1321,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             // Logo de chevrones azules (igual que en welcome_screen)
             Row(

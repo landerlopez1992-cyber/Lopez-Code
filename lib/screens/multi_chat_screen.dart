@@ -713,15 +713,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       case 'search':
         _showFileSearchDialog();
         break;
-      case 'git':
-        _showGitDialog();
-        break;
-      case 'supabase':
-        _showSupabaseDialog();
-        break;
-      case 'firebase':
-        _showFirebaseDialog();
-        break;
+      // ✅ ELIMINADOS: git, supabase, firebase - Solo mostraban "próximamente disponible"
     }
   }
 
@@ -766,23 +758,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  /// Muestra el diálogo de Git (Commit & Push)
-  void _showGitDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => _GitDialog(projectPath: _currentProjectPath),
-    );
-  }
-
-  /// Muestra el diálogo de Supabase
-  void _showSupabaseDialog() {
-    showDialog(context: context, builder: (context) => _SupabaseDialog());
-  }
-
-  /// Muestra el diálogo de Firebase
-  void _showFirebaseDialog() {
-    showDialog(context: context, builder: (context) => _FirebaseDialog());
-  }
+  // ✅ ELIMINADOS: Métodos de diálogos no funcionales
+  // _showGitDialog, _showSupabaseDialog, _showFirebaseDialog
 
   /// Obtiene el estado del ChatScreen activo
   dynamic _getActiveChatScreenState() {
@@ -1549,8 +1526,70 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         ),
                       ),
                     ),
-                  // Spacer para mantener el chat anclado a la derecha
-                  const Expanded(child: SizedBox.shrink()),
+                  // Panel central vacío - mostrar logo cuando el emulador no está visible
+                  if (!_emulatorVisible)
+                    Expanded(
+                      child: Container(
+                        color: CursorTheme.background,
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evita altura infinita
+                            children: [
+                              // Logo de chevrones azules (igual que en welcome_screen)
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.chevron_left,
+                                    size: 64,
+                                    color: CursorTheme.primary,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    size: 64,
+                                    color: CursorTheme.primary,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 20),
+                              const Text(
+                                'LOPEZ CODE',
+                                style: TextStyle(
+                                  color: CursorTheme.textPrimary,
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 3,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Pro · Settings',
+                                style: TextStyle(
+                                  color: CursorTheme.textSecondary,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 40),
+                              Text(
+                                'Activa el emulador para ver la aplicación',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: CursorTheme.textSecondary,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    // Spacer para mantener el chat anclado a la derecha cuando el emulador está visible
+                    const Expanded(child: SizedBox.shrink()),
                   // Divisor redimensionable entre contenido (o espacio vacío) y chat
                   GestureDetector(
                     onHorizontalDragUpdate: (details) {
@@ -1922,178 +1961,5 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   }
 }
 
-/// Diálogo de Git (Commit & Push)
-class _GitDialog extends StatelessWidget {
-  final String? projectPath;
-
-  const _GitDialog({this.projectPath});
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: CursorTheme.surface,
-      child: Container(
-        width: 500,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.source, color: CursorTheme.primary, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'Git - Commit & Push',
-                  style: TextStyle(
-                    color: CursorTheme.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: Icon(Icons.close, color: CursorTheme.textSecondary),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Funcionalidad de Git próximamente disponible',
-              style: TextStyle(color: CursorTheme.textSecondary),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(
-                    'Cerrar',
-                    style: TextStyle(color: CursorTheme.textPrimary),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Diálogo de Supabase
-class _SupabaseDialog extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: CursorTheme.surface,
-      child: Container(
-        width: 500,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.cloud, color: CursorTheme.primary, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'Conectar con Supabase',
-                  style: TextStyle(
-                    color: CursorTheme.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: Icon(Icons.close, color: CursorTheme.textSecondary),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Funcionalidad de Supabase próximamente disponible',
-              style: TextStyle(color: CursorTheme.textSecondary),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(
-                    'Cerrar',
-                    style: TextStyle(color: CursorTheme.textPrimary),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Diálogo de Firebase
-class _FirebaseDialog extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: CursorTheme.surface,
-      child: Container(
-        width: 500,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.local_fire_department,
-                  color: CursorTheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Conectar con Firebase',
-                  style: TextStyle(
-                    color: CursorTheme.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: Icon(Icons.close, color: CursorTheme.textSecondary),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Funcionalidad de Firebase próximamente disponible',
-              style: TextStyle(color: CursorTheme.textSecondary),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(
-                    'Cerrar',
-                    style: TextStyle(color: CursorTheme.textPrimary),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// ✅ ELIMINADOS: Diálogos no funcionales (_GitDialog, _SupabaseDialog, _FirebaseDialog)
+// Solo mostraban "próximamente disponible" sin funcionalidad real
