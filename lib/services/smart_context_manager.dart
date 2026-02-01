@@ -83,7 +83,16 @@ class SmartContextManager {
       }
     }
     
-    // 5. Documentación relevante (si está activa)
+    // 5. Reglas, estilo de código y memorias del proyecto (NUEVO)
+    final rulesAndMemories = await RuleService.getContextForAI(projectPath);
+    if (rulesAndMemories.isNotEmpty) {
+      buffer.writeln(rulesAndMemories);
+      buffer.writeln();
+      estimatedTokens += _estimateTokens(rulesAndMemories);
+      metadata['rulesAndMemoriesIncluded'] = true;
+    }
+    
+    // 6. Documentación relevante (si está activa)
     if (includeDocumentation) {
       final docContent = await DocumentationService.getActiveDocumentationContent();
       
