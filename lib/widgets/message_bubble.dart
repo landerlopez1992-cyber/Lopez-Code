@@ -4,19 +4,38 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import '../models/message.dart';
+import '../models/pending_action.dart';
 import 'code_viewer.dart';
 import 'cursor_theme.dart';
+import 'pending_actions_card.dart';
 
 class MessageBubble extends StatelessWidget {
   final Message message;
+  final Function(List<PendingAction>)? onAcceptActions; // ✅ NUEVO: Callback para aceptar acciones
+  final Function()? onRejectActions; // ✅ NUEVO: Callback para rechazar acciones
 
-  const MessageBubble({super.key, required this.message});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    this.onAcceptActions,
+    this.onRejectActions,
+  });
 
   Widget _buildMessageContent(BuildContext context, bool isUser) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // ✅ NUEVO: Mostrar tarjeta de acciones pendientes si existen
+        if (message.pendingActions != null && message.pendingActions!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: PendingActionsCard(
+              pendingActions: message.pendingActions!,
+              onAccept: onAcceptActions ?? (actions) {},
+              onReject: onRejectActions ?? () {},
+            ),
+          ),
         // Mostrar imágenes si existen (COMPACTO - tarjetas pequeñas)
         if (message.imageUrls != null && message.imageUrls!.isNotEmpty)
           ...message.imageUrls!.map((imagePath) {

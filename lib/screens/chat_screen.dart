@@ -489,14 +489,21 @@ class _ChatScreenState extends State<ChatScreen> {
                 _isLoading = false; // Detener loading para mostrar diálogo
               });
               
-              print('🔔 Llamando a _showConfirmationDialog...');
-              // Mostrar diálogo de confirmación después del frame actual
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) {
-                  _showConfirmationDialog(pendingActions);
-                  print('✅ _showConfirmationDialog llamado después de build');
-                }
-              });
+              print('🔔 Agregando mensaje con acciones pendientes al chat...');
+              // ✅ NUEVO: Agregar mensaje especial con acciones pendientes en lugar de diálogo
+              if (mounted) {
+                final pendingActionsMsg = Message(
+                  role: 'assistant',
+                  content: 'Esperando tu confirmación para ejecutar ${pendingActions.length} acción(es).',
+                  timestamp: DateTime.now(),
+                  pendingActions: pendingActions, // ✅ Agregar acciones pendientes al mensaje
+                );
+                setState(() {
+                  _messages.add(pendingActionsMsg);
+                });
+                _scrollToBottom();
+                print('✅ Mensaje con acciones pendientes agregado al chat');
+              }
             }
           } else {
             print('❌ Widget no está montado, no se puede mostrar diálogo');
@@ -613,6 +620,53 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       ),
     );
+  }
+
+  // ✅ NUEVO: Manejar aceptación de acciones desde la tarjeta del chat
+  Future<void> _handleAcceptActions(List<PendingAction> actions, int messageIndex) async {
+    print('✅ Aceptando ${actions.length} acciones desde el chat');
+    
+    // Remover el mensaje con acciones pendientes y agregar uno nuevo confirmando
+    if (mounted) {
+      setState(() {
+        _messages.removeAt(messageIndex);
+        _messages.insert(messageIndex, Message(
+          role: 'assistant',
+          content: '✅ Ejecutando ${actions.length} acción(es)...',
+          timestamp: DateTime.now(),
+        ));
+        _isLoading = true;
+      });
+      _scrollToBottom();
+    }
+    
+    // Ejecutar las acciones
+    await _executeConfirmedActions(actions);
+  }
+  
+  // ✅ NUEVO: Manejar rechazo de acciones desde la tarjeta del chat
+  void _handleRejectActions(int messageIndex) {
+    print('❌ Rechazando acciones desde el chat');
+    
+    if (mounted) {
+      setState(() {
+        _messages.removeAt(messageIndex);
+        _messages.insert(messageIndex, Message(
+          role: 'assistant',
+          content: '❌ Acciones canceladas por el usuario.',
+          timestamp: DateTime.now(),
+        ));
+        _isLoading = false;
+      });
+      _scrollToBottom();
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Acciones canceladas'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _executeConfirmedActions(List<PendingAction> acceptedActions) async {
@@ -2867,7 +2921,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 );
               }
-        return MessageBubble(message: _messages[index]);
+        final msg = _messages[index];
+        return MessageBubble(
+          message: msg,
+          onAcceptActions: msg.pendingActions != null && msg.pendingActions!.isNotEmpty
+              ? (actions) => _handleAcceptActions(actions, index)
+              : null,
+          onRejectActions: msg.pendingActions != null && msg.pendingActions!.isNotEmpty
+              ? () => _handleRejectActions(index)
+              : null,
+        );
       },
     );
   }

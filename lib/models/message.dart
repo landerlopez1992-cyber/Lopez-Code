@@ -1,3 +1,5 @@
+import '../models/pending_action.dart';
+
 class Message {
   final String role; // 'user' o 'assistant'
   final String content;
@@ -5,6 +7,7 @@ class Message {
   final List<String>? imageUrls;
   final String? codeBlock;
   final String? filePath;
+  final List<PendingAction>? pendingActions; // ✅ NUEVO: Acciones pendientes para mostrar en el chat
 
   Message({
     required this.role,
@@ -13,6 +16,7 @@ class Message {
     this.imageUrls,
     this.codeBlock,
     this.filePath,
+    this.pendingActions, // ✅ NUEVO
   });
 
   Map<String, dynamic> toJson() {
@@ -23,6 +27,7 @@ class Message {
       'imageUrls': imageUrls,
       'codeBlock': codeBlock,
       'filePath': filePath,
+      'pendingActions': pendingActions?.map((a) => a.toJson()).toList(),
     };
   }
 
@@ -34,6 +39,11 @@ class Message {
       imageUrls: json['imageUrls'] != null ? List<String>.from(json['imageUrls']) : null,
       codeBlock: json['codeBlock'],
       filePath: json['filePath'],
+      pendingActions: json['pendingActions'] != null
+          ? (json['pendingActions'] as List)
+              .map((a) => PendingAction.fromJson(a))
+              .toList()
+          : null,
     );
   }
 }
