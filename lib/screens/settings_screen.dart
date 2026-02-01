@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/settings_service.dart';
+import '../services/code_indexing_service.dart';
+import '../services/vector_database_service.dart';
+import '../services/project_service.dart';
 import 'git_settings_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -18,6 +21,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _apiKeySaved = false;
   bool _showApiKey = false;
   String _selectedModel = 'gpt-4o';
+  
+  // Indexación de código
+  bool _isIndexing = false;
+  double _indexingProgress = 0.0;
+  String _indexingStatus = '';
+  DatabaseStats? _dbStats;
 
   @override
   void initState() {
@@ -37,6 +46,127 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _behaviorController.text = behavior;
       _selectedModel = model;
     });
+    
+    // Cargar estadísticas de indexación
+    await _loadIndexStats();
+  }
+  
+  Future<void> _loadIndexStats() async {
+    try {
+      final stats = await VectorDatabaseService.getStats();
+      if (mounted) {
+        setState(() {
+          _dbStats = stats;
+        });
+      }
+    } catch (e) {
+      print('⚠️ Error al cargar estadísticas: $e');
+    }
+  }
+  
+  Future<void> _indexProject() async {
+    try {
+      final projectPath = await ProjectService.getProjectPath();
+      
+      if (projectPath == null || projectPath.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ No hay proyecto cargado'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      
+      setState(() {
+        _isIndexing = true;
+        _indexingProgress = 0.0;
+        _indexingStatus = 'Iniciando indexación...';
+      });
+      
+      // Indexar proyecto
+      final result = await CodeIndexingService.indexProject(projectPath);
+      
+      if (mounted) {
+        setState(() {
+          _isIndexing = false;
+          _indexingProgress = 1.0;
+          _indexingStatus = 'Indexación completada';
+        });
+        
+        // Recargar estadísticas
+        await _loadIndexStats();
+        
+        // Mostrar resultado
+        if (result.success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '✅ Proyecto indexado:\n'
+                '${result.filesProcessed} archivos procesados\n'
+                '${result.embeddingsCreated} embeddings creados\n'
+                'Tiempo: ${result.duration.inSeconds}s',
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '⚠️ Indexación con errores:\n'
+                '${result.filesProcessed} procesados, ${result.errors} errores',
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isIndexing = false;
+          _indexingStatus = 'Error';
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al indexar: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
+  }
+  
+  Future<void> _clearIndex() async {
+    try {
+      await VectorDatabaseService.clearDatabase();
+      await _loadIndexStats();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Índice limpiado correctamente'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error al limpiar índice: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _saveApiKey() async {
@@ -170,6 +300,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildStatRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.7),
+              fontSize: 13,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
   @override
   void dispose() {
     _apiKeyController.dispose();
@@ -364,6 +520,159 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     color: Colors.blue[300],
                                     fontSize: 11,
                                     decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+                
+                // Code Indexing Section (como Cursor)
+                Card(
+                  color: const Color(0xFF2D2D30),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.code, color: Colors.white70),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Indexación de Código (RAG)',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Indexa tu proyecto para que la IA pueda buscar código relevante automáticamente (como Cursor)',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Estadísticas de indexación
+                        if (_dbStats != null) ...[
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF3C3C3C),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '📊 Estadísticas',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.9),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                _buildStatRow('Archivos indexados', '${_dbStats!.uniqueFiles}'),
+                                _buildStatRow('Embeddings creados', '${_dbStats!.totalEmbeddings}'),
+                                if (_dbStats!.languageDistribution.isNotEmpty)
+                                  ...(_dbStats!.languageDistribution.entries.map((e) =>
+                                    _buildStatRow('  ${e.key}', '${e.value} fragmentos')
+                                  )),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        
+                        // Progress bar (cuando está indexando)
+                        if (_isIndexing) ...[
+                          LinearProgressIndicator(
+                            value: _indexingProgress > 0 ? _indexingProgress : null,
+                            backgroundColor: const Color(0xFF3C3C3C),
+                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _indexingStatus,
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        
+                        // Botones de indexación
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: _isIndexing ? null : _indexProject,
+                              icon: _isIndexing
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                                    )
+                                  : const Icon(Icons.refresh),
+                              label: Text(_isIndexing ? 'Indexando...' : 'Indexar Proyecto'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF007ACC),
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                            if (_dbStats != null && _dbStats!.totalEmbeddings > 0)
+                              OutlinedButton.icon(
+                                onPressed: _isIndexing ? null : _clearIndex,
+                                icon: const Icon(Icons.delete_outline),
+                                label: const Text('Limpiar Índice'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                  side: const BorderSide(color: Colors.red),
+                                ),
+                              ),
+                          ],
+                        ),
+                        
+                        const SizedBox(height: 12),
+                        
+                        // Información adicional
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF007ACC).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF007ACC).withOpacity(0.3),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.info_outline, color: Color(0xFF007ACC), size: 20),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Primera vez: puede tardar 1-15 minutos según el tamaño del proyecto. '
+                                  'Después solo se reindexan archivos modificados.',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.9),
+                                    fontSize: 12,
                                   ),
                                 ),
                               ),
