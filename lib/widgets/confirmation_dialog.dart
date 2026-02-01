@@ -37,27 +37,25 @@ class ConfirmationDialog extends StatelessWidget {
           ),
         ],
       ),
-      content: Container(
-        constraints: const BoxConstraints(maxWidth: 500, maxHeight: 400),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'La IA quiere ejecutar las siguientes acciones:',
-              style: const TextStyle(
-                color: CursorTheme.textSecondary,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: (pendingActions.length * 140.0).clamp(100.0, 300.0).toDouble(),
-              child: ListView.builder(
-                shrinkWrap: false,
-                itemCount: pendingActions.length,
-                itemBuilder: (context, index) {
-                  final action = pendingActions[index];
+      content: SizedBox(
+        width: 500, // ✅ FIX: Ancho fijo en lugar de constraints
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 400), // ✅ FIX: Solo maxHeight
+          child: SingleChildScrollView( // ✅ FIX: ScrollView para evitar overflow
+            child: Column(
+              mainAxisSize: MainAxisSize.min, // ✅ FIX: Tamaño mínimo
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'La IA quiere ejecutar las siguientes acciones:',
+                  style: const TextStyle(
+                    color: CursorTheme.textSecondary,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                // ✅ FIX: Usar Column en lugar de ListView para evitar problemas de layout
+                ...pendingActions.map((action) {
                   return Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     padding: const EdgeInsets.all(12),
@@ -244,40 +242,40 @@ class ConfirmationDialog extends StatelessWidget {
                       ],
                     ),
                   );
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: Colors.blue.withOpacity(0.3),
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline, 
-                    size: 18, 
-                    color: Colors.blue,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Estas acciones se ejecutarán después de tu confirmación.',
-                      style: const TextStyle(
-                        color: CursorTheme.textSecondary,
-                        fontSize: 12,
-                      ),
+                }).toList(),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.blue.withOpacity(0.3),
+                      width: 1,
                     ),
                   ),
-                ],
-              ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, 
+                        size: 18, 
+                        color: Colors.blue,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Estas acciones se ejecutarán después de tu confirmación.',
+                          style: const TextStyle(
+                            color: CursorTheme.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
       actions: [
