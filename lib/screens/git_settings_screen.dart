@@ -237,9 +237,14 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+      body: Center( // ✅ FIX: Centrar el contenido
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 600), // ✅ FIX: Ancho máximo compacto
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
           // Información del proyecto
           Card(
             color: const Color(0xFF2D2D30),
@@ -479,7 +484,10 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
               ),
             ),
           ),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
