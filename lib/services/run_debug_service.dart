@@ -20,8 +20,12 @@ class RunDebugService {
       throw Exception('No hay proyecto seleccionado');
     }
 
-    if (_isRunning) {
-      throw Exception('Ya hay un proceso en ejecución');
+    // ✅ FIX: Detener proceso anterior si existe (evita cuelgues)
+    if (_isRunning && _currentProcess != null) {
+      print('⚠️ Deteniendo proceso anterior antes de iniciar uno nuevo...');
+      await stop();
+      // Esperar un momento para que el proceso termine completamente
+      await Future.delayed(const Duration(milliseconds: 500));
     }
 
     try {
@@ -94,13 +98,29 @@ class RunDebugService {
     if (_currentProcess != null) {
       try {
         _currentProcess!.kill();
-        await _currentProcess!.exitCode;
+        // ✅ FIX: Timeout para evitar cuelgues
+        await _currentProcess!.exitCode.timeout(
+          const Duration(seconds: 3),
+          onTimeout: () {
+            print('⚠️ Timeout al detener proceso, forzando terminación');
+            return -1;
+          },
+        );
       } catch (e) {
+        print('⚠️ Error al detener proceso: $e');
         // Ignorar errores al detener
       }
       _currentProcess = null;
     }
     _isRunning = false;
+    _currentOutput = null;
+  }
+  
+  // ✅ NUEVO: Limpiar todo cuando se cambia de proyecto
+  static Future<void> cleanup() async {
+    print('🧹 Limpiando RunDebugService...');
+    await stop();
+    _currentOutput = null;
   }
 
   // Verificar si hay un proceso ejecutándose

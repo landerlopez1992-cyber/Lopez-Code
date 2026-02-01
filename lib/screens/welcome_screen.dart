@@ -7,6 +7,7 @@ import '../services/project_service.dart';
 import '../services/native_file_picker.dart';
 import '../services/repository_service.dart';
 import '../services/permission_service.dart';
+import '../services/run_debug_service.dart';
 import '../widgets/cursor_theme.dart';
 import 'multi_chat_screen.dart';
 
@@ -164,6 +165,11 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         print('   Ruta: $result');
         
         print('📁 Guardando proyecto...');
+        
+        // ✅ FIX: Limpiar servicios antes de cambiar de proyecto (evita cuelgues)
+        print('🧹 Limpiando servicios del proyecto anterior...');
+        await RunDebugService.cleanup();
+        
         await ProjectService.saveProjectPath(result);
         
         // Verificar que se guardó correctamente
@@ -445,6 +451,11 @@ Error original: $e''';
     }
     
     print('📁 Abriendo proyecto reciente: $normalizedPath');
+    
+    // ✅ FIX: Limpiar servicios antes de cambiar de proyecto (evita cuelgues)
+    print('🧹 Limpiando servicios del proyecto anterior...');
+    await RunDebugService.cleanup();
+    
     await ProjectService.saveProjectPath(normalizedPath);
     await _saveRecentProject(normalizedPath);
     

@@ -62,6 +62,7 @@ class _AppInitializerState extends State<AppInitializer> {
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evita altura infinita
             children: [
               const CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
