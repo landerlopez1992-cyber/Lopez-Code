@@ -432,8 +432,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                           : MediaQuery.of(context).size.height,
                     ),
                     child: Align(
-                alignment: Alignment.topCenter,
-              child: AnimatedBuilder(
+                      alignment: Alignment.topCenter,
+                      child: AnimatedBuilder(
                 animation: _debugService,
                 builder: (context, child) {
                   return Transform.scale(
@@ -496,8 +496,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         : null,
                     ),
                   );
-                },
-              ),
+                      },
                     ),
                   ),
                 );
