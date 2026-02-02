@@ -1244,6 +1244,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                     ),
                   ),
               ],
+              ),
             ),
           ),
           // Divisor redimensionable entre explorador y contenido principal
