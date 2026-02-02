@@ -14,11 +14,19 @@ class OpenAIService {
   String model; // Modelo configurable
   
   // Cliente HTTP reutilizable con configuración optimizada
-  late final http.Client _httpClient;
+  http.Client? _httpClient;
   bool _isCancelled = false;
 
   OpenAIService({required this.apiKey, this.model = 'gpt-4o'}) {
     _httpClient = http.Client();
+  }
+  
+  // ✅ GETTER: Obtener cliente HTTP, crearlo si no existe
+  http.Client get httpClient {
+    if (_httpClient == null) {
+      _httpClient = http.Client();
+    }
+    return _httpClient!;
   }
   
   /// Cancela la petición actual
@@ -26,19 +34,14 @@ class OpenAIService {
     print('🛑 OpenAIService: Cancelando petición...');
     _isCancelled = true;
     try {
-      _httpClient.close();
+      _httpClient?.close();
     } catch (e) {
       print('⚠️ Error al cerrar cliente HTTP: $e');
     }
-    // ✅ FIX: Reiniciar cliente solo si está cerrado
-    try {
-      _httpClient = http.Client();
-    } catch (e) {
-      print('⚠️ Error al reiniciar cliente HTTP: $e');
-      // Si falla, intentar crear uno nuevo
-      _httpClient = http.Client();
-    }
-    print('✅ OpenAIService: Petición cancelada');
+    // ✅ FIX: Reiniciar cliente creando uno nuevo
+    _httpClient = null; // Liberar referencia
+    _httpClient = http.Client(); // Crear nuevo cliente
+    print('✅ OpenAIService: Petición cancelada y cliente reiniciado');
   }
 
   // Método para cambiar el modelo
@@ -49,7 +52,8 @@ class OpenAIService {
   
   // Cerrar el cliente cuando ya no se necesite
   void dispose() {
-    _httpClient.close();
+    _httpClient?.close();
+    _httpClient = null;
   }
 
   // Callback para notificar sobre operaciones de archivos
@@ -367,7 +371,7 @@ Responde en español y sé detallado en tu análisis.''';
       print('📊 Tokens estimados: ~$estimatedTokens');
 
       // Usar cliente HTTP reutilizable con timeout optimizado
-      final response = await _httpClient
+      final response = await httpClient
           .post(
             Uri.parse('$baseUrl/chat/completions'),
             headers: headers,
@@ -563,7 +567,7 @@ Responde en español y sé detallado en tu análisis.''';
           
           // Hacer una segunda llamada con los resultados
           print('🔄 Enviando resultados de funciones a la IA...');
-          final secondResponse = await _httpClient.post(
+          final secondResponse = await httpClient.post(
             Uri.parse('$baseUrl/chat/completions'),
             headers: headers,
             body: jsonEncode({
@@ -1121,7 +1125,7 @@ Responde en español y sé detallado en tu análisis.''';
   Future<Map<String, dynamic>> checkAccountStatus() async {
     try {
       // Intentar hacer una llamada simple a la API para verificar el estado
-      final response = await _httpClient.get(
+      final response = await httpClient.get(
         Uri.parse('$baseUrl/models'),
         headers: {
           'Authorization': 'Bearer $apiKey',

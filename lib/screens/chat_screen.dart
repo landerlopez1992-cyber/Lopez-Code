@@ -1090,6 +1090,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
       // Detectar URL para proyectos web
       String? detectedUrl;
+      
+      // ✅ BANDERA: Detectar si hay error de soporte web
+      bool hasWebSupportError = false;
 
       // Analizar progreso
       String currentStatus = 'Iniciando $projectTypeName...';
@@ -1133,11 +1136,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 line.contains('To add web support to a project, run `flutter create .`') ||
                 (line.contains('PathNotFoundException') && line.contains('web/') && line.contains('No such file or directory'))) {
               print('🔴 Error detectado: Proyecto sin soporte web');
+              hasWebSupportError = true; // ✅ Marcar que hay error de soporte web
               _debugService.addOutput('\n⚠️ PROYECTO SIN SOPORTE WEB\n');
               _debugService.addOutput('Este proyecto Flutter no tiene configurado el soporte para web.\n');
               _debugService.addOutput('Para agregar soporte web, ejecuta: flutter create .\n');
               _debugService.addOutput('O cambia la plataforma a Android/iOS/macOS desde el selector.\n\n');
               _debugService.addProblem(line);
+              
+              // ✅ DETENER PROCESO Y LIMPIAR ESTADO
+              setState(() {
+                _isRunning = false;
+              });
+              _debugService.setRunning(false);
+              _debugService.setAppUrl(null); // ✅ NO establecer URL si hay error
+              _debugService.setCompilationProgress(0.0, 'Error: Proyecto sin soporte web');
               
               // Mostrar mensaje claro al usuario
               if (mounted) {
@@ -1269,8 +1281,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               }
               
-              // También detectar cuando Chrome se abre (indica que la app está lista)
-              if (line.contains('Chrome') && (line.contains('Launching') || line.contains('Starting'))) {
+              // ✅ También detectar cuando Chrome se abre (indica que la app está lista)
+              // PERO solo si NO hay error de soporte web
+              if (!hasWebSupportError && line.contains('Chrome') && (line.contains('Launching') || line.contains('Starting'))) {
                 // Si no se detectó URL aún, usar localhost:8080 como fallback (puerto común de Flutter web)
                 if (detectedUrl == null) {
                   detectedUrl = 'http://localhost:8080';
@@ -1293,10 +1306,14 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       );
       
-      if (detectedUrl != null) {
+      // ✅ NO establecer URL final si hay error de soporte web
+      if (!hasWebSupportError && detectedUrl != null) {
         _debugService.setAppUrl(detectedUrl);
-          print('🌐 URL final establecida: $detectedUrl');
-        }
+        print('🌐 URL final establecida: $detectedUrl');
+      } else if (hasWebSupportError) {
+        _debugService.setAppUrl(null);
+        print('🚫 NO estableciendo URL final: Error de soporte web detectado');
+      }
 
         // Variables para detectar si se ejecutó el fallback web
         bool fallbackWebExecuted = false;
