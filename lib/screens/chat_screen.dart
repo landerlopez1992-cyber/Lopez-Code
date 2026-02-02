@@ -1160,24 +1160,24 @@ class _ChatScreenState extends State<ChatScreen> {
                 );
               }
               
-              // No marcar como error crítico, es un problema del proyecto, no de la app
-              continue;
+              // No marcar como error crítico adicional, es un problema del proyecto, no de la app
+              // Ya se agregó a problemas arriba, así que no procesamos más esta línea
+            } else {
+              // Detectar errores (solo si no es el error de soporte web)
+              final lowerLine = line.toLowerCase();
+              if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
+                  (lowerLine.contains('error:') && !lowerLine.contains('no error')) ||
+                  (lowerLine.contains('failed') && !lowerLine.contains('no devices found')) ||
+                  lowerLine.contains('undefined name') ||
+                  lowerLine.contains('undefined class') ||
+                  lowerLine.contains('undefined method') ||
+                  lowerLine.contains('undefined getter') ||
+                  lowerLine.contains('syntax error') ||
+                  (lowerLine.contains('cannot') && (lowerLine.contains('find') || lowerLine.contains('resolve')))) {
+                _debugService.addProblem(line);
+                print('🔴 Error detectado: $line');
+              }
             }
-            
-            // Detectar errores
-          final lowerLine = line.toLowerCase();
-          if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
-              (lowerLine.contains('error:') && !lowerLine.contains('no error')) ||
-              (lowerLine.contains('failed') && !lowerLine.contains('no devices found')) ||
-              lowerLine.contains('undefined name') ||
-              lowerLine.contains('undefined class') ||
-              lowerLine.contains('undefined method') ||
-              lowerLine.contains('undefined getter') ||
-              lowerLine.contains('syntax error') ||
-              (lowerLine.contains('cannot') && (lowerLine.contains('find') || lowerLine.contains('resolve')))) {
-            _debugService.addProblem(line);
-            print('🔴 Error detectado: $line');
-          }
           
             // Analizar progreso
             double progress = _debugService.compilationProgress;
