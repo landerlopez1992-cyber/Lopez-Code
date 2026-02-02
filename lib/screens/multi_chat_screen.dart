@@ -432,14 +432,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                           : MediaQuery.of(context).size.height,
                     ),
                     child: Align(
+                alignment: Alignment.topCenter,
+              child: AnimatedBuilder(
+                animation: _debugService,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: _emulatorScale,
                       alignment: Alignment.topCenter,
-                      child: AnimatedBuilder(
-                        animation: _debugService,
-                        builder: (context, child) {
-                          return Transform.scale(
-                            scale: _emulatorScale,
-                            alignment: Alignment.topCenter,
-                            child: PhoneEmulator(
+                    child: PhoneEmulator(
                       platform: _platformService.selectedPlatform,
                       isRunning: _debugService.isRunning,
                       appUrl: _debugService.appUrl,
@@ -494,16 +494,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                             ),
                           )
                         : null,
-                      ),
                     ),
                   );
                 },
               ),
+                    ),
+                  ),
+                );
+              },
             ),
-          ),
-        );
-      },
-    ),
           ),
         ),
         ),
