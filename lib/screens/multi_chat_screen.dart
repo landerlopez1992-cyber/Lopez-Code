@@ -1174,10 +1174,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                 right: BorderSide(color: CursorTheme.border, width: 1),
               ),
             ),
-            child: Column(
-              children: [
-                // Barra de herramientas (foto 2)
-                ExplorerToolbar(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita
+                children: [
+                  // Barra de herramientas (foto 2)
+                  ExplorerToolbar(
                           selectedIndex: _isSearchMode ? 0 : -1, // ✅ FIX: Mostrar seleccionado solo en modo búsqueda
                   onItemSelected: (index) {
                     setState(() {
