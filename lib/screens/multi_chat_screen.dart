@@ -498,6 +498,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                   );
                 },
               ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ),
