@@ -20,6 +20,9 @@ import '../services/platform_service.dart';
 import '../models/pending_action.dart';
 import '../services/conversation_memory_service.dart';
 import '../services/smart_context_manager.dart';
+import '../services/task_orchestrator_service.dart';
+import '../services/project_analyzer_service.dart';
+import '../services/auto_execution_service.dart';
 import 'settings_screen.dart';
 
 // Custom painter para el icono de código (corchetes angulares <>)
@@ -303,7 +306,8 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
       
-      // ✨ NUEVO SISTEMA INTELIGENTE DE CONTEXTO ✨
+      // ✨ NUEVO SISTEMA INTELIGENTE DE CONTEXTO CON ANÁLISIS PREVIO ✨
+      // 🔍 PASO 1: ANALIZAR ANTES DE ACTUAR
       // Construye contexto optimizado automáticamente con timeout para evitar cuelgues
       ContextBundle contextBundle;
       try {
@@ -315,8 +319,9 @@ class _ChatScreenState extends State<ChatScreen> {
           includeDocumentation: SmartContextManager.needsDocumentation(userMessage),
           includeHistory: true,
           includeProjectStructure: SmartContextManager.needsFullContext(userMessage),
+          analyzeBeforeActing: true, // ✨ ACTIVAR ANÁLISIS PREVIO
         ).timeout(
-          const Duration(seconds: 10), // ✅ FIX: Timeout para evitar cuelgues
+          const Duration(seconds: 15), // ✅ Más tiempo para análisis completo
           onTimeout: () {
             print('⚠️ Timeout al construir contexto, usando contexto mínimo');
             return ContextBundle(

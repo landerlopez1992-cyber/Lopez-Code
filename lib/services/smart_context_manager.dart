@@ -3,6 +3,8 @@ import 'conversation_memory_service.dart';
 import 'documentation_service.dart';
 import 'semantic_search_service.dart';
 import 'rule_service.dart';
+import 'task_orchestrator_service.dart';
+import 'project_analyzer_service.dart';
 
 /// Context Manager profesional para optimizar uso de tokens
 /// ✨ AHORA CON BÚSQUEDA SEMÁNTICA (RAG) ✨
@@ -11,7 +13,7 @@ class SmartContextManager {
   static const int _avgCharsPerToken = 4; // Aproximación
   
   /// Construye el contexto optimizado para enviar a la IA
-  /// 🧠 CON BÚSQUEDA SEMÁNTICA AUTOMÁTICA 🧠
+  /// 🧠 CON ANÁLISIS PREVIO + BÚSQUEDA SEMÁNTICA 🧠
   static Future<ContextBundle> buildOptimizedContext({
     required String userMessage,
     required String projectPath,
@@ -21,10 +23,61 @@ class SmartContextManager {
     bool includeHistory = true,
     bool includeProjectStructure = false,
     bool useSemanticSearch = true, // ✨ NUEVO: búsqueda semántica
+    bool analyzeBeforeActing = true, // ✨ NUEVO: analizar antes de actuar
   }) async {
     final buffer = StringBuffer();
     int estimatedTokens = 0;
     final metadata = <String, dynamic>{};
+    
+    // ✨ PASO 0: ANALIZAR EL PROYECTO ANTES DE ACTUAR
+    if (analyzeBeforeActing) {
+      print('🔍 === ANALIZANDO PROYECTO ANTES DE ACTUAR ===');
+      
+      // 1. Detectar tipo de tarea
+      final taskType = TaskOrchestratorService.detectTaskType(userMessage);
+      print('📋 Tipo de tarea detectado: $taskType');
+      
+      // 2. Analizar proyecto
+      final analysis = await ProjectAnalyzerService.analyzeProject(projectPath);
+      final analysisReport = ProjectAnalyzerService.generateReport(analysis);
+      
+      // 3. Generar plan de ejecución
+      final executionPlan = await TaskOrchestratorService.generateExecutionPlan(
+        projectPath: projectPath,
+        userMessage: userMessage,
+        taskType: taskType,
+      );
+      
+      // 4. Construir contexto enriquecido
+      final enrichedContext = await TaskOrchestratorService.buildEnrichedContext(
+        projectPath: projectPath,
+        contextFiles: executionPlan.contextFiles,
+        userMessage: userMessage,
+      );
+      
+      // Agregar análisis y plan al contexto
+      buffer.writeln('=== ANÁLISIS PREVIO COMPLETO ===\n');
+      buffer.writeln(analysisReport);
+      buffer.writeln('\n=== PLAN DE EJECUCIÓN ===');
+      buffer.writeln('Tipo de tarea: ${executionPlan.taskType}');
+      buffer.writeln('Descripción: ${executionPlan.description}');
+      buffer.writeln('Acciones planificadas: ${executionPlan.actions.length}');
+      buffer.writeln('Requiere confirmación: ${executionPlan.requiresConfirmation}\n');
+      
+      // Agregar contexto enriquecido
+      buffer.writeln(enrichedContext);
+      buffer.writeln();
+      
+      estimatedTokens += _estimateTokens(analysisReport);
+      estimatedTokens += _estimateTokens(enrichedContext);
+      
+      metadata['taskType'] = executionPlan.taskType.toString();
+      metadata['requiresConfirmation'] = executionPlan.requiresConfirmation;
+      metadata['contextFilesAnalyzed'] = executionPlan.contextFiles.length;
+      metadata['projectIsComplete'] = analysis.isComplete;
+      
+      print('✅ Análisis completado. Archivos analizados: ${executionPlan.contextFiles.length}');
+    }
     
     // 1. Sistema: Prompt profesional conciso con personalidad Lopez Code
     final systemPrompt = _getSystemPrompt(projectPath: projectPath);
