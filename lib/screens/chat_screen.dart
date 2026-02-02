@@ -1128,6 +1128,42 @@ class _ChatScreenState extends State<ChatScreen> {
           
             print('📥 Flutter output: $line');
             
+            // ✅ DETECCIÓN ESPECIAL: Proyecto sin soporte web
+            if (line.contains('This application is not configured to build on the web') ||
+                line.contains('To add web support to a project, run `flutter create .`') ||
+                (line.contains('PathNotFoundException') && line.contains('web/') && line.contains('No such file or directory'))) {
+              print('🔴 Error detectado: Proyecto sin soporte web');
+              _debugService.addOutput('\n⚠️ PROYECTO SIN SOPORTE WEB\n');
+              _debugService.addOutput('Este proyecto Flutter no tiene configurado el soporte para web.\n');
+              _debugService.addOutput('Para agregar soporte web, ejecuta: flutter create .\n');
+              _debugService.addOutput('O cambia la plataforma a Android/iOS/macOS desde el selector.\n\n');
+              _debugService.addProblem(line);
+              
+              // Mostrar mensaje claro al usuario
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Text(
+                      '⚠️ Este proyecto no tiene soporte web. Ejecuta "flutter create ." o cambia a otra plataforma.',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    backgroundColor: Colors.orange,
+                    duration: const Duration(seconds: 5),
+                    action: SnackBarAction(
+                      label: 'Ver detalles',
+                      textColor: Colors.white,
+                      onPressed: () {
+                        _debugService.openPanel();
+                      },
+                    ),
+                  ),
+                );
+              }
+              
+              // No marcar como error crítico, es un problema del proyecto, no de la app
+              continue;
+            }
+            
             // Detectar errores
           final lowerLine = line.toLowerCase();
           if (RegExp(r'\.dart:\d+:\d+:\s*(error|warning):').hasMatch(line) ||
