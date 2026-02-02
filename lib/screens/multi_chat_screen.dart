@@ -434,12 +434,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                     child: Align(
                       alignment: Alignment.topCenter,
                       child: AnimatedBuilder(
-                animation: _debugService,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: _emulatorScale,
-                      alignment: Alignment.topCenter,
-                    child: PhoneEmulator(
+                        animation: _debugService,
+                        builder: (context, child) {
+                          return Transform.scale(
+                            scale: _emulatorScale,
+                            alignment: Alignment.topCenter,
+                            child: PhoneEmulator(
                       platform: _platformService.selectedPlatform,
                       isRunning: _debugService.isRunning,
                       appUrl: _debugService.appUrl,
