@@ -420,9 +420,18 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             width: double.infinity,
             color: CursorTheme.background,
             padding: EdgeInsets.zero,
-            child: SingleChildScrollView(
-              padding: EdgeInsets.zero,
-              child: Align(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  padding: EdgeInsets.zero,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                      maxHeight: constraints.maxHeight.isFinite 
+                          ? constraints.maxHeight 
+                          : MediaQuery.of(context).size.height,
+                    ),
+                    child: Align(
                 alignment: Alignment.topCenter,
               child: AnimatedBuilder(
                 animation: _debugService,
