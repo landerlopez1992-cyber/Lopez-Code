@@ -192,6 +192,55 @@ class SmartContextManager {
     );
   }
   
+  /// Verifica si es un mensaje simple que NO requiere análisis del proyecto
+  static bool _isSimpleMessage(String message) {
+    final lowerMessage = message.toLowerCase().trim();
+    
+    // Mensajes muy cortos
+    if (lowerMessage.length < 3) {
+      return true;
+    }
+    
+    // Saludos y mensajes simples
+    final simpleMessages = [
+      'hola',
+      'hi',
+      'hello',
+      'hey',
+      'buenos días',
+      'buenas tardes',
+      'buenas noches',
+      'gracias',
+      'thanks',
+      'ok',
+      'okay',
+      'sí',
+      'si',
+      'no',
+      'perfecto',
+      'perfect',
+      'bien',
+      'good',
+      'de nada',
+      'you\'re welcome',
+      'vale',
+      'okey',
+    ];
+    
+    // Verificar si es exactamente un mensaje simple
+    if (simpleMessages.contains(lowerMessage)) {
+      return true;
+    }
+    
+    // Verificar si solo contiene palabras simples
+    final words = lowerMessage.split(' ');
+    if (words.length <= 2 && words.every((word) => simpleMessages.contains(word))) {
+      return true;
+    }
+    
+    return false;
+  }
+  
   /// Verifica si es una consulta simple (no requiere búsqueda semántica)
   static bool _isSimpleQuery(String message) {
     final lowerMsg = message.toLowerCase().trim();
