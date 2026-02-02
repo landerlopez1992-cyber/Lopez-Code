@@ -64,7 +64,34 @@ class TaskOrchestratorService {
   
   /// Detecta el tipo de tarea basándose en la pregunta del usuario
   static TaskType detectTaskType(String userMessage) {
-    final lowerMessage = userMessage.toLowerCase();
+    final lowerMessage = userMessage.toLowerCase().trim();
+    
+    // ✅ FILTRO: Mensajes simples que NO requieren acciones
+    final simpleGreetings = [
+      'hola',
+      'hi',
+      'hello',
+      'hey',
+      'buenos días',
+      'buenas tardes',
+      'buenas noches',
+      'gracias',
+      'thanks',
+      'ok',
+      'okay',
+      'sí',
+      'si',
+      'no',
+      'perfecto',
+      'perfect',
+      'bien',
+      'good',
+    ];
+    
+    // Si es un saludo simple, retornar singleFile pero marcar como "no action"
+    if (simpleGreetings.contains(lowerMessage) || lowerMessage.length < 3) {
+      return TaskType.singleFile; // Retornar singleFile pero será filtrado después
+    }
     
     // Patrones para proyecto completo
     final fullProjectPatterns = [

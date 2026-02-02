@@ -233,7 +233,7 @@ Responde en español y sé detallado en tu análisis.''';
           'type': 'function',
           'function': {
             'name': 'compile_project',
-            'description': 'Compila el proyecto Flutter y detecta errores de compilación. Útil para verificar que el código compila correctamente.',
+            'description': 'Compila el proyecto Flutter y detecta errores de compilación. Útil para verificar que el código compila correctamente. IMPORTANTE: Solo usar cuando el usuario explícitamente pida compilar, ejecutar, probar o verificar el proyecto. NO usar para saludos o preguntas simples.',
             'parameters': {
               'type': 'object',
               'properties': {

@@ -30,7 +30,8 @@ class SmartContextManager {
     final metadata = <String, dynamic>{};
     
     // ✨ PASO 0: ANALIZAR EL PROYECTO ANTES DE ACTUAR
-    if (analyzeBeforeActing) {
+    // ✅ FILTRO: NO analizar para mensajes simples (saludos, etc.)
+    if (analyzeBeforeActing && !_isSimpleMessage(userMessage)) {
       print('🔍 === ANALIZANDO PROYECTO ANTES DE ACTUAR ===');
       
       // 1. Detectar tipo de tarea
