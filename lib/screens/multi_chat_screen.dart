@@ -406,18 +406,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
   /// Construye la pestaña Preview (emulador)
   Widget _buildPreviewTab() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: constraints.maxHeight.isFinite 
-                ? constraints.maxHeight 
-                : MediaQuery.of(context).size.height,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita en web
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita en web
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         // Emulador - Expanded para ocupar todo el espacio disponible
         Expanded(
           child: Container(
@@ -1283,17 +1279,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                             ),
                 ),
               ),
-              child: LayoutBuilder(
-                builder: (context, boxConstraints) {
-                  return ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: boxConstraints.maxHeight.isFinite 
-                          ? boxConstraints.maxHeight 
-                          : MediaQuery.of(context).size.height,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita en web
-                      children: [
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita en web
+                  children: [
                   // Pestañas Preview/Code
                   Container(
                     height: 40,
