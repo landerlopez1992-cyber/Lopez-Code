@@ -513,6 +513,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             ),
           ),
       ],
+      ),
     );
   }
 
@@ -1651,6 +1652,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                               ),
                   ),
                 ],
+                ),
               ),
             ),
                     ),
