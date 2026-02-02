@@ -505,7 +505,6 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             ),
           ),
         ),
-        ),
         // Debug Console Panel (si está visible) - pegado debajo del emulador sin espacio
         if (_debugService.isVisible && _debugPanelWidth > 0)
           Container(
