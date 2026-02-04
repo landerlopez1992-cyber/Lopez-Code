@@ -295,10 +295,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (isErrorReport && userMessage.length > 6000) {
       userMessage = '${userMessage.substring(0, 6000)}\n\n...[Errores truncados para evitar bloqueo]';
     }
-    // Guardar el mensaje del usuario antes de limpiar
-    final userMessageToSave = userMessage;
-    final imagesToSave = List<String>.from(imagesToSend);
-    final filePathToSave = filePathToSend;
     
     _messageController.clear();
 
@@ -481,8 +477,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
       // ✅ NUEVO: Verificar saldo antes de enviar
       final estimatedTokens = contextBundle.estimatedTokens;
+      // Obtener modelo actual
+      final currentModel = _openAIService?.model ?? 'gpt-4o-mini';
       // Costo aproximado por token (ajustar según modelo)
-      final costPerToken = model.contains('gpt-4o') ? 0.00001 : 0.000002; // gpt-4o es más caro
+      final costPerToken = currentModel.contains('gpt-4o') ? 0.00001 : 0.000002; // gpt-4o es más caro
       
       final hasBalance = await CreditService.hasEnoughBalance(estimatedTokens, costPerToken);
       if (!hasBalance) {

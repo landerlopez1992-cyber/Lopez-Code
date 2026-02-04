@@ -15,6 +15,7 @@ import '../services/chat_storage_service.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
 import '../services/devtools_service.dart';
+import '../services/credit_service.dart';
 import '../widgets/run_debug_toolbar.dart';
 import 'chat_screen.dart';
 import 'welcome_screen.dart';
