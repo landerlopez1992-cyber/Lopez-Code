@@ -20,6 +20,78 @@ import '../widgets/run_debug_toolbar.dart';
 import 'chat_screen.dart';
 import 'welcome_screen.dart';
 
+/// Widget para mostrar el saldo de créditos con actualización en tiempo real
+class _CreditBalanceWidget extends StatefulWidget {
+  const _CreditBalanceWidget();
+
+  @override
+  State<_CreditBalanceWidget> createState() => _CreditBalanceWidgetState();
+}
+
+class _CreditBalanceWidgetState extends State<_CreditBalanceWidget> {
+  double _balance = 0.0;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadBalance();
+  }
+  
+  Future<void> _loadBalance() async {
+    final balance = await CreditService.getBalance();
+    if (mounted) {
+      setState(() {
+        _balance = balance;
+      });
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    // Recargar balance periódicamente
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) {
+        _loadBalance();
+      }
+    });
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: _balance > 0 
+            ? Colors.green.withOpacity(0.2)
+            : Colors.red.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _balance > 0 
+              ? Colors.green.withOpacity(0.5)
+              : Colors.red.withOpacity(0.5),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.account_balance_wallet,
+            size: 14,
+            color: _balance > 0 ? Colors.green : Colors.red,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '\$${_balance.toStringAsFixed(2)}',
+            style: TextStyle(
+              color: _balance > 0 ? Colors.green : Colors.red,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class MultiChatScreen extends StatefulWidget {
   const MultiChatScreen({super.key});
 

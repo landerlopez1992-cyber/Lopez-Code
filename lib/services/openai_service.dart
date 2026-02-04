@@ -61,6 +61,9 @@ class OpenAIService {
   
   // Callback para acciones pendientes que requieren confirmación
   Function(List<Map<String, dynamic>> pendingActions)? onPendingActions;
+  
+  // ✅ NUEVO: Callback para tokens usados
+  Function(int)? onTokensUsed;
 
   Future<String> sendMessage({
     required String message,
@@ -76,6 +79,7 @@ class OpenAIService {
   }) async {
     this.onFileOperation = onFileOperation;
     this.onPendingActions = onPendingActions;
+    this.onTokensUsed = onTokensUsed; // ✅ Guardar callback
     _isCancelled = false; // Reset cancel flag
     try {
       final List<Map<String, dynamic>> messages = [];
