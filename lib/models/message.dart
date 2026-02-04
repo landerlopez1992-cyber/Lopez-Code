@@ -8,6 +8,7 @@ class Message {
   final String? codeBlock;
   final String? filePath;
   final List<PendingAction>? pendingActions; // ✅ NUEVO: Acciones pendientes para mostrar en el chat
+  final bool isCancelled; // ✅ NUEVO: Indica si el mensaje fue cancelado
 
   Message({
     required this.role,
@@ -17,6 +18,7 @@ class Message {
     this.codeBlock,
     this.filePath,
     this.pendingActions, // ✅ NUEVO
+    this.isCancelled = false, // ✅ NUEVO
   });
 
   Map<String, dynamic> toJson() {
@@ -28,6 +30,7 @@ class Message {
       'codeBlock': codeBlock,
       'filePath': filePath,
       'pendingActions': pendingActions?.map((a) => a.toJson()).toList(),
+      'isCancelled': isCancelled,
     };
   }
 
@@ -44,6 +47,7 @@ class Message {
               .map((a) => PendingAction.fromJson(a))
               .toList()
           : null,
+      isCancelled: json['isCancelled'] ?? false,
     );
   }
 }

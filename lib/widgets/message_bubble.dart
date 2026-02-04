@@ -13,12 +13,14 @@ class MessageBubble extends StatelessWidget {
   final Message message;
   final Function(List<PendingAction>)? onAcceptActions; // ✅ NUEVO: Callback para aceptar acciones
   final Function()? onRejectActions; // ✅ NUEVO: Callback para rechazar acciones
+  final VoidCallback? onResend; // ✅ NUEVO: Callback para reenviar mensaje cancelado
 
   const MessageBubble({
     super.key,
     required this.message,
     this.onAcceptActions,
     this.onRejectActions,
+    this.onResend, // ✅ NUEVO
   });
 
   Widget _buildMessageContent(BuildContext context, bool isUser) {
@@ -207,29 +209,96 @@ class MessageBubble extends StatelessWidget {
             const SizedBox(width: 10),
           ],
           Flexible(
-            child: isUser 
-                ? Container(
-                    constraints: const BoxConstraints(maxWidth: 900),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: CursorTheme.userMessageBg,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: _buildMessageContent(context, isUser),
-                  )
-                : Container(
-                    constraints: const BoxConstraints(maxWidth: 900),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: CursorTheme.assistantMessageBg,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: CursorTheme.assistantMessageBorder,
-                        width: 1,
+            child: Stack(
+              children: [
+                isUser 
+                    ? Container(
+                        constraints: const BoxConstraints(maxWidth: 900),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: CursorTheme.userMessageBg,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: _buildMessageContent(context, isUser),
+                      )
+                    : Container(
+                        constraints: const BoxConstraints(maxWidth: 900),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: CursorTheme.assistantMessageBg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: CursorTheme.assistantMessageBorder,
+                            width: 1,
+                          ),
+                        ),
+                        child: _buildMessageContent(context, isUser),
                       ),
-                    ),
-                    child: _buildMessageContent(context, isUser),
+                // ✅ Botón de copiar (esquina superior derecha)
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Botón de reenviar (solo si está cancelado y es mensaje del usuario)
+                      if (message.isCancelled && isUser && onResend != null) ...[
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: onResend,
+                            borderRadius: BorderRadius.circular(4),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.8),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Icon(
+                                Icons.refresh,
+                                size: 14,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      // Botón de copiar
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: message.content));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Texto copiado al portapapeles'),
+                                duration: Duration(seconds: 2),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          },
+                          borderRadius: BorderRadius.circular(4),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: (isUser ? CursorTheme.userMessageBg : CursorTheme.assistantMessageBg)
+                                  .withOpacity(0.8),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Icon(
+                              Icons.copy,
+                              size: 14,
+                              color: isUser ? Colors.white70 : CursorTheme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                ),
+              ],
+            ),
           ),
           if (isUser) ...[
             const SizedBox(width: 10),

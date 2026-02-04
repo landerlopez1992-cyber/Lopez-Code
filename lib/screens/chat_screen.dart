@@ -294,7 +294,38 @@ class _ChatScreenState extends State<ChatScreen> {
     if (isErrorReport && userMessage.length > 6000) {
       userMessage = '${userMessage.substring(0, 6000)}\n\n...[Errores truncados para evitar bloqueo]';
     }
+    // Guardar el mensaje del usuario antes de limpiar
+    final userMessageToSave = userMessage;
+    final imagesToSave = List<String>.from(imagesToSend);
+    final filePathToSave = filePathToSend;
+    
     _messageController.clear();
+
+    // ✅ Agregar mensaje del usuario a la lista
+    final userMsg = Message(
+      role: 'user',
+      content: userMessageToSave,
+      timestamp: DateTime.now(),
+      imageUrls: imagesToSave.isNotEmpty ? imagesToSave : null,
+      filePath: filePathToSave,
+    );
+    
+    setState(() {
+      _messages.add(userMsg);
+      _isLoading = true;
+      _loadingStatus = 'Enviando mensaje...';
+    });
+    
+    // Scroll al final después de agregar el mensaje
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
 
     try {
       // Obtener projectPath antes de usarlo
@@ -788,6 +819,22 @@ class _ChatScreenState extends State<ChatScreen> {
       } catch (e) {
         print('⚠️ Error al detener proceso: $e');
       }
+    }
+    
+    // ✅ NUEVO: Marcar último mensaje del usuario como cancelado
+    if (_messages.isNotEmpty && _messages.last.role == 'user') {
+      final lastMessage = _messages.last;
+      final cancelledMessage = Message(
+        role: lastMessage.role,
+        content: lastMessage.content,
+        timestamp: lastMessage.timestamp,
+        imageUrls: lastMessage.imageUrls,
+        codeBlock: lastMessage.codeBlock,
+        filePath: lastMessage.filePath,
+        pendingActions: lastMessage.pendingActions,
+        isCancelled: true, // ✅ Marcar como cancelado
+      );
+      _messages[_messages.length - 1] = cancelledMessage;
     }
     
     // ✅ FIX: Limpiar TODO el estado para evitar cuelgues
