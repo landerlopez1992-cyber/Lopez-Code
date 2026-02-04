@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/message.dart';
 import '../services/openai_service.dart';
+import '../services/credit_service.dart';
 import '../services/settings_service.dart';
 import '../services/project_service.dart';
 import '../services/chat_storage_service.dart';
@@ -300,32 +301,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final filePathToSave = filePathToSend;
     
     _messageController.clear();
-
-    // ✅ Agregar mensaje del usuario a la lista
-    final userMsg = Message(
-      role: 'user',
-      content: userMessageToSave,
-      timestamp: DateTime.now(),
-      imageUrls: imagesToSave.isNotEmpty ? imagesToSave : null,
-      filePath: filePathToSave,
-    );
-    
-    setState(() {
-      _messages.add(userMsg);
-      _isLoading = true;
-      _loadingStatus = 'Enviando mensaje...';
-    });
-    
-    // Scroll al final después de agregar el mensaje
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
 
     try {
       // Obtener projectPath antes de usarlo

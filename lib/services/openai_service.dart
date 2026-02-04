@@ -398,6 +398,17 @@ Responde en español y sé detallado en tu análisis.''';
         final data = jsonDecode(utf8.decode(response.bodyBytes));
         final message = data['choices'][0]['message'];
         
+        // ✅ NUEVO: Obtener tokens usados para sistema de créditos
+        int? totalTokens;
+        if (data['usage'] != null) {
+          totalTokens = data['usage']['total_tokens'] as int?;
+          print('📊 Tokens usados: $totalTokens');
+          // Notificar tokens usados
+          if (totalTokens != null && onTokensUsed != null) {
+            onTokensUsed(totalTokens);
+          }
+        }
+        
         // Verificar si la IA quiere llamar a una función
         if (message['tool_calls'] != null && message['tool_calls'].isNotEmpty) {
           print('🔧 La IA quiere ejecutar funciones: ${message['tool_calls'].length}');
