@@ -3424,6 +3424,30 @@ class _ChatScreenState extends State<ChatScreen> {
           onRejectActions: msg.pendingActions != null && msg.pendingActions!.isNotEmpty
               ? () => _handleRejectActions(index)
               : null,
+          onResend: msg.isCancelled && msg.role == 'user'
+              ? () {
+                  // ✅ Reenviar mensaje cancelado
+                  _messageController.text = msg.content;
+                  // Restaurar imágenes si las tenía
+                  if (msg.imageUrls != null && msg.imageUrls!.isNotEmpty) {
+                    setState(() {
+                      _selectedImages = List<String>.from(msg.imageUrls!);
+                    });
+                  }
+                  // Restaurar archivo si lo tenía
+                  if (msg.filePath != null) {
+                    setState(() {
+                      _selectedFilePath = msg.filePath;
+                    });
+                  }
+                  // Remover mensaje cancelado y enviar de nuevo
+                  setState(() {
+                    _messages.removeAt(index);
+                  });
+                  // Enviar mensaje
+                  _sendMessage();
+                }
+              : null,
         );
       },
     );
