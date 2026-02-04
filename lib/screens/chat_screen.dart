@@ -307,8 +307,8 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       
       // ✨ NUEVO SISTEMA INTELIGENTE DE CONTEXTO CON ANÁLISIS PREVIO ✨
-      // 🔍 PASO 1: ANALIZAR ANTES DE ACTUAR
-      // Construye contexto optimizado automáticamente con timeout para evitar cuelgues
+      // 🔍 PASO 1: ANALIZAR ANTES DE ACTUAR (solo para tareas que lo requieren)
+      // ✅ FIX: Desactivar análisis previo temporalmente para evitar cuelgues
       ContextBundle contextBundle;
       try {
         contextBundle = await SmartContextManager.buildOptimizedContext(
@@ -319,9 +319,9 @@ class _ChatScreenState extends State<ChatScreen> {
           includeDocumentation: SmartContextManager.needsDocumentation(userMessage),
           includeHistory: true,
           includeProjectStructure: SmartContextManager.needsFullContext(userMessage),
-          analyzeBeforeActing: true, // ✨ ACTIVAR ANÁLISIS PREVIO
+          analyzeBeforeActing: false, // ✅ DESACTIVADO temporalmente para evitar cuelgues
         ).timeout(
-          const Duration(seconds: 15), // ✅ Más tiempo para análisis completo
+          const Duration(seconds: 10), // ✅ Timeout más corto
           onTimeout: () {
             print('⚠️ Timeout al construir contexto, usando contexto mínimo');
             return ContextBundle(
