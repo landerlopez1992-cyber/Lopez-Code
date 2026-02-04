@@ -71,6 +71,7 @@ class OpenAIService {
     String? projectPath, // Para ejecutar funciones de archivos
     Function(String operation, String filePath)? onFileOperation, // Callback para operaciones de archivos
     Function(List<Map<String, dynamic>> pendingActions)? onPendingActions, // Callback para acciones pendientes
+    Function(int)? onTokensUsed, // ✅ NUEVO: Callback para tokens usados
     bool allowTools = true, // Controla si se permiten herramientas
   }) async {
     this.onFileOperation = onFileOperation;

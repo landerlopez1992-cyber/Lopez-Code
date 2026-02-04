@@ -479,6 +479,31 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       }
 
+      // ✅ NUEVO: Verificar saldo antes de enviar
+      final estimatedTokens = contextBundle.estimatedTokens;
+      // Costo aproximado por token (ajustar según modelo)
+      final costPerToken = model.contains('gpt-4o') ? 0.00001 : 0.000002; // gpt-4o es más caro
+      
+      final hasBalance = await CreditService.hasEnoughBalance(estimatedTokens, costPerToken);
+      if (!hasBalance) {
+        final balance = await CreditService.getBalance();
+        final estimatedCost = CreditService.getEstimatedCost(estimatedTokens, costPerToken);
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _isSending = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('💰 Saldo insuficiente. Tienes \$${balance.toStringAsFixed(2)}, necesitas \$${estimatedCost.toStringAsFixed(2)}'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+      
       // ✅ FIX: Agregar timeout para evitar cuelgues
       final response = await _openAIService!.sendMessage(
         message: enhancedMessage,
@@ -488,6 +513,20 @@ class _ChatScreenState extends State<ChatScreen> {
         systemPrompt: systemPrompt.isNotEmpty ? systemPrompt : null,
         projectPath: currentProjectPath, // CRÍTICO: Necesario para Function Calling
         allowTools: allowTools,
+        onTokensUsed: (tokens) async {
+          // ✅ Descontar créditos cuando se usan tokens
+          final deducted = await CreditService.deductCredits(tokens, costPerToken);
+          if (!deducted) {
+            print('⚠️ No se pudieron descontar créditos');
+          } else {
+            final newBalance = await CreditService.getBalance();
+            print('💰 Créditos descontados. Saldo restante: \$${newBalance.toStringAsFixed(2)}');
+            // Actualizar UI si es necesario
+            if (mounted) {
+              setState(() {}); // Forzar rebuild para actualizar contador
+            }
+          }
+        },
         onFileOperation: allowTools ? (operation, filePath) {
           // Actualizar estado cuando se ejecuta una operación de archivo
           if (mounted) {
