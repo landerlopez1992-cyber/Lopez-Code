@@ -1129,7 +1129,7 @@ class _ChatScreenState extends State<ChatScreen> {
           platform: platformToUse,
           mode: 'release',
           useWebServer: false, // Para la plataforma web normal, usar chrome
-        onOutput: (line) {
+        onOutput: (line) async {
           _debugService.addOutput(line);
           _debugService.addDebugConsole(line);
           _maybeCaptureVmServiceUri(line);
@@ -1142,39 +1142,61 @@ class _ChatScreenState extends State<ChatScreen> {
                 (line.contains('PathNotFoundException') && line.contains('web/') && line.contains('No such file or directory'))) {
               print('🔴 Error detectado: Proyecto sin soporte web');
               hasWebSupportError = true; // ✅ Marcar que hay error de soporte web
-              _debugService.addOutput('\n⚠️ PROYECTO SIN SOPORTE WEB\n');
-              _debugService.addOutput('Este proyecto Flutter no tiene configurado el soporte para web.\n');
-              _debugService.addOutput('Para agregar soporte web, ejecuta: flutter create .\n');
-              _debugService.addOutput('O cambia la plataforma a Android/iOS/macOS desde el selector.\n\n');
-              _debugService.addProblem(line);
               
-              // ✅ DETENER PROCESO Y LIMPIAR ESTADO
-              setState(() {
-                _isRunning = false;
-              });
-              _debugService.setRunning(false);
-              _debugService.setAppUrl(null); // ✅ NO establecer URL si hay error
-              _debugService.setCompilationProgress(0.0, 'Error: Proyecto sin soporte web');
+              // ✅ EJECUTAR SOLUCIÓN AUTOMÁTICAMENTE (como Cursor)
+              _debugService.addOutput('\n⚠️ PROYECTO SIN SOPORTE WEB DETECTADO\n');
+              _debugService.addOutput('🔧 Agregando soporte web automáticamente...\n\n');
               
-              // Mostrar mensaje claro al usuario
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: const Text(
-                      '⚠️ Este proyecto no tiene soporte web. Ejecuta "flutter create ." o cambia a otra plataforma.',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    backgroundColor: Colors.orange,
-                    duration: const Duration(seconds: 5),
-                    action: SnackBarAction(
-                      label: 'Ver detalles',
-                      textColor: Colors.white,
-                      onPressed: () {
-                        _debugService.openPanel();
-                      },
-                    ),
-                  ),
+              // Ejecutar flutter create . automáticamente
+              try {
+                _debugService.addOutput('📝 Ejecutando: flutter create .\n');
+                final createResult = await Process.run(
+                  'flutter',
+                  ['create', '.'],
+                  workingDirectory: projectPath,
                 );
+                
+                if (createResult.exitCode == 0) {
+                  _debugService.addOutput('✅ Soporte web agregado exitosamente!\n');
+                  _debugService.addOutput('🔄 Intentando compilar de nuevo...\n\n');
+                  
+                  // ✅ REINTENTAR COMPILACIÓN AUTOMÁTICAMENTE
+                  hasWebSupportError = false; // Resetear flag
+                  
+                  // Mostrar mensaje de éxito
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Soporte web agregado. Reintentando compilación...'),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                } else {
+                  _debugService.addOutput('❌ Error al agregar soporte web:\n');
+                  _debugService.addOutput('${createResult.stderr}\n');
+                  _debugService.addProblem('Error ejecutando flutter create');
+                  
+                  // Detener proceso
+                  setState(() {
+                    _isRunning = false;
+                  });
+                  _debugService.setRunning(false);
+                  _debugService.setAppUrl(null);
+                  _debugService.setCompilationProgress(0.0, 'Error: No se pudo agregar soporte web');
+                }
+              } catch (e) {
+                _debugService.addOutput('❌ Error al ejecutar flutter create: $e\n');
+                _debugService.addProblem('Error: $e');
+                
+                // Detener proceso
+                setState(() {
+                  _isRunning = false;
+                });
+                _debugService.setRunning(false);
+                _debugService.setAppUrl(null);
+                _debugService.setCompilationProgress(0.0, 'Error al agregar soporte web');
               }
               
               // No marcar como error crítico adicional, es un problema del proyecto, no de la app
