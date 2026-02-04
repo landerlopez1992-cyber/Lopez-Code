@@ -414,30 +414,35 @@ class _ChatScreenState extends State<ChatScreen> {
       // Solo ejecutar directamente si tiene palabras de run/debug Y NO es una pregunta
       final isSimpleRunRequest = hasRunDebugWords && !isQuestion;
       
+      // ✅ FIX CRÍTICO: Agregar mensaje del usuario UNA SOLA VEZ (antes de cualquier lógica)
+      final userMsg = Message(
+        role: 'user',
+        content: userMessage,
+        timestamp: DateTime.now(),
+        imageUrls: imagesToSend.isNotEmpty ? imagesToSend : null,
+        filePath: filePathToSend,
+      );
+
+      if (mounted) {
+        setState(() {
+          _messages.add(userMsg);
+          _selectedImages.clear();
+          _selectedFilePath = null;
+        });
+        _scrollToBottom();
+      }
+      
       // Si es una solicitud simple de run/debug, ejecutar directamente sin esperar respuesta del agente
       if (isSimpleRunRequest) {
         print('🚀 Solicitud DIRECTA de run/debug detectada (no es pregunta), ejecutando...');
         
-        // ✅ FIX: Agregar mensaje del usuario al chat
-        final userMsg = Message(
-          role: 'user',
-          content: userMessage,
-          timestamp: DateTime.now(),
-          imageUrls: imagesToSend.isNotEmpty ? imagesToSend : null,
-          filePath: filePathToSend,
-        );
-        
         if (mounted) {
           setState(() {
-            _messages.add(userMsg);
-            _selectedImages.clear();
-            _selectedFilePath = null;
             _isLoading = true;
             _loadingStatus = 'Ejecutando...';
             _isSending = false; // ✅ FIX: Limpiar flag ya que se ejecuta directamente
           });
           await _saveConversation();
-          _scrollToBottom();
         }
         
         // Ejecutar directamente según la solicitud
@@ -460,23 +465,11 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
       
-      // ✅ FIX: Agregar mensaje del usuario (flujo normal)
-      final userMsg = Message(
-        role: 'user',
-        content: userMessage,
-        timestamp: DateTime.now(),
-        imageUrls: imagesToSend.isNotEmpty ? imagesToSend : null,
-        filePath: filePathToSend,
-      );
-
+      // ✅ Para flujo normal, el mensaje ya se agregó arriba
       if (mounted) {
         setState(() {
-          _messages.add(userMsg);
           _isLoading = true;
-          _selectedImages.clear();
-          _selectedFilePath = null;
         });
-        _scrollToBottom();
       }
 
       // ✅ NUEVO: Verificar saldo antes de enviar

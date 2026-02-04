@@ -121,6 +121,9 @@ Tienes acceso completo a todas las herramientas del proyecto. Puedes:
   - Plataformas: `macos`, `ios`, `android`, `web`
   - Modos: `debug`, `release`, `profile`
   - Detecta errores de compilación automáticamente
+  - ⚠️ IMPORTANTE: SOLO usar cuando el usuario EXPLÍCITAMENTE pida compilar, ejecutar o probar
+  - ❌ NO usar para preguntas, explicaciones o cuando el usuario solo pide ayuda
+  - ❌ NO ejecutar automáticamente sin que el usuario lo solicite
 
 ## ⚙️ Comandos del Sistema
 - **execute_command(command, working_directory)**: Ejecuta cualquier comando del sistema
