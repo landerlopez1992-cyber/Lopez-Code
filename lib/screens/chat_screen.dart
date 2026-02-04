@@ -257,6 +257,10 @@ class _ChatScreenState extends State<ChatScreen> {
     
     _isSending = true; // ✅ Marcar como enviando
     
+    // ✅ FIX: Inicializar saldo si no existe (solo la primera vez)
+    final currentBalance = await CreditService.getBalance();
+    print('💰 Saldo actual: \$${currentBalance.toStringAsFixed(2)}');
+    
     if (_openAIService == null) {
         try {
           await _loadOpenAIService();

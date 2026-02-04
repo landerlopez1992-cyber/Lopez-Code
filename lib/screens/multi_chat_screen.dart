@@ -1066,47 +1066,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                 ),
               ),
             ),
-            // ✅ NUEVO: Contador de créditos en el centro
-            FutureBuilder<double>(
-              future: CreditService.getBalance(),
-              builder: (context, snapshot) {
-                final balance = snapshot.data ?? 0.0;
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: balance > 0 
-                        ? Colors.green.withOpacity(0.2)
-                        : Colors.red.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: balance > 0 
-                          ? Colors.green.withOpacity(0.5)
-                          : Colors.red.withOpacity(0.5),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.account_balance_wallet,
-                        size: 14,
-                        color: balance > 0 ? Colors.green : Colors.red,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '\$${balance.toStringAsFixed(2)}',
-                        style: TextStyle(
-                          color: balance > 0 ? Colors.green : Colors.red,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+            // ✅ NUEVO: Contador de créditos en el centro (con actualización en tiempo real)
+            _CreditBalanceWidget(),
           ],
         ),
         actions: [
