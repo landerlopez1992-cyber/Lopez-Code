@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/agent_chat.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/voryxel_brand_logo.dart';
@@ -32,9 +33,11 @@ import '../services/inspector_selection_service.dart';
 import '../widgets/run_debug_toolbar.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/inspector_monitor_panel.dart';
+import '../widgets/backend_connector_panels.dart';
 import 'chat_screen.dart';
 import 'welcome_screen.dart';
 import 'wallet_screen.dart';
+import 'settings_screen.dart';
 
 /// Chip de saldo estilo Cursor; al hacer clic abre la página de billetera.
 class _CreditBalanceWidget extends StatefulWidget {
@@ -246,6 +249,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     // Plataforma por defecto al iniciar: Web (selector foto 1).
     _platformService.setPlatform('web');
     _loadProjectAndChats();
+    // Snapshot inicial del Preview (por si el servicio ya tiene URL).
+    _previewAppUrl = _debugService.appUrl;
+    _previewRunning = _debugService.isRunning;
+    _previewProgress = _debugService.compilationProgress;
+    _previewStatus = _debugService.compilationStatus;
+    _previewNonce = _debugService.previewReloadNonce;
     // Escuchar cambios en el servicio de debug console
     _debugService.addListener(_onDebugServiceChanged);
     _platformService.addListener(_onPlatformChanged);
@@ -296,73 +305,77 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     _openFileFromAgentLive(path, line: line);
   }
 
-  void _onDebugServiceChanged() {
-    if (mounted) {
-      setState(() {
-        // Mantener el ancho del panel sincronizado con el servicio
-        if (_debugService.isVisible && _debugPanelWidth == 0) {
-          _debugPanelWidth = 350.0;
-        } else if (!_debugService.isVisible && _debugPanelWidth > 0) {
-          _debugPanelWidth = 0.0;
-        }
+  // Snapshot Preview: evita setState en cada línea de Output (eso
+  // reconstruía el WebView y el scroll temblequeaba / se trababa).
+  String? _previewAppUrl;
+  bool _previewRunning = false;
+  double _previewProgress = 0.0;
+  String _previewStatus = '';
+  int _previewNonce = 0;
 
-        final hasWebView = _debugService.appUrl != null &&
-            _debugService.appUrl!.isNotEmpty;
-        if (!hasWebView && _inspectorMode) {
-          _inspectorMode = false;
-        }
-      });
-      
-      // Si la URL se limpió (se detuvo el servidor), resetear el estado
-      if (_debugService.appUrl == null || _debugService.appUrl!.isEmpty) {
-        if (_lastOpenedUrl != null) {
-          _lastOpenedUrl = null;
-          print(
-            '🔄 MultiChatScreen: URL limpiada, reseteando estado de apertura',
-          );
-        }
+  void _onDebugServiceChanged() {
+    if (!mounted) return;
+
+    final url = _debugService.appUrl;
+    final running = _debugService.isRunning;
+    final progress = _debugService.compilationProgress;
+    final status = _debugService.compilationStatus;
+    final nonce = _debugService.previewReloadNonce;
+    final visible = _debugService.isVisible;
+
+    if (url == null || url.isEmpty) {
+      if (_lastOpenedUrl != null) {
+        _lastOpenedUrl = null;
+        print(
+          '🔄 MultiChatScreen: URL limpiada, reseteando estado de apertura',
+        );
       }
-      
-      // NOTA: La apertura automática del navegador está desactivada.
-      // La aplicación web se muestra dentro del WebView del emulador por defecto.
-      // El usuario puede usar el botón flotante "Abrir en navegador" si prefiere verla en el navegador externo.
-      
-      // Si quieres reactivar la apertura automática, descomenta el siguiente código:
-      /*
-      final isWebPlatform = _platformService.selectedPlatform.toLowerCase() == 'web';
-      final hasUrl = _debugService.appUrl != null && _debugService.appUrl!.isNotEmpty;
-      final urlChanged = _debugService.appUrl != _lastOpenedUrl;
-      final serverReady = _debugService.isRunning && _debugService.compilationProgress >= 1.0;
-      
-      if (isWebPlatform && 
-          hasUrl && 
-          serverReady && 
-          urlChanged && 
-          !_isOpeningUrl) {
-        final urlToOpen = _debugService.appUrl!;
-        _lastOpenedUrl = urlToOpen;
-        _isOpeningUrl = true;
-        
-        print('🌐 MultiChatScreen: Detectada URL web nueva y servidor listo. Abriendo en navegador: $urlToOpen');
-        
-        Future.delayed(const Duration(seconds: 1), () async {
-          await _openUrlInBrowser(urlToOpen);
-          Future.delayed(const Duration(seconds: 2), () {
-            _isOpeningUrl = false;
-          });
-        });
-      }
-      */
     }
+
+    final previewChanged = url != _previewAppUrl ||
+        running != _previewRunning ||
+        progress != _previewProgress ||
+        status != _previewStatus ||
+        nonce != _previewNonce;
+    final panelChanged = (visible && _debugPanelWidth == 0) ||
+        (!visible && _debugPanelWidth > 0);
+    final hasWebView = url != null && url.isNotEmpty;
+    final inspectorCleanup = !hasWebView && _inspectorMode;
+
+    // Output/problems: DebugConsolePanel ya escucha el servicio solo.
+    if (!previewChanged && !panelChanged && !inspectorCleanup) {
+      return;
+    }
+
+    setState(() {
+      _previewAppUrl = url;
+      _previewRunning = running;
+      _previewProgress = progress;
+      _previewStatus = status;
+      _previewNonce = nonce;
+      if (visible && _debugPanelWidth == 0) {
+        _debugPanelWidth = 350.0;
+      } else if (!visible && _debugPanelWidth > 0) {
+        _debugPanelWidth = 0.0;
+      }
+      if (inspectorCleanup) {
+        _inspectorMode = false;
+        _selectedElement = null;
+        InspectorSelectionService().clear();
+      }
+    });
   }
 
   void _onPlatformChanged() {
     if (mounted) {
       setState(() {
-        final isWebPlatform =
-            _platformService.selectedPlatform.toLowerCase() == 'web';
-        if (!isWebPlatform && _inspectorMode) {
+        // Inspector DOM funciona con Preview WebView (web o app embebida).
+        final hasPreview =
+            _debugService.appUrl != null && _debugService.appUrl!.isNotEmpty;
+        if (!hasPreview && _inspectorMode) {
           _inspectorMode = false;
+          _selectedElement = null;
+          InspectorSelectionService().clear();
         }
       });
     }
@@ -663,11 +676,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                   return const SizedBox.shrink();
                 }
 
+                const monitorW = 240.0;
+                final showMonitor = _inspectorMode;
+                final previewW =
+                    showMonitor ? math.max(160.0, w - monitorW - 12) : w;
+
+                // Solo plataforma: el Preview NO debe rebuild-ear con cada
+                // línea de Output (provoca parpadeo / scroll roto en WebView).
                 return AnimatedBuilder(
-                  animation: Listenable.merge([
-                    _debugService,
-                    _platformService,
-                  ]),
+                  animation: _platformService,
                   builder: (context, _) {
                     final platform =
                         _platformService.selectedPlatform.toLowerCase();
@@ -680,25 +697,18 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       required double height,
                     }) {
                       return PhoneEmulator(
+                        key: const ValueKey('voryxel_preview_webview'),
                         width: width,
                         height: height,
                         platform: _platformService.selectedPlatform,
-                        isRunning: _debugService.isRunning,
-                        appUrl: _debugService.appUrl,
-                        compilationProgress: _debugService.compilationProgress,
-                        compilationStatus: _debugService.compilationStatus,
-                        previewReloadNonce: _debugService.previewReloadNonce,
+                        isRunning: _previewRunning,
+                        appUrl: _previewAppUrl,
+                        compilationProgress: _previewProgress,
+                        compilationStatus: _previewStatus,
+                        previewReloadNonce: _previewNonce,
                         inspectorMode: _inspectorMode,
                         onElementSelected: (element) {
                           setState(() => _selectedElement = element);
-                          final elementInfo =
-                              'Elemento seleccionado en el inspector:\n'
-                              'Tag: ${element.tagName}\n'
-                              '${element.id != null && element.id!.isNotEmpty ? "ID: ${element.id}\n" : ""}'
-                              '${element.className != null && element.className!.isNotEmpty ? "Clase: ${element.className}\n" : ""}'
-                              'Selector: ${element.fullSelector}\n'
-                              'Dimensiones: ${element.boundingRect?.width.toInt() ?? 0}x${element.boundingRect?.height.toInt() ?? 0}px';
-                          _sendMessageToActiveChat(elementInfo);
                         },
                         child: null,
                       );
@@ -706,14 +716,29 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
                     final zoom = _emulatorScale.clamp(0.5, 2.0);
 
-                    // Web/macOS: el zoom escala el viewport real (sin Transform:
-                    // el WebView de macOS rompe los clics si solo se dibuja
-                    // escalado). Si crece más que el panel, se puede hacer scroll.
+                    Widget previewBody;
                     if (isWeb) {
-                      final displayW = w * zoom;
+                      final displayW = previewW * zoom;
                       final displayH = h * zoom;
-                      return _PreviewZoomViewport(
-                        panelW: w,
+                      previewBody = _PreviewZoomViewport(
+                        panelW: previewW,
+                        panelH: h,
+                        displayW: displayW,
+                        displayH: displayH,
+                        child: buildEmulator(
+                          width: displayW,
+                          height: displayH,
+                        ),
+                      );
+                    } else {
+                      const baseW = 300.0;
+                      const baseH = 650.0;
+                      final fit100 =
+                          math.min(previewW / baseW, h / baseH);
+                      final displayW = baseW * fit100 * zoom;
+                      final displayH = baseH * fit100 * zoom;
+                      previewBody = _PreviewZoomViewport(
+                        panelW: previewW,
                         panelH: h,
                         displayW: displayW,
                         displayH: displayH,
@@ -724,23 +749,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       );
                     }
 
-                    // Móvil: cabida al 100% en el panel, luego aplicar zoom.
-                    // (Antes: target*=zoom y luego fit/zoom → el zoom se anulaba.)
-                    const baseW = 300.0;
-                    const baseH = 650.0;
-                    final fit100 = math.min(w / baseW, h / baseH);
-                    final displayW = baseW * fit100 * zoom;
-                    final displayH = baseH * fit100 * zoom;
+                    if (!showMonitor) return previewBody;
 
-                    return _PreviewZoomViewport(
-                      panelW: w,
-                      panelH: h,
-                      displayW: displayW,
-                      displayH: displayH,
-                      child: buildEmulator(
-                        width: displayW,
-                        height: displayH,
-                      ),
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: previewBody),
+                        const InspectorMonitorPanel(width: monitorW),
+                      ],
                     );
                   },
                 );
@@ -1242,54 +1258,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: CursorTheme.surface,
-        title: const Row(
-          children: [
-            Icon(Icons.cloud, color: CursorTheme.primary, size: 20),
-            SizedBox(width: 8),
-            Text(
-              'Supabase',
-              style: TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: 420,
-          child: _buildBackendInspectionBody(result),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text(
-              'Cerrar',
-              style: TextStyle(color: CursorTheme.textSecondary),
-            ),
-          ),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _sendMessageToActiveChat(
-                'Configura Supabase en este proyecto Flutter con supabase_flutter.\n'
-                'Estado actual: ${result.statusLabel}.\n'
-                'Evidencia: ${result.evidence.isEmpty ? "(ninguna)" : result.evidence.join(", ")}.\n'
-                'Falta: ${result.missingHints.isEmpty ? "(nada crítico detectado)" : result.missingHints.join(", ")}.\n'
-                'Crea/actualiza dependencias, .env de ejemplo (SUPABASE_URL, SUPABASE_ANON_KEY) '
-                'y un servicio de cliente listo para usar.',
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: CursorTheme.primary,
-              foregroundColor: Colors.white,
-            ),
-            icon: const Icon(Icons.auto_fix_high, size: 16),
-            label: const Text('Configurar Supabase con Agente IA'),
-          ),
-        ],
+      builder: (ctx) => SupabaseConnectorDialog(
+        projectPath: projectPath,
+        inspection: result,
+        onAskAgent: _sendMessageToActiveChat,
       ),
     );
   }
@@ -1307,167 +1279,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     final result =
         await BackendProjectInspector.inspectFirebase(projectPath);
     if (!mounted) return;
-    final hasFirebaseJson = result.evidence.any((e) => e.contains('firebase.json'));
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: CursorTheme.surface,
-        title: const Row(
-          children: [
-            Icon(
-              Icons.local_fire_department,
-              color: CursorTheme.primary,
-              size: 20,
-            ),
-            SizedBox(width: 8),
-            Text(
-              'Firebase',
-              style: TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: 420,
-          child: _buildBackendInspectionBody(result),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text(
-              'Cerrar',
-              style: TextStyle(color: CursorTheme.textSecondary),
-            ),
-          ),
-          if (hasFirebaseJson)
-            TextButton.icon(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                _runFirebaseDeploy(projectPath);
-              },
-              icon: const Icon(Icons.cloud_upload_outlined, size: 16),
-              label: const Text('Deploy (firebase deploy)'),
-            ),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _sendMessageToActiveChat(
-                'Inicializa y configura Firebase en este proyecto Flutter '
-                '(firebase_core, opciones Android/iOS/Web según carpetas presentes).\n'
-                'Estado actual: ${result.statusLabel}.\n'
-                'Project ID detectado: ${result.projectId ?? "(ninguno)"}.\n'
-                'Evidencia: ${result.evidence.isEmpty ? "(ninguna)" : result.evidence.join(", ")}.\n'
-                'Falta: ${result.missingHints.isEmpty ? "(nada crítico detectado)" : result.missingHints.join(", ")}.\n'
-                'Añade dependencias, estructura de config y pasos concretos.',
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: CursorTheme.primary,
-              foregroundColor: Colors.white,
-            ),
-            icon: const Icon(Icons.auto_fix_high, size: 16),
-            label: const Text('Inicializar Firebase con Agente IA'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBackendInspectionBody(BackendInspectionResult result) {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(
-                result.configured ? Icons.check_circle : Icons.warning_amber,
-                size: 18,
-                color: result.configured ? Colors.greenAccent : Colors.orange,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  result.statusLabel,
-                  style: TextStyle(
-                    color: result.configured
-                        ? Colors.greenAccent
-                        : Colors.orange,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (result.projectId != null && result.projectId!.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Project ID / URL: ${result.projectId}',
-              style: const TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 12,
-                fontFamily: 'monospace',
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          const Text(
-            'Detectado en el proyecto:',
-            style: TextStyle(
-              color: CursorTheme.textPrimary,
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 6),
-          if (result.evidence.isEmpty)
-            const Text(
-              '— Nada encontrado',
-              style: TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
-            )
-          else
-            ...result.evidence.map(
-              (e) => Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  '• $e',
-                  style: const TextStyle(
-                    color: CursorTheme.textSecondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ),
-          if (result.missingHints.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text(
-              'Falta / sugerido:',
-              style: TextStyle(
-                color: CursorTheme.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 6),
-            ...result.missingHints.map(
-              (e) => Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  '• $e',
-                  style: const TextStyle(
-                    color: CursorTheme.textSecondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ],
+      builder: (ctx) => FirebaseConnectorDialog(
+        projectPath: projectPath,
+        inspection: result,
+        onAskAgent: _sendMessageToActiveChat,
+        onDeploy: () => _runFirebaseDeploy(projectPath),
       ),
     );
   }
@@ -1573,12 +1391,18 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  /// Hot Reload (⚡) — delega al ChatScreen activo
+  /// Hot Reload (⚡) — Flutter stdin `r` o refresh Preview (HTML).
   void _handleHotReload() {
     if (!mounted) return;
+    final isHtmlPreview = _debugService.isRunning &&
+        _debugService.appUrl != null &&
+        _debugService.appUrl!.isNotEmpty &&
+        !AdvancedDebuggingService.supportsHotReload;
     AppToast.show(
       context,
-      message: 'Flutter: Hot reloading…',
+      message: isHtmlPreview
+          ? 'Refrescando Preview…'
+          : 'Flutter: Hot reloading…',
       icon: Icons.bolt,
       loading: true,
       duration: const Duration(milliseconds: 1200),
@@ -1848,6 +1672,21 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             onPressed: _changeProject,
             tooltip: 'Cambiar Proyecto',
           ),
+          IconButton(
+            icon: const Icon(
+              Icons.settings_outlined,
+              size: 18,
+              color: CursorTheme.textPrimary,
+            ),
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+            tooltip: 'Ajustes',
+          ),
             ],
           ),
           body: LayoutBuilder(
@@ -2034,11 +1873,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                   ),
                       ),
                     ),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
                                     _buildTab(
                                       0,
                                       'Preview',
@@ -2081,14 +1923,17 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                               if (canUseWebInspector)
                                                 Tooltip(
                                                   message: _inspectorMode
-                                                      ? 'Desactivar Inspector\nClic normal = usar la app · Alt/⌘+clic = seleccionar'
-                                                      : 'Activar Inspector\nClic normal = usar la app · Alt/⌘+clic = seleccionar',
+                                                      ? 'Desactivar Inspector\nCon Inspector ON: el mouse selecciona elementos (la app no recibe clics)'
+                                                      : 'Activar Inspector\nPasa el mouse y haz clic para señalar un elemento al agente',
                                                   child: GestureDetector(
                                   onTap: () {
                                     setState(() {
                                       _inspectorMode = !_inspectorMode;
+                                      InspectorSelectionService()
+                                          .setActive(_inspectorMode);
                                       if (!_inspectorMode) {
                                         _selectedElement = null;
+                                        InspectorSelectionService().clear();
                                       }
                                     });
                                   },
@@ -2370,8 +2215,72 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                 ],
                               ),
                             ),
-                        ],
-                      ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Botón fijo a la derecha: probar la web en el navegador
+                        if (_selectedTab == 0 &&
+                            _debugService.appUrl != null &&
+                            _debugService.appUrl!.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Tooltip(
+                              message:
+                                  'Abrir la Preview en el navegador del sistema',
+                              child: Material(
+                                color: CursorTheme.surface,
+                                borderRadius: BorderRadius.circular(6),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(6),
+                                  onTap: () async {
+                                    final url = _debugService.appUrl;
+                                    if (url == null || url.isEmpty) return;
+                                    final uri = Uri.tryParse(url);
+                                    if (uri == null) return;
+                                    if (await canLaunchUrl(uri)) {
+                                      await launchUrl(
+                                        uri,
+                                        mode: LaunchMode.externalApplication,
+                                      );
+                                    }
+                                  },
+                                  child: Container(
+                                    height: 28,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: CursorTheme.border,
+                                      ),
+                                    ),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.open_in_browser,
+                                          size: 14,
+                                          color: CursorTheme.primary,
+                                        ),
+                                        SizedBox(width: 6),
+                                        Text(
+                                          'Navegador',
+                                          style: TextStyle(
+                                            color: CursorTheme.textPrimary,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   // Banner global: siempre visible (Preview o Code) mientras el

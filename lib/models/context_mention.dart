@@ -1,13 +1,15 @@
 import 'dart:io';
 
 import '../services/debug_console_service.dart';
+import '../services/documentation_service.dart';
 
-/// Tipos de mención de contexto estilo Cursor (`@file`, `@folder`, `@problems`, …).
+/// Tipos de mención de contexto estilo Cursor (`@file`, `@folder`, `@docs`, …).
 enum ContextMentionType {
   file,
   folder,
   problems,
   codebase,
+  docs,
 }
 
 /// Representa una mención `@…` seleccionada en el input del chat.
@@ -68,6 +70,20 @@ class ContextMention {
     );
   }
 
+  /// Documentación indexada por URL (el agente la usa como referencia).
+  factory ContextMention.docs({
+    required String name,
+    required String url,
+  }) {
+    final safeName = name.trim().isEmpty ? 'docs' : name.trim();
+    return ContextMention(
+      id: 'docs:$url',
+      label: '@$safeName',
+      type: ContextMentionType.docs,
+      path: url,
+    );
+  }
+
   /// Extrae el contenido real asociado a la mención.
   Future<String> resolveContent(String projectPath) async {
     switch (type) {
@@ -79,6 +95,39 @@ class ContextMention {
         return _resolveProblems();
       case ContextMentionType.codebase:
         return _resolveCodebase(projectPath);
+      case ContextMentionType.docs:
+        return _resolveDocs();
+    }
+  }
+
+  Future<String> _resolveDocs() async {
+    final url = path;
+    if (url == null || url.isEmpty) {
+      return '(documentación sin URL)';
+    }
+    try {
+      final content = await DocumentationService.getDocumentationContent(url);
+      if (content == null) {
+        return 'Documentación referenciada: $url\n'
+            '(contenido aún no indexado; el agente debe basarse en esta URL)';
+      }
+      final buffer = StringBuffer()
+        ..writeln('📚 ${content.title}')
+        ..writeln('🔗 ${content.url}');
+      if (content.description != null && content.description!.isNotEmpty) {
+        buffer.writeln('📝 ${content.description}');
+      }
+      buffer.writeln();
+      const maxChars = 24000;
+      final body = content.content;
+      if (body.length > maxChars) {
+        buffer.writeln('${body.substring(0, maxChars)}\n… [truncado]');
+      } else {
+        buffer.writeln(body);
+      }
+      return buffer.toString().trimRight();
+    } catch (e) {
+      return '(error al resolver documentación $url: $e)';
     }
   }
 
@@ -234,6 +283,10 @@ class ContextMention {
       '.gradle',
       'DerivedData',
       '.DS_Store',
+      '.lopez_code',
+      '.lopez_code_backups',
+      '.voryxel',
+      '.voryxel_backups',
     };
     return ignored.contains(name);
   }

@@ -23,21 +23,33 @@ class InspectorElement {
   });
 
   factory InspectorElement.fromJson(Map<String, dynamic> json) {
+    Map<String, String> stringMap(dynamic raw) {
+      if (raw is! Map) return {};
+      return raw.map(
+        (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+      );
+    }
+
     return InspectorElement(
-      tagName: json['tagName'] ?? 'unknown',
-      id: json['id'],
-      className: json['className'],
-      attributes: Map<String, String>.from(json['attributes'] ?? {}),
-      textContent: json['textContent'],
-      computedStyles: Map<String, String>.from(json['computedStyles'] ?? {}),
-      boundingRect: json['boundingRect'] != null
-          ? Rect.fromJson(json['boundingRect'])
+      tagName: (json['tagName'] ?? 'unknown').toString(),
+      id: json['id']?.toString(),
+      className: json['className']?.toString(),
+      attributes: stringMap(json['attributes']),
+      textContent: json['textContent']?.toString(),
+      computedStyles: stringMap(json['computedStyles']),
+      boundingRect: json['boundingRect'] is Map
+          ? Rect.fromJson(Map<String, dynamic>.from(json['boundingRect'] as Map))
           : null,
       children: (json['children'] as List<dynamic>?)
-              ?.map((e) => InspectorElement.fromJson(e as Map<String, dynamic>))
+              ?.whereType<Map>()
+              .map(
+                (e) => InspectorElement.fromJson(
+                  Map<String, dynamic>.from(e),
+                ),
+              )
               .toList() ??
           [],
-      parent: null, // Se establecerá después
+      parent: null,
     );
   }
 
@@ -55,11 +67,57 @@ class InspectorElement {
   }
 
   String get displayName {
-    if (id != null && id!.isNotEmpty) return '#$id';
-    if (className != null && className!.isNotEmpty) {
-      return '.${className!.split(' ').first}';
+    final text = textContent?.trim() ?? '';
+    final role = attributes['role']?.trim();
+    final shortText =
+        text.isNotEmpty && text.length <= 24 ? text : null;
+
+    if (id != null && id!.isNotEmpty) {
+      return shortText != null ? '#$id "$shortText"' : '#$id';
     }
-    return tagName.toLowerCase();
+    if (role != null && role.isNotEmpty) {
+      return shortText != null ? '$role "$shortText"' : role;
+    }
+    if (className != null && className!.isNotEmpty) {
+      final cls = '.${className!.split(' ').first}';
+      return shortText != null ? '$cls "$shortText"' : cls;
+    }
+    final tag = tagName.toLowerCase();
+    if (shortText != null) return '$tag "$shortText"';
+    return tag;
+  }
+
+  /// Etiqueta corta para la lista de capas (botón / texto / contenedor…).
+  String get layerLabel {
+    final text = textContent?.trim() ?? '';
+    final role = attributes['role']?.trim() ?? '';
+    final tag = tagName.toLowerCase();
+    final isSemantics =
+        tag.contains('semantics') || (id?.startsWith('flt-semantic') ?? false);
+
+    String kind;
+    if (role == 'button' || tag == 'button') {
+      kind = 'botón';
+    } else if (role == 'text' || role == 'statictext') {
+      kind = 'texto';
+    } else if (text.isNotEmpty && text.length <= 3 && isSemantics) {
+      kind = 'control';
+    } else if (isSemantics) {
+      kind = 'capa';
+    } else if (tag == 'div' || tag == 'span') {
+      kind = 'contenedor';
+    } else {
+      kind = tag;
+    }
+
+    if (text.isNotEmpty && text.length <= 20) {
+      return '$kind · "$text"';
+    }
+    final r = boundingRect;
+    if (r != null) {
+      return '$kind · ${r.width.toStringAsFixed(0)}×${r.height.toStringAsFixed(0)}';
+    }
+    return kind;
   }
 
   String get fullSelector {

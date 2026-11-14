@@ -278,6 +278,306 @@ Error original: $e''';
     }
   }
 
+  /// Carpeta por defecto para proyectos nuevos (la que ya usas).
+  String get _defaultProjectsRoot {
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isEmpty) return Directory.current.path;
+    return '$home/Desktop/Proyectos';
+  }
+
+  /// Nombre de carpeta (cualquier stack). Respeta mayúsculas del usuario
+  /// pero limpia caracteres inválidos en filesystem.
+  String _sanitizeFolderName(String raw) {
+    var name = raw.trim().replaceAll(RegExp(r'[/\\:\0]'), '');
+    name = name.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (name.isEmpty) return 'nuevo_proyecto';
+    return name;
+  }
+
+  /// Nombre de paquete Dart válido (solo si eligen plantilla Flutter).
+  String _sanitizePackageName(String raw) {
+    var name = raw.trim().toLowerCase().replaceAll(RegExp(r'[\s\-]+'), '_');
+    name = name.replaceAll(RegExp(r'[^a-z0-9_]'), '');
+    if (name.isEmpty) return 'my_app';
+    if (RegExp(r'^[0-9]').hasMatch(name)) name = 'app_$name';
+    // "test" es carpeta/reservado en Flutter → evitar choque.
+    if (name == 'test' || name == 'bin' || name == 'lib') {
+      name = '${name}_app';
+    }
+    return name;
+  }
+
+  Future<void> _createNewProject() async {
+    final nameController = TextEditingController(text: 'mi_proyecto');
+    final parentController = TextEditingController(text: _defaultProjectsRoot);
+    // empty = carpeta vacía (cualquier lenguaje); flutter = app Flutter.
+    var template = 'empty';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return AlertDialog(
+              backgroundColor: CursorTheme.surface,
+              title: const Text(
+                'Nuevo proyecto',
+                style: TextStyle(
+                  color: CursorTheme.textPrimary,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              content: SizedBox(
+                width: 440,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Elige el tipo. No estás obligado a usar Flutter.',
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Tipo',
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary.withOpacity(0.9),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _TemplateChip(
+                            label: 'Vacío',
+                            subtitle: 'Solo la carpeta',
+                            selected: template == 'empty',
+                            onTap: () => setLocal(() => template = 'empty'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _TemplateChip(
+                            label: 'Flutter',
+                            subtitle: 'App móvil/web',
+                            selected: template == 'flutter',
+                            onTap: () => setLocal(() => template = 'flutter'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: nameController,
+                      autofocus: true,
+                      style: const TextStyle(
+                        color: CursorTheme.textPrimary,
+                        fontSize: 13,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Nombre del proyecto',
+                        hintText: template == 'flutter' ? 'mi_app' : 'Mi Proyecto',
+                        helperText: template == 'flutter'
+                            ? 'Para Flutter se usa snake_case (ej. mi_app)'
+                            : 'Se crea una carpeta con este nombre',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: parentController,
+                      style: const TextStyle(
+                        color: CursorTheme.textPrimary,
+                        fontSize: 13,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Carpeta destino',
+                        hintText: _defaultProjectsRoot,
+                        suffixIcon: IconButton(
+                          tooltip: 'Elegir carpeta',
+                          icon: const Icon(Icons.folder_open, size: 18),
+                          color: CursorTheme.textSecondary,
+                          onPressed: () async {
+                            final picked =
+                                await FilePicker.platform.getDirectoryPath(
+                              dialogTitle: 'Carpeta donde crear el proyecto',
+                            );
+                            if (picked != null && picked.isNotEmpty) {
+                              parentController.text = picked;
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancelar'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Crear'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final parentPath = parentController.text.trim();
+    if (parentPath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Indica una carpeta destino'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final folderName = template == 'flutter'
+        ? _sanitizePackageName(nameController.text)
+        : _sanitizeFolderName(nameController.text);
+    final projectPath = '$parentPath/$folderName';
+    if (Directory(projectPath).existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Ya existe: $projectPath'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Card(
+          color: CursorTheme.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(CursorTheme.primary),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  template == 'flutter'
+                      ? 'Creando app Flutter…'
+                      : 'Creando carpeta del proyecto…',
+                  style: const TextStyle(
+                    color: CursorTheme.textPrimary,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final parentDir = Directory(parentPath);
+      if (!await parentDir.exists()) {
+        await parentDir.create(recursive: true);
+      }
+
+      if (template == 'empty') {
+        await Directory(projectPath).create(recursive: true);
+        await File('$projectPath/README.md').writeAsString(
+          '# $folderName\n\nProyecto creado con Voryxel Code.\n',
+        );
+      } else {
+        // Solo plataformas habituales (no linux/windows/macos de escritorio
+        // a menos que el usuario las pida después) → menos carpetas basura.
+        final result = await Process.run(
+          '/bin/zsh',
+          [
+            '-lc',
+            'flutter create --org com.voryxel --project-name $folderName '
+                '--platforms=android,ios,web "$projectPath"',
+          ],
+        );
+
+        if (result.exitCode != 0) {
+          if (mounted) Navigator.of(context).pop();
+          final err =
+              '${result.stderr}\n${result.stdout}'.trim();
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: CursorTheme.surface,
+                title: const Text(
+                  'No se pudo crear el proyecto Flutter',
+                  style: TextStyle(
+                    color: CursorTheme.textPrimary,
+                    fontSize: 14,
+                  ),
+                ),
+                content: SelectableText(
+                  err.isEmpty
+                      ? 'flutter create falló (código ${result.exitCode})'
+                      : err,
+                  style: const TextStyle(
+                    color: CursorTheme.textSecondary,
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Cerrar'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      if (mounted) Navigator.of(context).pop(); // loading
+
+      await RunDebugService.cleanup();
+      await ProjectService.saveProjectPath(projectPath);
+      await _saveRecentProject(projectPath);
+
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const MultiChatScreen()),
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al crear proyecto: $e'),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _cloneRepository() async {
     final repoUrlController = TextEditingController();
     final targetPathController = TextEditingController();
@@ -582,11 +882,10 @@ Error original: $e''';
                   const SizedBox(width: 10),
                   Expanded(
                     child: _buildActionCard(
-                      icon: Icons.terminal,
-                      title: 'Connect via SSH',
-                      subtitle: 'Próximamente',
-                      enabled: false,
-                      onTap: null,
+                      icon: Icons.add,
+                      title: 'New project',
+                      subtitle: 'Vacío o Flutter',
+                      onTap: _createNewProject,
                     ),
                   ),
                 ],
@@ -736,6 +1035,66 @@ Error original: $e''';
                   ),
                 ),
               ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TemplateChip extends StatelessWidget {
+  const _TemplateChip({
+    required this.label,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected
+          ? CursorTheme.primary.withOpacity(0.15)
+          : CursorTheme.background,
+      borderRadius: BorderRadius.circular(6),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: selected ? CursorTheme.primary : CursorTheme.border,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected
+                      ? CursorTheme.primary
+                      : CursorTheme.textPrimary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: CursorTheme.textSecondary,
+                  fontSize: 10,
+                ),
+              ),
             ],
           ),
         ),

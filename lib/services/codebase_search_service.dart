@@ -25,6 +25,8 @@ class CodebaseSearchService {
     '.pub-cache',
     '.lopez_code',
     '.lopez_code_backups',
+    '.voryxel',
+    '.voryxel_backups',
     'ephemeral',
   };
 

@@ -6,7 +6,7 @@ class CheckpointFileEntry {
   /// Ruta relativa al [ChatCheckpoint.projectPath].
   final String relativePath;
 
-  /// Ruta del snapshot en `.lopez_code/checkpoints/...`.
+  /// Ruta del snapshot en `.voryxel/checkpoints/...`.
   /// `null` cuando [wasNewFile] es `true` (no había contenido previo).
   final String? backupPath;
 

@@ -52,14 +52,14 @@ class ExplorerToolbar extends StatelessWidget {
           bottom: BorderSide(color: CursorTheme.border, width: 1),
         ),
       ),
+      // Expanded: el sidebar puede bajar a 150px; 4×40+paddings
+      // desbordaban (~19px) con anchos fijos.
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.center, // ✅ FIX: Centrar los botones
         children: List.generate(items.length, (index) {
           final isSelected = index == selectedIndex;
           final item = items[index];
-          
-          return Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4), // ✅ FIX: Espacio parejo entre botones
+
+          return Expanded(
             child: Tooltip(
               message: item['tooltip'] as String,
               child: Material(
@@ -67,15 +67,15 @@ class ExplorerToolbar extends StatelessWidget {
                 child: InkWell(
                   onTap: () {
                     onItemSelected?.call(index);
-                    // Ejecutar acción específica si está definida
                     final action = item['action'] as String?;
                     if (action != null) {
                       onAction?.call(action);
                     }
                   },
+                  borderRadius: BorderRadius.circular(4),
                   child: Container(
-                    width: 40, // ✅ FIX: Ancho fijo
                     height: 40,
+                    alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: isSelected
                           ? CursorTheme.surface

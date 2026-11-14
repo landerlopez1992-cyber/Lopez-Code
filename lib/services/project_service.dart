@@ -134,7 +134,8 @@ class ProjectService {
     String rootPath,
   ) async {
     final Map<String, dynamic> tree = {
-      'name': dir.path == rootPath ? 'root' : dir.path.split('/').last,
+      // Mostrar el nombre real de la carpeta (nunca el literal "root").
+      'name': dir.path.split('/').where((s) => s.isNotEmpty).last,
       'path': dir.path,
       'type': 'directory',
       'children': <Map<String, dynamic>>[],

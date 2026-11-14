@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 import 'screens/welcome_screen.dart';
 import 'widgets/cursor_theme.dart';
 import 'services/permission_service.dart';
+import 'services/settings_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Lopez → Voryxel: recuperar API Key del plist del bundle anterior.
+  await SettingsService.migrateLegacyMacPrefsIfNeeded();
   runApp(const MyApp());
 }
 

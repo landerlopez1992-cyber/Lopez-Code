@@ -1,4 +1,5 @@
 import '../models/pending_action.dart';
+import 'agent_live_step.dart';
 import 'chat_checkpoint.dart';
 
 class Message {
@@ -13,6 +14,8 @@ class Message {
   final ChatCheckpoint? checkpoint; // Snapshot pre-edición (time-travel)
   /// El agente agotó sus pasos sin terminar: mostrar "Continuar tarea".
   final bool canContinueTask;
+  /// Tarjetas en vivo estilo Cursor (diff / shell / explore) mientras trabaja.
+  final List<AgentLiveStep>? liveSteps;
 
   Message({
     required this.role,
@@ -25,6 +28,7 @@ class Message {
     this.isCancelled = false, // ✅ NUEVO
     this.checkpoint,
     this.canContinueTask = false,
+    this.liveSteps,
   });
 
   Message copyWith({
@@ -38,6 +42,7 @@ class Message {
     bool? isCancelled,
     ChatCheckpoint? checkpoint,
     bool? canContinueTask,
+    List<AgentLiveStep>? liveSteps,
   }) {
     return Message(
       role: role ?? this.role,
@@ -50,6 +55,7 @@ class Message {
       isCancelled: isCancelled ?? this.isCancelled,
       checkpoint: checkpoint ?? this.checkpoint,
       canContinueTask: canContinueTask ?? this.canContinueTask,
+      liveSteps: liveSteps ?? this.liveSteps,
     );
   }
 
@@ -65,10 +71,19 @@ class Message {
       'isCancelled': isCancelled,
       'checkpoint': checkpoint?.toJson(),
       'canContinueTask': canContinueTask,
+      'liveSteps': liveSteps?.map((s) => s.toJson()).toList(),
     };
   }
 
   factory Message.fromJson(Map<String, dynamic> json) {
+    List<AgentLiveStep>? steps;
+    final rawSteps = json['liveSteps'];
+    if (rawSteps is List) {
+      steps = rawSteps
+          .whereType<Map>()
+          .map((e) => AgentLiveStep.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
     return Message(
       role: json['role'],
       content: json['content'],
@@ -88,6 +103,7 @@ class Message {
             )
           : null,
       canContinueTask: json['canContinueTask'] == true,
+      liveSteps: steps,
     );
   }
 }

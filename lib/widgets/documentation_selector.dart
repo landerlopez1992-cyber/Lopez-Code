@@ -59,7 +59,7 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
       final saved = await showDialog<bool>(
         context: context,
         barrierDismissible: true,
-        builder: (context) => _AddDocumentationDialog(),
+        builder: (context) => const _AddDocumentationDialog(),
       );
 
       // Si saved es true, significa que se guardó exitosamente
@@ -349,7 +349,19 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
   }
 }
 
+/// Diálogo público para agregar una URL de documentación.
+Future<bool> showAddDocumentationDialog(BuildContext context) async {
+  final saved = await showDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    builder: (context) => const _AddDocumentationDialog(),
+  );
+  return saved == true;
+}
+
 class _AddDocumentationDialog extends StatefulWidget {
+  const _AddDocumentationDialog();
+
   @override
   State<_AddDocumentationDialog> createState() =>
       _AddDocumentationDialogState();
@@ -360,21 +372,158 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
   final _urlController = TextEditingController();
   final _descriptionController = TextEditingController();
   bool _isSaving = false;
+  /// Último nombre autogenerado desde la URL (para no pisar ediciones manuales).
+  String? _lastAutoName;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlController.addListener(_onUrlChanged);
+    _nameController.addListener(_onNameChanged);
+  }
 
   @override
   void dispose() {
+    _urlController.removeListener(_onUrlChanged);
+    _nameController.removeListener(_onNameChanged);
     _nameController.dispose();
     _urlController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
 
+  void _onNameChanged() {
+    final current = _nameController.text.trim();
+    // Si el usuario escribe algo distinto al auto-nombre, deja de autocompletar.
+    if (_lastAutoName != null &&
+        current.isNotEmpty &&
+        current.toLowerCase() != _lastAutoName!.toLowerCase()) {
+      _lastAutoName = null;
+    }
+  }
+
+  void _onUrlChanged() {
+    final suggested = _suggestNameFromUrl(_urlController.text);
+    if (suggested == null || suggested.isEmpty) return;
+
+    final currentName = _nameController.text.trim();
+    final canOverwrite = currentName.isEmpty ||
+        (_lastAutoName != null &&
+            currentName.toLowerCase() == _lastAutoName!.toLowerCase());
+    if (!canOverwrite) return;
+
+    _lastAutoName = suggested;
+    if (_nameController.text != suggested) {
+      _nameController.value = TextEditingValue(
+        text: suggested,
+        selection: TextSelection.collapsed(offset: suggested.length),
+      );
+    }
+  }
+
+  /// Deriva un nombre legible desde la URL (docs.flutter.dev → Flutter).
+  static String? _suggestNameFromUrl(String rawUrl) {
+    var raw = rawUrl.trim();
+    if (raw.isEmpty) return null;
+    if (!raw.contains('://')) {
+      raw = 'https://$raw';
+    }
+    final uri = Uri.tryParse(raw);
+    if (uri == null || uri.host.isEmpty) return null;
+
+    var host = uri.host.toLowerCase();
+    if (host.startsWith('www.')) host = host.substring(4);
+
+    // docs.flutter.dev / api.dart.dev → flutter / dart
+    final hostParts = host.split('.').where((p) => p.isNotEmpty).toList();
+    const skipLabels = {
+      'www',
+      'docs',
+      'doc',
+      'api',
+      'developer',
+      'developers',
+      'dev',
+      'www2',
+      'en',
+      'es',
+      'app',
+      'portal',
+      'help',
+      'support',
+      'learn',
+    };
+    const tlds = {
+      'com',
+      'org',
+      'net',
+      'io',
+      'dev',
+      'ai',
+      'co',
+      'app',
+      'edu',
+      'gov',
+      'info',
+      'me',
+      'tv',
+      'uk',
+      'us',
+      'es',
+      'mx',
+    };
+
+    String? brand;
+    for (final part in hostParts) {
+      if (skipLabels.contains(part) || tlds.contains(part)) continue;
+      brand = part;
+      break;
+    }
+    brand ??= hostParts.isNotEmpty
+        ? hostParts.firstWhere(
+            (p) => !tlds.contains(p),
+            orElse: () => hostParts.first,
+          )
+        : null;
+    if (brand == null || brand.isEmpty) return null;
+
+    // github.com/owner/repo → repo
+    if ((host == 'github.com' || host == 'gitlab.com' || host == 'bitbucket.org') &&
+        uri.pathSegments.isNotEmpty) {
+      final segs =
+          uri.pathSegments.where((s) => s.isNotEmpty).toList();
+      if (segs.length >= 2) {
+        brand = segs[1].replaceAll(RegExp(r'\.git$'), '');
+      } else if (segs.isNotEmpty) {
+        brand = segs.first;
+      }
+    }
+
+    if (brand.isEmpty) return null;
+    // Capitalizar: flutter → Flutter, next-js → Next Js
+    final pretty = brand
+        .split(RegExp(r'[-_]+'))
+        .where((w) => w.isNotEmpty)
+        .map((w) => '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
+    return pretty;
+  }
+
   Future<void> _handleSave() async {
     if (_isSaving) return;
     
-    final name = _nameController.text.trim();
     final url = _urlController.text.trim();
+    var name = _nameController.text.trim();
     final description = _descriptionController.text.trim();
+
+    // Si pegó URL y dejó nombre vacío, completar al guardar.
+    if (name.isEmpty && url.isNotEmpty) {
+      name = _suggestNameFromUrl(url) ?? '';
+      if (name.isNotEmpty) {
+        _nameController.text = name;
+        _lastAutoName = name;
+      }
+    }
     
     // Validación
     if (name.isEmpty || url.isEmpty) {
@@ -475,6 +624,11 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
             style: TextStyle(color: CursorTheme.textPrimary),
             decoration: InputDecoration(
               labelText: 'Nombre',
+              hintText: 'Se completa solo al pegar la URL',
+              hintStyle: TextStyle(
+                color: CursorTheme.textDisabled.withValues(alpha: 0.7),
+                fontSize: 12,
+              ),
               labelStyle: TextStyle(color: CursorTheme.textSecondary),
               border: OutlineInputBorder(
                 borderSide: BorderSide(color: CursorTheme.border),
@@ -486,8 +640,15 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
             controller: _urlController,
             enabled: !_isSaving,
             style: TextStyle(color: CursorTheme.textPrimary),
+            autofocus: true,
+            keyboardType: TextInputType.url,
             decoration: InputDecoration(
               labelText: 'URL',
+              hintText: 'https://docs.flutter.dev/',
+              hintStyle: TextStyle(
+                color: CursorTheme.textDisabled.withValues(alpha: 0.7),
+                fontSize: 12,
+              ),
               labelStyle: TextStyle(color: CursorTheme.textSecondary),
               border: OutlineInputBorder(
                 borderSide: BorderSide(color: CursorTheme.border),

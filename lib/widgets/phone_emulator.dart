@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'cursor_theme.dart';
 import 'voryxel_brand_logo.dart';
 import '../models/inspector_element.dart';
@@ -49,18 +48,39 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
   bool _webViewInitialized = false;
   bool _inspectorMode = false;
   InspectorElement? _selectedElement;
+  /// Evita bucle loadRequest → GET log → rebuild → loadRequest…
+  String? _lastLoadedUrl;
+  DateTime? _lastLoadAt;
+  bool _loadInFlight = false;
+  bool _initialLoadScheduled = false;
 
   @override
   void initState() {
     super.initState();
     _inspectorMode = widget.inspectorMode;
+    if (_inspectorMode) {
+      InspectorSelectionService().setActive(true);
+    }
+    InspectorSelectionService().addListener(_onInspectorSelectionChanged);
     _initializeWebView();
-    // Si ya hay una URL disponible al inicializar, cargarla
+    // Si ya hay una URL disponible al inicializar, cargarla (una sola vez).
     if (widget.appUrl != null && widget.appUrl!.isNotEmpty && widget.isRunning) {
+      _initialLoadScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _loadAppUrl();
+        if (mounted) _loadAppUrl();
       });
     }
+  }
+
+  @override
+  void dispose() {
+    InspectorSelectionService().removeListener(_onInspectorSelectionChanged);
+    super.dispose();
+  }
+
+  void _onInspectorSelectionChanged() {
+    // Capas elegidas desde el panel lateral → resaltar en el preview.
+    _highlightSelectedLayerInWebView();
   }
 
   void _initializeWebView() {
@@ -77,13 +97,21 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           onPageStarted: (String url) {
             print('🌐 WebView cargando: $url');
             _selectedElement = null;
+            _loadInFlight = true;
+            // Marcar pronto para que build() no re-dispare loads.
+            if (!_webViewInitialized && mounted) {
+              setState(() => _webViewInitialized = true);
+            } else {
+              _webViewInitialized = true;
+            }
           },
           onPageFinished: (String url) {
             print('✅ WebView cargado: $url');
+            _loadInFlight = false;
             if (mounted) {
-              setState(() {
-                _webViewInitialized = true;
-              });
+              if (!_webViewInitialized) {
+                setState(() => _webViewInitialized = true);
+              }
               // Inyectar script de inspector si está activo (con delay para asegurar que el canal JS esté listo)
               if (_inspectorMode) {
                 // Esperar más tiempo para asegurar que todo esté listo
@@ -122,6 +150,8 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           if (window.__inspectorHighlightDiv) window.__inspectorHighlightDiv.remove();
           if (window.__inspectorSelectedDiv) window.__inspectorSelectedDiv.remove();
           if (window.__inspectorLabelDiv) window.__inspectorLabelDiv.remove();
+          var oldCss = document.getElementById('__voryxel_inspector_a11y_css');
+          if (oldCss) oldCss.remove();
           window.__inspectorActive = false;
         }
         teardown();
@@ -138,15 +168,47 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         ensureChannel();
         setTimeout(ensureChannel, 400);
 
-        // Intentar exponer nodos de semántica Flutter (mejor hit-test).
-        try {
-          if (window.flutterCanvasKit == null) {
-            // html renderer / glass pane
-          }
-          var a11yBtn = document.querySelector('flt-semantics-placeholder') ||
-                        document.querySelector('[aria-label="Enable accessibility"]');
-          if (a11yBtn && a11yBtn.click) a11yBtn.click();
-        } catch (e) {}
+        // Flutter web pinta en canvas: sin semántica solo existe flutter-view.
+        // Activamos a11y para exponer flt-semantics, pero con CSS para que
+        // el canvas siga visible y los nodos sean solo targets invisibles.
+        function enableFlutterSemanticsForHitTest() {
+          try {
+            if (!document.getElementById('__voryxel_inspector_a11y_css')) {
+              var css = document.createElement('style');
+              css.id = '__voryxel_inspector_a11y_css';
+              css.textContent = [
+                'flt-glass-pane, flt-scene-host, canvas, flutter-view {',
+                '  visibility: visible !important; opacity: 1 !important;',
+                '}',
+                'flt-semantics-host {',
+                '  pointer-events: none !important;',
+                '}',
+                'flt-semantics, [id^="flt-semantic-node"] {',
+                '  pointer-events: auto !important;',
+                '  color: transparent !important;',
+                '  background: transparent !important;',
+                '  border: 0 !important;',
+                '  box-shadow: none !important;',
+                '  outline: none !important;',
+                '  text-shadow: none !important;',
+                '  -webkit-text-fill-color: transparent !important;',
+                '}',
+                'flt-semantics * {',
+                '  color: transparent !important;',
+                '  background: transparent !important;',
+                '  -webkit-text-fill-color: transparent !important;',
+                '}',
+              ].join('\n');
+              document.documentElement.appendChild(css);
+            }
+            var a11yBtn = document.querySelector('flt-semantics-placeholder') ||
+              document.querySelector('[aria-label="Enable accessibility"]');
+            if (a11yBtn && typeof a11yBtn.click === 'function') a11yBtn.click();
+          } catch (e) {}
+        }
+        enableFlutterSemanticsForHitTest();
+        setTimeout(enableFlutterSemanticsForHitTest, 500);
+        setTimeout(enableFlutterSemanticsForHitTest, 1500);
 
         var highlightDiv = document.createElement('div');
         highlightDiv.id = '__inspector_highlight';
@@ -174,7 +236,8 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           if (!el || !el.id) return false;
           return el.id === '__inspector_highlight' ||
                  el.id === '__inspector_selected' ||
-                 el.id === '__inspector_label';
+                 el.id === '__inspector_label' ||
+                 el.id === '__voryxel_inspector_a11y_css';
         }
 
         function isBoring(el) {
@@ -182,36 +245,73 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           var tag = el.tagName.toLowerCase();
           if (tag === 'html' || tag === 'body' || tag === 'script' || tag === 'style') return true;
           if (tag === 'flt-glass-pane' || tag === 'flt-scene-host' || tag === 'canvas') return true;
+          // Raíz del preview: no es un botón/widget concreto.
+          if (tag === 'flutter-view' || tag === 'flt-semantics-host') return true;
           return false;
+        }
+
+        function nodeArea(el) {
+          var rect = el.getBoundingClientRect();
+          return Math.max(0, rect.width) * Math.max(0, rect.height);
         }
 
         function scoreElement(el) {
           if (!el || isOverlay(el) || isBoring(el)) return -1;
           var score = 1;
           var tag = el.tagName.toLowerCase();
-          if (tag.indexOf('flt-semantics') === 0) score += 8;
-          if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'textarea') score += 6;
-          if (el.getAttribute && (el.getAttribute('role') || el.getAttribute('aria-label'))) score += 5;
-          if (el.id) score += 3;
-          var text = (el.innerText || el.textContent || '').trim();
-          if (text && text.length > 0 && text.length < 40) score += 4;
-          var rect = el.getBoundingClientRect();
-          var area = Math.max(0, rect.width) * Math.max(0, rect.height);
-          if (area > 0 && area < 40000) score += 2;
-          if (area > 120000) score -= 3;
+          var role = (el.getAttribute && el.getAttribute('role')) || '';
+          var label = (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '';
+          var text = (label || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+
+          if (tag.indexOf('flt-semantics') === 0 || (el.id && String(el.id).indexOf('flt-semantic') === 0)) {
+            score += 10;
+          }
+          if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'textarea') score += 8;
+          if (role === 'button' || role === 'textbox' || role === 'link') score += 8;
+          if (label) score += 6;
+          // Texto corto tipo "2", "+", "C" → muy probable control.
+          if (text && text.length > 0 && text.length <= 3) score += 12;
+          else if (text && text.length > 0 && text.length < 24) score += 5;
+          // Penalizar nodos enormes (pantalla entera / scaffolds).
+          var area = nodeArea(el);
+          var vw = Math.max(1, window.innerWidth * window.innerHeight);
+          if (area > 0 && area < 8000) score += 8;
+          else if (area < 25000) score += 4;
+          else if (area > vw * 0.45) score -= 20;
+          else if (area > 120000) score -= 8;
           return score;
+        }
+
+        function containsPoint(el, x, y) {
+          var r = el.getBoundingClientRect();
+          return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom &&
+                 r.width > 0 && r.height > 0;
         }
 
         function pickInspectable(x, y, fallback) {
           var stack = [];
           try { stack = document.elementsFromPoint(x, y) || []; } catch (e) {}
+          // Semántica a veces no entra en elementsFromPoint; escanear nodos.
+          try {
+            var nodes = document.querySelectorAll('flt-semantics, [id^="flt-semantic-node"]');
+            for (var n = 0; n < nodes.length; n++) {
+              if (containsPoint(nodes[n], x, y)) stack.push(nodes[n]);
+            }
+          } catch (e2) {}
+
           var best = null;
           var bestScore = -1;
+          var bestArea = Infinity;
           for (var i = 0; i < stack.length; i++) {
             var el = stack[i];
+            if (isOverlay(el)) continue;
             var s = scoreElement(el);
-            if (s > bestScore) {
+            if (s < 0) continue;
+            var area = nodeArea(el);
+            // Mejor score; empate → el más pequeño (botón vs contenedor).
+            if (s > bestScore || (s === bestScore && area < bestArea)) {
               bestScore = s;
+              bestArea = area;
               best = el;
             }
           }
@@ -311,7 +411,64 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           };
         }
 
-        function post(type, element) {
+        function looksLikeBgClass(c) {
+          if (!c || typeof c !== 'string') return false;
+          var s = c.toLowerCase();
+          return s.indexOf('bg-') >= 0 || s.indexOf('gradient') >= 0 ||
+                 s.indexOf('from-') >= 0 || s.indexOf('via-') >= 0 ||
+                 s.indexOf('to-') >= 0;
+        }
+
+        function collectLayersAt(x, y) {
+          var stack = [];
+          try { stack = document.elementsFromPoint(x, y) || []; } catch (e) {}
+          try {
+            var nodes = document.querySelectorAll('flt-semantics, [id^="flt-semantic-node"]');
+            for (var n = 0; n < nodes.length; n++) {
+              if (containsPoint(nodes[n], x, y)) stack.push(nodes[n]);
+            }
+          } catch (e2) {}
+          var seen = {};
+          var layers = [];
+          for (var i = 0; i < stack.length; i++) {
+            var el = stack[i];
+            if (!el || isOverlay(el) || isBoring(el) || scoreElement(el) < 0) continue;
+            var info = getElementInfo(el);
+            if (!info || !info.boundingRect) continue;
+            var key = (info.id || '') + '|' + info.tagName + '|' +
+              Math.round(info.boundingRect.x) + '|' + Math.round(info.boundingRect.y) + '|' +
+              Math.round(info.boundingRect.width) + '|' + Math.round(info.boundingRect.height);
+            if (seen[key]) continue;
+            seen[key] = true;
+            layers.push(info);
+          }
+          layers.sort(function(a, b) {
+            var aa = (a.boundingRect.width || 0) * (a.boundingRect.height || 0);
+            var bb = (b.boundingRect.width || 0) * (b.boundingRect.height || 0);
+            return aa - bb;
+          });
+          // Incluir body/html al final si pintan fondo (gradientes Tailwind).
+          // isBoring los excluye del click, pero el agente necesita verlos.
+          function appendPaintRoot(node) {
+            if (!node || isOverlay(node)) return;
+            var info = getElementInfo(node);
+            if (!info) return;
+            var cls = info.className || '';
+            var bg = (info.computedStyles && info.computedStyles.backgroundColor) || '';
+            var useful = looksLikeBgClass(cls) ||
+              (bg && bg !== 'transparent' && bg.indexOf('rgba(0, 0, 0, 0)') < 0);
+            if (!useful) return;
+            var key = (info.id || '') + '|' + info.tagName + '|paint-root';
+            if (seen[key]) return;
+            seen[key] = true;
+            layers.push(info);
+          }
+          appendPaintRoot(document.body);
+          appendPaintRoot(document.documentElement);
+          return layers.slice(0, 14);
+        }
+
+        function post(type, element, layers) {
           var info = getElementInfo(element);
           if (!info) return;
           if (!window.flutter_inspector || !window.flutter_inspector.postMessage) {
@@ -319,12 +476,16 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           }
           if (window.flutter_inspector && window.flutter_inspector.postMessage) {
             try {
-              window.flutter_inspector.postMessage(JSON.stringify({ type: type, element: info }));
+              window.flutter_inspector.postMessage(JSON.stringify({
+                type: type,
+                element: info,
+                layers: layers || []
+              }));
             } catch (e) {}
           }
         }
 
-        function hoverElement(element) {
+        function hoverElement(element, x, y) {
           if (!element || element === document.body || element === document.documentElement) return;
           currentHoveredElement = element;
           var rect = updateBox(element, highlightDiv);
@@ -332,19 +493,40 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           var now = Date.now();
           if (now - lastHoverSentAt > 80) {
             lastHoverSentAt = now;
-            post('elementHovered', element);
+            var layers = (typeof x === 'number' && typeof y === 'number')
+              ? collectLayersAt(x, y)
+              : [];
+            post('elementHovered', element, layers);
           }
         }
 
-        function selectElement(element) {
+        function selectElement(element, x, y) {
           if (!element || element === document.body || element === document.documentElement) return;
           currentSelectedElement = element;
           currentHoveredElement = element;
           var rect = updateBox(element, selectedDiv);
           updateBox(element, highlightDiv);
           updateLabel(element, rect, true);
-          post('elementSelected', element);
+          var layers = (typeof x === 'number' && typeof y === 'number')
+            ? collectLayersAt(x, y)
+            : [];
+          post('elementSelected', element, layers);
         }
+
+        // Resalta un rect desde el panel de capas (Dart → JS).
+        window.__inspectorHighlightRect = function(x, y, w, h, selected) {
+          var div = selected ? selectedDiv : highlightDiv;
+          if (!div) return;
+          div.style.left = x + 'px';
+          div.style.top = y + 'px';
+          div.style.width = Math.max(0, w) + 'px';
+          div.style.height = Math.max(0, h) + 'px';
+          div.style.display = 'block';
+          if (selected) {
+            highlightDiv.style.display = 'none';
+            labelDiv.style.display = 'none';
+          }
+        };
 
         function stopEvent(e) {
           e.preventDefault();
@@ -356,7 +538,9 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         window.__inspectorMouseMoveHandler = function(e) {
           if (!window.__inspectorActive) return;
           var el = pickInspectable(e.clientX, e.clientY, e.target);
-          if (el && el !== currentHoveredElement) hoverElement(el);
+          if (el && el !== currentHoveredElement) {
+            hoverElement(el, e.clientX, e.clientY);
+          }
         };
 
         window.__inspectorHoverOutHandler = function(e) {
@@ -382,7 +566,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         window.__inspectorClickHandler = function(e) {
           if (!window.__inspectorActive) return;
           var el = pickInspectable(e.clientX, e.clientY, e.target);
-          if (el) selectElement(el);
+          if (el) selectElement(el, e.clientX, e.clientY);
           return stopEvent(e);
         };
 
@@ -391,7 +575,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           if (e.touches && e.touches.length > 0) {
             var t = e.touches[0];
             var el = pickInspectable(t.clientX, t.clientY, document.elementFromPoint(t.clientX, t.clientY));
-            if (el) hoverElement(el);
+            if (el) hoverElement(el, t.clientX, t.clientY);
           }
           return stopEvent(e);
         };
@@ -401,7 +585,9 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           if (e.touches && e.touches.length > 0) {
             var t = e.touches[0];
             var el = pickInspectable(t.clientX, t.clientY, document.elementFromPoint(t.clientX, t.clientY));
-            if (el && el !== currentHoveredElement) hoverElement(el);
+            if (el && el !== currentHoveredElement) {
+              hoverElement(el, t.clientX, t.clientY);
+            }
           }
           return stopEvent(e);
         };
@@ -411,7 +597,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           if (e.changedTouches && e.changedTouches.length > 0) {
             var t = e.changedTouches[0];
             var el = pickInspectable(t.clientX, t.clientY, document.elementFromPoint(t.clientX, t.clientY));
-            if (el) selectElement(el);
+            if (el) selectElement(el, t.clientX, t.clientY);
           }
           return stopEvent(e);
         };
@@ -465,6 +651,8 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           window.__inspectorLabelDiv.remove();
           window.__inspectorLabelDiv = null;
         }
+        var a11yCss = document.getElementById('__voryxel_inspector_a11y_css');
+        if (a11yCss) a11yCss.remove();
         document.documentElement.style.cursor = '';
         window.__inspectorActive = false;
       })();
@@ -487,23 +675,48 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
       final element = InspectorElement.fromJson(
         Map<String, dynamic>.from(data['element'] as Map),
       );
+      final layers = (data['layers'] as List?)
+              ?.whereType<Map>()
+              .map(
+                (e) => InspectorElement.fromJson(
+                  Map<String, dynamic>.from(e),
+                ),
+              )
+              .toList() ??
+          const <InspectorElement>[];
 
       if (type == 'elementHovered') {
-        InspectorSelectionService().setHovered(element);
+        InspectorSelectionService().setHovered(element, layers: layers);
         widget.onElementHovered?.call(element);
         return;
       }
 
       if (type == 'elementSelected') {
-        setState(() {
-          _selectedElement = element;
-        });
-        InspectorSelectionService().setSelected(element);
+        // No setState aquí: un overlay local tapaba el WebView. El detalle
+        // se muestra en InspectorMonitorPanel (fuera del teléfono).
+        _selectedElement = element;
+        InspectorSelectionService().setSelected(element, layers: layers);
         widget.onElementSelected?.call(element);
       }
     } catch (e) {
       print('❌ Error al procesar mensaje del inspector: $e');
     }
+  }
+
+  Future<void> _highlightSelectedLayerInWebView() async {
+    if (!_inspectorMode || !_webViewInitialized) return;
+    final el = InspectorSelectionService().selected ??
+        InspectorSelectionService().hovered;
+    final r = el?.boundingRect;
+    if (r == null) return;
+    final selected = InspectorSelectionService().selected != null;
+    try {
+      await _webViewController.runJavaScript(
+        'if (window.__inspectorHighlightRect) '
+        'window.__inspectorHighlightRect('
+        '${r.x}, ${r.y}, ${r.width}, ${r.height}, $selected);',
+      );
+    } catch (_) {}
   }
 
 
@@ -544,41 +757,30 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
       _loadAppUrl(forceReload: true);
     }
     
-    // Cargar URL si cambió o si ahora está disponible
+    // Cargar URL solo si cambió de verdad o acabó de quedar lista.
+    // NUNCA recargar solo porque !_webViewInitialized: eso + logs GET
+    // del http.server creaba un bucle infinito de recargas.
     final becameReady = widget.compilationProgress >= 1.0 &&
         oldWidget.compilationProgress < 1.0 &&
         widget.appUrl != null &&
         widget.appUrl!.isNotEmpty &&
         widget.isRunning;
-    if (widget.appUrl != null && 
-        widget.appUrl!.isNotEmpty && 
-        widget.isRunning &&
-        (widget.appUrl != oldWidget.appUrl || 
-         (oldWidget.appUrl == null && widget.appUrl != null) ||
-         !_webViewInitialized ||
-         becameReady)) {
-      print('🔄 PhoneEmulator: URL actualizada de "${oldWidget.appUrl}" a "${widget.appUrl}"'
-          '${becameReady ? ' (app lista → reload)' : ''}');
-      print('   isRunning: ${widget.isRunning}');
-      print('   appUrl: ${widget.appUrl}');
-      print('   _webViewInitialized: $_webViewInitialized');
+    final urlChanged = widget.appUrl != oldWidget.appUrl &&
+        widget.appUrl != null &&
+        widget.appUrl!.isNotEmpty &&
+        widget.isRunning;
+    if (urlChanged || becameReady) {
+      print(
+        '🔄 PhoneEmulator: URL actualizada de "${oldWidget.appUrl}" '
+        'a "${widget.appUrl}"${becameReady ? ' (app lista)' : ''}',
+      );
       _loadAppUrl();
     }
-    
-    // Debug: mostrar estado actual
+
     if (widget.isRunning && widget.appUrl == null) {
-      print('⚠️ PhoneEmulator: El servidor está ejecutándose pero no hay URL disponible aún');
-    }
-    
-    // Si la URL está disponible pero el WebView no se ha inicializado, forzar carga
-    if (widget.isRunning && 
-        widget.appUrl != null && 
-        widget.appUrl!.isNotEmpty && 
-        !_webViewInitialized) {
-      print('🔄 PhoneEmulator: Forzando carga de URL porque WebView no está inicializado');
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _loadAppUrl();
-      });
+      print(
+        '⚠️ PhoneEmulator: El servidor está ejecutándose pero no hay URL',
+      );
     }
   }
 
@@ -588,17 +790,35 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
       print('⚠️ PhoneEmulator._loadAppUrl: No hay URL disponible');
       return;
     }
-    // Cache-bust para que Hot Restart no sirva la página vieja.
-    final base = raw.split('#').first;
-    final sep = base.contains('?') ? '&' : '?';
+    final now = DateTime.now();
+    // forceReload (agente / ⚡ Preview) SIEMPRE recarga; el debounce solo
+    // evita tormentas de loads accidentales.
+    if (!forceReload && _loadInFlight) {
+      print('⏳ PhoneEmulator: reload ignorado (carga en curso)');
+      return;
+    }
+    if (!forceReload &&
+        _lastLoadAt != null &&
+        now.difference(_lastLoadAt!) < const Duration(milliseconds: 1200)) {
+      print('⏳ PhoneEmulator: reload ignorado (debounce)');
+      return;
+    }
+    // Cache-bust solo en forceReload (Hot Restart / edit del agente).
+    final base = raw.split('#').first.split('?').first;
     final url = forceReload
-        ? '$base${sep}_lopez_preview=${DateTime.now().millisecondsSinceEpoch}'
-        : raw;
+        ? '$base?_lopez_preview=${now.millisecondsSinceEpoch}'
+        : base;
+    if (!forceReload && _lastLoadedUrl == url) {
+      return;
+    }
+    _lastLoadedUrl = url;
+    _lastLoadAt = now;
+    _loadInFlight = true;
     print('📱 PhoneEmulator._loadAppUrl: $url (forceReload=$forceReload)');
     try {
-      final uri = Uri.parse(url);
-      _webViewController.loadRequest(uri);
+      _webViewController.loadRequest(Uri.parse(url));
     } catch (e) {
+      _loadInFlight = false;
       print('❌ Error al cargar URL en WebView: $e');
     }
   }
@@ -617,31 +837,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
           print('🌐 PhoneEmulator (Web): Mostrando WebView con URL: ${widget.appUrl}');
           return _buildWebMonitor(
-            child: Stack(
-              children: [
-                // WebView a todo ancho
-                _buildWebViewWithInspector(),
-                // Botón para abrir en navegador externo
-                Positioned(
-                  top: 10,
-                  right: 10,
-                  child: FloatingActionButton.small(
-                    onPressed: () async {
-                      final uri = Uri.parse(widget.appUrl!);
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(uri, mode: LaunchMode.externalApplication);
-                        print('✅ URL abierta en navegador externo: ${widget.appUrl}');
-                      } else {
-                        print('❌ No se pudo abrir la URL en navegador externo: ${widget.appUrl}');
-                      }
-                    },
-                    backgroundColor: CursorTheme.primary,
-                    child: Icon(Icons.open_in_browser, color: Colors.white),
-                    tooltip: 'Abrir en navegador externo',
-                  ),
-                ),
-              ],
-            ),
+            child: _buildWebViewWithInspector(),
           );
         } else if (widget.isRunning) {
           // Mostrar indicador de carga si está ejecutándose pero aún no hay URL
@@ -690,30 +886,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
           print('🌐 PhoneEmulator (Fallback Web): Mostrando WebView con URL: ${widget.appUrl}');
           return _buildWebMonitor(
-            child: Stack(
-              children: [
-                _buildWebViewWithInspector(),
-                // Botón para abrir en navegador externo
-                Positioned(
-                  top: 10,
-                  right: 10,
-                  child: FloatingActionButton.small(
-                    onPressed: () async {
-                      final uri = Uri.parse(widget.appUrl!);
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(uri, mode: LaunchMode.externalApplication);
-                        print('✅ URL abierta en navegador externo: ${widget.appUrl}');
-                      } else {
-                        print('❌ No se pudo abrir la URL en navegador externo: ${widget.appUrl}');
-                      }
-                    },
-                    backgroundColor: CursorTheme.primary,
-                    child: Icon(Icons.open_in_browser, color: Colors.white),
-                    tooltip: 'Abrir en navegador externo',
-                  ),
-                ),
-              ],
-            ),
+            child: _buildWebViewWithInspector(),
           );
         }
         // Si no hay URL, mostrar placeholder tipo monitor
@@ -1089,17 +1262,16 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     }
 
     // WebView: Web full-bleed O Android/iOS Preview dentro del marco.
+    // NUNCA llamar _loadAppUrl desde build(): cada notify del Output
+    // reconstruía y disparaba GET / en bucle (scroll temblequeaba).
     final hasUrl = widget.appUrl != null && widget.appUrl!.isNotEmpty;
     if (widget.isRunning &&
         hasUrl &&
         (isWeb || isMobilePreview || isAndroid || isIOS)) {
-      print(
-        '✅ WebView Preview (${widget.platform}) → ${widget.appUrl}'
-        '${isMobilePreview ? ' (marco teléfono)' : ''}',
-      );
-      if (!_webViewInitialized) {
+      if (!_initialLoadScheduled && _lastLoadedUrl == null) {
+        _initialLoadScheduled = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _loadAppUrl();
+          if (mounted) _loadAppUrl();
         });
       }
       return _buildWebViewWithInspector();
@@ -1405,280 +1577,9 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     );
   }
 
-  /// Construye el WebView con el inspector y overlay
+  /// WebView del preview. El detalle del inspector NO va encima del teléfono
+  /// (eso tapaba la app); vive en InspectorMonitorPanel al lado.
   Widget _buildWebViewWithInspector() {
-    return Stack(
-      children: [
-        WebViewWidget(controller: _webViewController),
-        // Overlay del inspector si está activo y hay un elemento seleccionado
-        // Solo mostrar el overlay si el inspector está activo y hay un elemento seleccionado
-        if (_inspectorMode && _selectedElement != null)
-          _buildInspectorOverlay(),
-      ],
-    );
-  }
-
-
-  /// Construye el overlay con información del elemento seleccionado
-  Widget _buildInspectorOverlay() {
-    if (_selectedElement == null) return const SizedBox.shrink();
-
-    // El overlay solo debe cubrir el área del WebView, no toda la pantalla
-    // Usamos Positioned para colocar el panel lateral sin cubrir todo
-    return Positioned(
-      right: 0,
-      top: 0,
-      bottom: 0,
-      child: IgnorePointer(
-        ignoring: false, // Permitir interacción con el panel
-        child: Container(
-          width: 320,
-          decoration: BoxDecoration(
-            color: CursorTheme.surface,
-            border: Border(
-              left: BorderSide(
-                color: CursorTheme.border,
-                width: 1,
-              ),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 10,
-                offset: const Offset(-2, 0),
-              ),
-            ],
-          ),
-          child: _buildInspectorPanel(),
-        ),
-      ),
-    );
-  }
-
-  /// Construye el panel de información del inspector
-  Widget _buildInspectorPanel() {
-    if (_selectedElement == null) return const SizedBox.shrink();
-
-    final element = _selectedElement!;
-
-    return Column(
-      children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: CursorTheme.background,
-            border: Border(
-              bottom: BorderSide(
-                color: CursorTheme.border,
-                width: 1,
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                Icons.code,
-                size: 20,
-                color: CursorTheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Inspector de Elementos',
-                  style: TextStyle(
-                    color: CursorTheme.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18),
-                color: CursorTheme.textSecondary,
-                onPressed: () {
-                  setState(() {
-                    _selectedElement = null;
-                  });
-                },
-                tooltip: 'Cerrar inspector',
-              ),
-            ],
-          ),
-        ),
-        // Contenido
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Información básica
-                _buildInspectorSection(
-                  'Elemento',
-                  [
-                    _buildInspectorRow('Tag', element.tagName),
-                    if (element.id != null && element.id!.isNotEmpty)
-                      _buildInspectorRow('ID', element.id!),
-                    if (element.className != null && element.className!.isNotEmpty)
-                      _buildInspectorRow('Clase', element.className!),
-                    _buildInspectorRow('Selector', element.fullSelector),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                // Dimensiones
-                if (element.boundingRect != null)
-                  _buildInspectorSection(
-                    'Dimensiones',
-                    [
-                      _buildInspectorRow('X', '${element.boundingRect!.x.toInt()}px'),
-                      _buildInspectorRow('Y', '${element.boundingRect!.y.toInt()}px'),
-                      _buildInspectorRow('Ancho', '${element.boundingRect!.width.toInt()}px'),
-                      _buildInspectorRow('Alto', '${element.boundingRect!.height.toInt()}px'),
-                    ],
-                  ),
-                const SizedBox(height: 16),
-                // Estilos
-                if (element.computedStyles.isNotEmpty)
-                  _buildInspectorSection(
-                    'Estilos',
-                    element.computedStyles.entries.map((entry) {
-                      return _buildInspectorRow(entry.key, entry.value);
-                    }).toList(),
-                  ),
-                const SizedBox(height: 16),
-                // Atributos
-                if (element.attributes.isNotEmpty)
-                  _buildInspectorSection(
-                    'Atributos',
-                    element.attributes.entries.map((entry) {
-                      return _buildInspectorRow(entry.key, entry.value);
-                    }).toList(),
-                  ),
-                const SizedBox(height: 16),
-                // Contenido de texto
-                if (element.textContent != null && element.textContent!.isNotEmpty)
-                  _buildInspectorSection(
-                    'Contenido',
-                    [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: CursorTheme.background,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: CursorTheme.border,
-                            width: 1,
-                          ),
-                        ),
-                        child: SelectableText(
-                          element.textContent!,
-                          style: TextStyle(
-                            color: CursorTheme.textPrimary,
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                const SizedBox(height: 16),
-                // Hijos
-                if (element.children.isNotEmpty)
-                  _buildInspectorSection(
-                    'Elementos Hijos (${element.children.length})',
-                    element.children.take(5).map((child) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: CursorTheme.background,
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(
-                              color: CursorTheme.border,
-                              width: 1,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.label_outline,
-                                size: 16,
-                                color: CursorTheme.textSecondary,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  child.displayName,
-                                  style: TextStyle(
-                                    color: CursorTheme.textPrimary,
-                                    fontSize: 12,
-                                    fontFamily: 'monospace',
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildInspectorSection(String title, List<Widget> children) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: TextStyle(
-            color: CursorTheme.primary,
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        ...children,
-      ],
-    );
-  }
-
-  Widget _buildInspectorRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 80,
-            child: Text(
-              label,
-              style: TextStyle(
-                color: CursorTheme.textSecondary,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value,
-              style: TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 11,
-                fontFamily: 'monospace',
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return WebViewWidget(controller: _webViewController);
   }
 }

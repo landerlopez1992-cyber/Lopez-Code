@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/message.dart';
+import '../models/agent_live_step.dart';
 import '../models/context_mention.dart';
 import '../models/chat_checkpoint.dart';
 import '../services/openai_service.dart';
@@ -22,6 +23,7 @@ import '../widgets/cursor_chat_input.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/voryxel_brand_logo.dart';
 import '../widgets/context_autocomplete_overlay.dart';
+import '../widgets/documentation_selector.dart';
 import '../widgets/checkpoint_banner_widget.dart';
 import '../widgets/error_confirmation_dialog.dart';
 import '../services/debug_console_service.dart';
@@ -141,6 +143,8 @@ class _ChatScreenState extends State<ChatScreen> {
   String _streamingAssistantText = '';
   /// Timeline de pasos del Agent Loop (visible en la burbuja del asistente).
   String _agentTimelineBuffer = '';
+  /// Tarjetas estilo Cursor (diff / shell) en vivo durante el turno.
+  final List<AgentLiveStep> _agentLiveSteps = [];
 
   /// Checkpoint del turno Agent (auto-apply) — se muestra en CheckpointBanner.
   ChatCheckpoint? _turnCheckpoint;
@@ -631,6 +635,7 @@ $compact
     _streamingAssistantText = '';
     if (clearTimeline) {
       _agentTimelineBuffer = '';
+      _agentLiveSteps.clear();
     }
   }
 
@@ -672,7 +677,11 @@ $compact
         .replaceAll(']', '\\]');
   }
 
-  void _handleStepProgress(String statusText, {String? detail}) {
+  void _handleStepProgress(
+    String statusText, {
+    String? detail,
+    AgentLiveStep? card,
+  }) {
     if (!mounted || statusText.trim().isEmpty) return;
     // Timeline Cursor: sin prefijos emoji ni HR markdown (---).
     final cleanStatus = statusText
@@ -694,6 +703,28 @@ $compact
       _agentTimelineBuffer = _agentTimelineBuffer.isEmpty
           ? line
           : '$_agentTimelineBuffer\n$line';
+      if (card != null) {
+        // Sustituir tarjeta "running" del mismo archivo/comando por la final.
+        final existing = _agentLiveSteps.indexWhere((s) {
+          if (!s.running) return false;
+          if (card.filePath != null &&
+              card.filePath!.isNotEmpty &&
+              s.filePath == card.filePath) {
+            return true;
+          }
+          if (card.command != null &&
+              card.command!.isNotEmpty &&
+              s.command == card.command) {
+            return true;
+          }
+          return s.kind == card.kind && s.title == card.title;
+        });
+        if (existing >= 0) {
+          _agentLiveSteps[existing] = card;
+        } else {
+          _agentLiveSteps.add(card);
+        }
+      }
       final content = _streamingAssistantText.isNotEmpty
           ? '$_agentTimelineBuffer\n\n$_streamingAssistantText'
           : _agentTimelineBuffer;
@@ -701,6 +732,7 @@ $compact
         role: 'assistant',
         content: content,
         timestamp: DateTime.now(),
+        liveSteps: List<AgentLiveStep>.from(_agentLiveSteps),
       );
       final index = _streamingAssistantMessageIndex;
       if (index != null && index >= 0 && index < _messages.length) {
@@ -725,6 +757,9 @@ $compact
         role: 'assistant',
         content: content,
         timestamp: DateTime.now(),
+        liveSteps: _agentLiveSteps.isEmpty
+            ? null
+            : List<AgentLiveStep>.from(_agentLiveSteps),
       );
       final index = _streamingAssistantMessageIndex;
       if (index != null && index >= 0 && index < _messages.length) {
@@ -880,6 +915,7 @@ $compact
       _streamingAssistantMessageIndex = null;
       _streamingAssistantText = '';
       _agentTimelineBuffer = '';
+      _agentLiveSteps.clear();
     });
     _scrollToBottom();
   }
@@ -903,6 +939,7 @@ $compact
       _streamingAssistantMessageIndex = null;
       _streamingAssistantText = '';
       _agentTimelineBuffer = '';
+      _agentLiveSteps.clear();
       _messageController.text = content;
       _selectedImages = images;
       _selectedFilePath = filePath;
@@ -923,16 +960,19 @@ $compact
             !finalText.contains(_agentTimelineBuffer)
         ? '$_agentTimelineBuffer\n\n$finalText'
         : finalText;
+    final steps = List<AgentLiveStep>.from(_agentLiveSteps);
     setState(() {
       _messages[index] = Message(
         role: 'assistant',
         content: content,
         timestamp: DateTime.now(),
         checkpoint: checkpoint,
+        liveSteps: steps.isEmpty ? null : steps,
       );
       _streamingAssistantMessageIndex = null;
       _streamingAssistantText = '';
       _agentTimelineBuffer = '';
+      _agentLiveSteps.clear();
       _loadingStatus = '';
     });
     return true;
@@ -990,29 +1030,89 @@ $compact
     final hasText = _messageController.text.trim().isNotEmpty;
     final hasImages = _selectedImages.isNotEmpty;
 
+    // Lock huérfano: un return temprano dejó _isSending=true y bloqueaba
+    // Return / el botón de enviar para siempre (UI sigue en azul, no en stop).
+    if (_isSending && !_isLoading) {
+      print('⚠️ Liberando lock de envío huérfano (_isSending sin _isLoading)');
+      _isSending = false;
+    }
+
     // ✅ FIX: Protección contra envíos duplicados y carga infinita
     if ((!hasText && !hasImages) || _isLoading || _isSending) {
       print(
-        '⚠️ Intento de envío duplicado bloqueado: _isLoading=$_isLoading, _isSending=$_isSending',
+        '⚠️ Intento de envío bloqueado: hasText=$hasText hasImages=$hasImages '
+        '_isLoading=$_isLoading _isSending=$_isSending',
       );
       return;
     }
 
     _isSending = true; // ✅ Marcar como enviando
 
+    void releaseSendLock() {
+      _isSending = false;
+    }
+
     // ✅ FIX: Inicializar saldo si no existe (solo la primera vez)
-    final currentBalance = await CreditService.getBalance();
-    print('💰 Saldo actual: \$${currentBalance.toStringAsFixed(2)}');
+    try {
+      final currentBalance = await CreditService.getBalance();
+      print('💰 Saldo actual: \$${currentBalance.toStringAsFixed(2)}');
+    } catch (e) {
+      print('⚠️ No se pudo leer saldo: $e');
+    }
 
     if (_openAIService == null) {
       try {
         await _loadOpenAIService();
         if (_openAIService == null) {
+          releaseSendLock();
+          // Sin API Key el envío abría Configuración “en silencio” y parecía
+          // un bug de navegación. Avisamos y luego abrimos settings.
+          if (mounted) {
+            await showDialog<void>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: CursorTheme.surface,
+                title: const Text(
+                  'Falta la API Key',
+                  style: TextStyle(
+                    color: CursorTheme.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                content: const Text(
+                  'Para enviar mensajes al agente necesitas guardar tu '
+                  'API Key de OpenAI en Configuración.\n\n'
+                  'Pégala, pulsa “Guardar API Key” y vuelve a enviar.',
+                  style: TextStyle(
+                    color: CursorTheme.textSecondary,
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Ir a Configuración'),
+                  ),
+                ],
+              ),
+            );
+          }
           _openSettings();
           return;
         }
       } catch (e) {
         print('❌ Error al inicializar OpenAI Service: $e');
+        releaseSendLock();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudo iniciar el agente: $e'),
+              backgroundColor: Colors.red.shade800,
+            ),
+          );
+        }
         return;
       }
     }
@@ -1020,14 +1120,17 @@ $compact
     final projectPath =
         widget.projectPath ?? await ProjectService.getProjectPath();
     if (projectPath == null || projectPath.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No hay proyecto cargado. Por favor carga un proyecto primero.',
+      releaseSendLock();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No hay proyecto cargado. Por favor carga un proyecto primero.',
+            ),
+            backgroundColor: Colors.orange,
           ),
-          backgroundColor: Colors.orange,
-        ),
-      );
+        );
+      }
       return;
     }
 
@@ -1306,6 +1409,8 @@ $compact
               final deducted = await CreditService.deductCredits(
                 tokens,
                 costPerToken,
+                model: currentModel,
+                note: allowTools ? 'Agent' : 'Ask',
               );
               if (!deducted) {
                 print('⚠️ No se pudieron descontar créditos');
@@ -1481,6 +1586,7 @@ $compact
         _streamingAssistantMessageIndex = messageIndex;
         _streamingAssistantText = '';
         _agentTimelineBuffer = 'Applying ${actions.length} change(s)';
+        _agentLiveSteps.clear();
         _isLoading = true;
         _loadingStatus = 'Applying ${actions.length} change(s)';
         _pendingActionsShown = false;
@@ -1853,6 +1959,36 @@ $compact
     }
   }
 
+  /// Mata el runner local (HTML/Node/etc). Con runInShell el shell puede
+  /// morir y dejar python http.server zombie → "Address already in use".
+  Future<void> _killLocalRunner({int? preferredPort}) async {
+    final process = _runningProcess;
+    _runningProcess = null;
+    if (process != null) {
+      try {
+        process.kill(ProcessSignal.sigterm);
+        await process.exitCode.timeout(
+          const Duration(milliseconds: 800),
+          onTimeout: () {
+            try {
+              process.kill(ProcessSignal.sigkill);
+            } catch (_) {}
+            return -1;
+          },
+        );
+      } catch (_) {
+        try {
+          process.kill(ProcessSignal.sigkill);
+        } catch (_) {}
+      }
+    }
+    if (preferredPort != null) {
+      await ProjectTypeDetector.killProcessOnPort(preferredPort);
+    }
+    // Puerto histórico de HTML estático
+    await ProjectTypeDetector.killProcessOnPort(8000);
+  }
+
   void _stopRequest() {
     print('🛑 Deteniendo petición...');
 
@@ -1863,15 +1999,7 @@ $compact
     unawaited(_debugService.requestStop());
 
     // ✅ FIX: Detener proceso local (runners no-Flutter) si existe
-    if (_runningProcess != null) {
-      print('🛑 Deteniendo proceso en ejecución...');
-      try {
-        _runningProcess!.kill();
-        _runningProcess = null;
-      } catch (e) {
-        print('⚠️ Error al detener proceso: $e');
-      }
-    }
+    unawaited(_killLocalRunner());
 
     // ✅ NUEVO: Marcar último mensaje del usuario como cancelado
     if (_messages.isNotEmpty && _messages.last.role == 'user') {
@@ -2707,9 +2835,11 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
             projectType == ProjectType.nextjs ||
             projectType == ProjectType.vue ||
             projectType == ProjectType.vite ||
+            projectType == ProjectType.html ||
             runCommand.command.contains('uvicorn') ||
             runCommand.command.contains('gunicorn') ||
             runCommand.command.contains('runserver') ||
+            runCommand.args.contains('http.server') ||
             runCommand.command.contains('npm') &&
                 (runCommand.args.contains('start') ||
                     runCommand.args.contains('dev')) ||
@@ -2718,11 +2848,15 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                     runCommand.args.contains('dev'));
 
         try {
+          // Evitar "Address already in use" por servidor HTML zombie.
+          await _killLocalRunner();
+
           final process = await Process.start(
             runCommand.command,
             runCommand.args,
             workingDirectory: runCommand.workingDirectory,
-            runInShell: true,
+            // HTML: sin shell para que Stop mate a python (no un zsh huérfano).
+            runInShell: projectType != ProjectType.html,
             environment: runCommand.environment,
           );
 
@@ -2744,6 +2878,28 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
           // Variables para rastrear el estado del proceso
           bool hasReceivedOutput = false;
           bool urlDetected = false; // Flag para detectar URL solo una vez
+
+          // HTML estático: python imprime "Serving HTTP on ::" (IPv6), no
+          // "localhost" → el Preview se quedaba en "Esperando URL… 20%".
+          if (projectType == ProjectType.html) {
+            var port = '8000';
+            for (final arg in runCommand.args) {
+              if (RegExp(r'^\d+$').hasMatch(arg)) {
+                port = arg;
+                break;
+              }
+            }
+            detectedUrl = 'http://127.0.0.1:$port';
+            urlDetected = true;
+            _debugService.setAppUrl(detectedUrl);
+            _debugService.setCompilationProgress(
+              1.0,
+              'Página web en Preview ✅',
+            );
+            _debugService.setRunning(true);
+            _debugService.addOutput('🌐 Preview → $detectedUrl');
+            if (mounted) setState(() => _isRunning = true);
+          }
 
           // Verificar si ya hay una URL establecida (por si acaso)
           if (_debugService.appUrl != null &&
@@ -2790,7 +2946,12 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                     lowerLine.contains('starting development server at') ||
                     lowerLine.contains('server running on') ||
                     lowerLine.contains('serving on') ||
+                    lowerLine.contains('serving http') ||
                     lowerLine.contains('listening on'));
+                final httpServerPort = RegExp(
+                  r'serving http on .+ port (\d+)',
+                  caseSensitive: false,
+                ).firstMatch(line);
 
                 final isHttpRequestLog =
                     lowerLine.contains('get ') ||
@@ -2806,7 +2967,19 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                     '✅ Línea contiene indicador de inicio de servidor (no es log de petición)',
                   );
 
-                  if (line.contains('0.0.0.0:')) {
+                  if (httpServerPort != null) {
+                    final port = httpServerPort.group(1);
+                    detectedUrl = 'http://127.0.0.1:$port';
+                    _debugService.setAppUrl(detectedUrl);
+                    urlDetected = true;
+                    _debugService.setCompilationProgress(
+                      1.0,
+                      'Página web en Preview ✅',
+                    );
+                    print(
+                      '🌐 ✅ URL python http.server → $detectedUrl',
+                    );
+                  } else if (line.contains('0.0.0.0:')) {
                     final portMatch = RegExp(
                       r'0\.0\.0\.0:(\d+)',
                     ).firstMatch(line);
@@ -2948,7 +3121,12 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                     lowerLine.contains('starting development server at') ||
                     lowerLine.contains('server running on') ||
                     lowerLine.contains('serving on') ||
+                    lowerLine.contains('serving http') ||
                     lowerLine.contains('listening on'));
+                final httpServerPort = RegExp(
+                  r'serving http on .+ port (\d+)',
+                  caseSensitive: false,
+                ).firstMatch(line);
 
                 final isHttpRequestLog =
                     lowerLine.contains('get ') ||
@@ -3760,9 +3938,11 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
             projectType == ProjectType.nextjs ||
             projectType == ProjectType.vue ||
             projectType == ProjectType.vite ||
+            projectType == ProjectType.html ||
             runCommand.command.contains('uvicorn') ||
             runCommand.command.contains('gunicorn') ||
             runCommand.command.contains('runserver') ||
+            runCommand.args.contains('http.server') ||
             runCommand.command.contains('npm') &&
                 (runCommand.args.contains('start') ||
                     runCommand.args.contains('dev')) ||
@@ -3771,11 +3951,13 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                     runCommand.args.contains('dev'));
 
         try {
+          await _killLocalRunner();
+
           final process = await Process.start(
             runCommand.command,
             runCommand.args,
             workingDirectory: runCommand.workingDirectory,
-            runInShell: true,
+            runInShell: projectType != ProjectType.html,
             environment: runCommand.environment,
           );
 
@@ -3797,6 +3979,26 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
           // Variables para rastrear el estado del proceso
           bool hasReceivedOutputDebug = false;
           bool urlDetectedDebug = false; // Flag para detectar URL solo una vez
+
+          if (projectType == ProjectType.html) {
+            var port = '8000';
+            for (final arg in runCommand.args) {
+              if (RegExp(r'^\d+$').hasMatch(arg)) {
+                port = arg;
+                break;
+              }
+            }
+            detectedUrl = 'http://127.0.0.1:$port';
+            urlDetectedDebug = true;
+            _debugService.setAppUrl(detectedUrl);
+            _debugService.setCompilationProgress(
+              1.0,
+              'Página web en Preview ✅',
+            );
+            _debugService.setRunning(true);
+            _debugService.addOutput('🌐 Preview → $detectedUrl');
+            if (mounted) setState(() => _isRunning = true);
+          }
 
           // Verificar si ya hay una URL establecida (por si acaso)
           if (_debugService.appUrl != null &&
@@ -4304,15 +4506,11 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
     // Detener proceso Flutter real (AdvancedDebuggingService) + UI
     await _debugService.requestStop();
 
-    // Detener proceso local (runners no-Flutter) si está ejecutándose
-    if (_runningProcess != null) {
-      try {
-        _runningProcess!.kill();
-        _runningProcess = null;
-      } catch (e) {
-        print('⚠️ Error al detener proceso: $e');
-      }
-    }
+    // Detener proceso local (runners no-Flutter) — SIGKILL + liberar :8000
+    await _killLocalRunner();
+    _debugService.setAppUrl(null);
+    _debugService.setCompilationProgress(0.0, '');
+    _debugService.setRunning(false);
 
     if (!mounted) return;
     setState(() {
@@ -4841,6 +5039,21 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                       activeFileContent: widget.activeFileContent,
                     );
                     _onSlashCommandSelected(cmd, withActive, query);
+                  },
+                  onOpenAddDocumentation: () async {
+                    setState(() => _autocompleteActive = false);
+                    final added = await showAddDocumentationDialog(context);
+                    if (added && mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Documentación agregada. El agente la usará como referencia.',
+                          ),
+                          backgroundColor: Colors.green,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
                   },
                   onDismiss: () {
                     setState(() => _autocompleteActive = false);

@@ -9,6 +9,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/agent_live_step.dart';
 import '../models/message.dart';
 import '../models/pending_action.dart';
 import 'app_toast.dart';
@@ -291,11 +292,23 @@ class _MessageBubbleState extends State<MessageBubble> {
             final shown = (!isLong || _expandedLong)
                 ? bodyRaw
                 : '${bodyRaw.substring(0, _collapseAfterChars)}\n\n…';
+            final live = message.liveSteps;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (split.steps.isNotEmpty)
+                if (live != null && live.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: shown.isNotEmpty ? 10 : 0,
+                    ),
+                    child: _CursorLiveStepsColumn(
+                      steps: live,
+                      hasAnswerBody: shown.isNotEmpty,
+                      onOpenFile: widget.onOpenFile,
+                    ),
+                  )
+                else if (split.steps.isNotEmpty)
                   Padding(
                     padding: EdgeInsets.only(
                       bottom: shown.isNotEmpty ? 10 : 0,
@@ -1293,6 +1306,277 @@ class _AgentTimelineCardState extends State<_AgentTimelineCard> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Columna de tarjetas en vivo (diff / shell) estilo Cursor.
+class _CursorLiveStepsColumn extends StatelessWidget {
+  final List<AgentLiveStep> steps;
+  final bool hasAnswerBody;
+  final ValueChanged<String>? onOpenFile;
+
+  const _CursorLiveStepsColumn({
+    required this.steps,
+    required this.hasAnswerBody,
+    this.onOpenFile,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < steps.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          _CursorLiveStepCard(
+            step: steps[i],
+            onOpenFile: onOpenFile,
+          ),
+        ],
+        if (hasAnswerBody && steps.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            '${steps.length} ${steps.length == 1 ? 'acción' : 'acciones'}',
+            style: const TextStyle(
+              color: CursorTheme.textSecondary,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _CursorLiveStepCard extends StatefulWidget {
+  final AgentLiveStep step;
+  final ValueChanged<String>? onOpenFile;
+
+  const _CursorLiveStepCard({
+    required this.step,
+    this.onOpenFile,
+  });
+
+  @override
+  State<_CursorLiveStepCard> createState() => _CursorLiveStepCardState();
+}
+
+class _CursorLiveStepCardState extends State<_CursorLiveStepCard> {
+  bool _expanded = true;
+
+  bool get _hasBody =>
+      widget.step.previewLines.isNotEmpty ||
+      (widget.step.output != null && widget.step.output!.trim().isNotEmpty);
+
+  IconData get _headerIcon {
+    switch (widget.step.kind) {
+      case AgentLiveStepKind.edit:
+      case AgentLiveStepKind.create:
+        return Icons.edit_outlined;
+      case AgentLiveStepKind.shell:
+        return Icons.terminal_rounded;
+      case AgentLiveStepKind.search:
+        return Icons.search_rounded;
+      case AgentLiveStepKind.explore:
+        return Icons.description_outlined;
+      case AgentLiveStepKind.browser:
+        return Icons.open_in_new_rounded;
+      case AgentLiveStepKind.thought:
+        return Icons.psychology_alt_outlined;
+      case AgentLiveStepKind.status:
+        return Icons.bolt_rounded;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final step = widget.step;
+    final stats = step.statsLabel;
+    final showDiff = step.kind == AgentLiveStepKind.edit ||
+        step.kind == AgentLiveStepKind.create;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1D20),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: CursorTheme.border.withValues(alpha: 0.7),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: _hasBody
+                ? () => setState(() => _expanded = !_expanded)
+                : (step.filePath != null && widget.onOpenFile != null
+                    ? () => widget.onOpenFile!(step.filePath!)
+                    : null),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    step.running ? Icons.hourglass_top_rounded : _headerIcon,
+                    size: 14,
+                    color: step.running
+                        ? CursorTheme.primary
+                        : CursorTheme.textSecondary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      showDiff ? step.fileName : step.title,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: CursorTheme.textPrimary,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  if (stats != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      stats,
+                      style: const TextStyle(
+                        color: Color(0xFF3FB950),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Menlo',
+                      ),
+                    ),
+                  ],
+                  if (step.running) ...[
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                    ),
+                  ] else if (_hasBody) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      _expanded
+                          ? Icons.keyboard_arrow_up
+                          : Icons.keyboard_arrow_down,
+                      size: 16,
+                      color: CursorTheme.textSecondary,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (_expanded && step.command != null && step.command!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+              child: Text(
+                step.command!,
+                style: const TextStyle(
+                  color: CursorTheme.textSecondary,
+                  fontSize: 11,
+                  fontFamily: 'Menlo',
+                ),
+              ),
+            ),
+          if (_expanded && step.previewLines.isNotEmpty) ...[
+            const Divider(height: 1, color: CursorTheme.border),
+            Container(
+              color: const Color(0xFF141416),
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final line in step.previewLines)
+                    _DiffPreviewRow(line: line),
+                ],
+              ),
+            ),
+          ],
+          if (_expanded &&
+              step.output != null &&
+              step.output!.trim().isNotEmpty) ...[
+            const Divider(height: 1, color: CursorTheme.border),
+            Container(
+              color: const Color(0xFF141416),
+              padding: const EdgeInsets.all(10),
+              child: SelectableText(
+                step.output!,
+                style: const TextStyle(
+                  color: Color(0xFFA0A0A5),
+                  fontSize: 11,
+                  fontFamily: 'Menlo',
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DiffPreviewRow extends StatelessWidget {
+  final AgentLiveStepLine line;
+
+  const _DiffPreviewRow({required this.line});
+
+  @override
+  Widget build(BuildContext context) {
+    Color bg;
+    Color fg;
+    switch (line.mark) {
+      case '+':
+        bg = const Color(0xFF1B3A24);
+        fg = const Color(0xFFA5D6A7);
+        break;
+      case '-':
+        bg = const Color(0xFF3A1B1B);
+        fg = const Color(0xFFEF9A9A);
+        break;
+      default:
+        bg = Colors.transparent;
+        fg = const Color(0xFF8B8B90);
+    }
+    return ColoredBox(
+      color: bg,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 14,
+              child: Text(
+                line.mark.trim().isEmpty ? ' ' : line.mark,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 11,
+                  fontFamily: 'Menlo',
+                  height: 1.35,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                line.text,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 11,
+                  fontFamily: 'Menlo',
+                  height: 1.35,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

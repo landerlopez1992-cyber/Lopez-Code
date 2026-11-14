@@ -6,18 +6,32 @@ import 'dart:convert';
 /// para permitir revertir cambios si algo sale mal.
 
 class BackupService {
-  static const String _backupDirName = '.lopez_code_backups';
+  static const String _backupDirName = '.voryxel_backups';
+  static const String _legacyBackupDirName = '.lopez_code_backups';
   static const int _maxBackupsPerFile = 10; // Máximo de backups por archivo
 
   /// Obtiene el directorio de backups para un proyecto
   static Future<Directory> _getBackupDirectory(String projectPath) async {
-    final backupPath = '$projectPath/$_backupDirName';
-    final backupDir = Directory(backupPath);
-    
+    final modernPath = '$projectPath/$_backupDirName';
+    final legacyPath = '$projectPath/$_legacyBackupDirName';
+    final modernDir = Directory(modernPath);
+    final legacyDir = Directory(legacyPath);
+
+    if (!await modernDir.exists() && await legacyDir.exists()) {
+      try {
+        await legacyDir.rename(modernPath);
+      } catch (_) {}
+    }
+
+    final backupDir =
+        await modernDir.exists() || !await legacyDir.exists()
+            ? modernDir
+            : legacyDir;
+
     if (!await backupDir.exists()) {
       await backupDir.create(recursive: true);
     }
-    
+
     return backupDir;
   }
 

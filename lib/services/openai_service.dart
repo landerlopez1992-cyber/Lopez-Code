@@ -4,6 +4,8 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
+import 'package:url_launcher/url_launcher.dart';
+import '../models/agent_live_step.dart';
 import '../models/problem_item.dart';
 import 'web_navigation_service.dart';
 import 'run_debug_service.dart';
@@ -17,7 +19,15 @@ import 'platform_service.dart';
 import 'settings_service.dart';
 import 'agent_activity_service.dart';
 import 'agent_diff_review_service.dart';
+import 'inspector_selection_service.dart';
 import 'project_platform_support.dart';
+import 'env_connections_service.dart';
+
+typedef AgentStepProgressCallback = void Function(
+  String statusText, {
+  String? detail,
+  AgentLiveStep? card,
+});
 
 class OpenAIService {
   final String apiKey;
@@ -77,8 +87,8 @@ class OpenAIService {
   // ✅ NUEVO: Callback para tokens usados
   Function(int)? onTokensUsed;
 
-  /// Progreso de pasos del Agent Loop (timeline tipo Cursor en el chat).
-  Function(String statusText, {String? detail})? onStepProgress;
+  /// Progreso de pasos del Agent Loop (timeline + tarjetas tipo Cursor).
+  AgentStepProgressCallback? onStepProgress;
 
   /// Control de botones del IDE (set_platform / run_app / hot_restart / stop_app).
   Future<String> Function(
@@ -271,6 +281,33 @@ class OpenAIService {
     {
       'type': 'function',
       'function': {
+        'name': 'open_external_url',
+        'description':
+            'Abre una URL en el navegador externo del usuario (login, '
+            'dashboards, documentación). Usa cuando falten credenciales '
+            'o haga falta un portal: Supabase, Firebase, Stripe, Google, '
+            'APIs externas. NO descarga HTML; solo abre el enlace.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'url': {
+              'type': 'string',
+              'description':
+                  'URL https a abrir (ej. https://supabase.com/dashboard).',
+            },
+            'reason': {
+              'type': 'string',
+              'description':
+                  'Por qué se abre (ej. "crear proyecto y copiar anon key").',
+            },
+          },
+          'required': ['url', 'reason'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
         'name': 'grep_search',
         'description':
             'Busca texto o regex en el codebase. Úsala para localizar símbolos, usos o patrones sin leer archivos a ciegas.',
@@ -403,6 +440,7 @@ class OpenAIService {
     'grep_search',
     'list_files',
     'navigate_web',
+    'open_external_url',
     'get_available_devices',
     'read_console_logs',
   };
@@ -410,6 +448,7 @@ class OpenAIService {
   /// Controles del IDE que se ejecutan sin PendingActions.
   static const Set<String> _ideControlTools = {
     'ide_control',
+    'open_external_url',
   };
 
   static const Set<String> _imageExtensions = {
@@ -536,17 +575,144 @@ class OpenAIService {
         return 'Downloading file';
       case 'navigate_web':
         return 'Navigating ${args['url'] ?? ''}';
+      case 'open_external_url':
+        final reason = args['reason'] as String? ?? '';
+        final url = args['url'] as String? ?? '';
+        return reason.isEmpty
+            ? 'Opening $url'
+            : 'Opening browser: $reason';
       default:
         return 'Running $functionName';
     }
   }
 
   void _emitStep(
-    Function(String statusText, {String? detail})? onStepProgress,
+    AgentStepProgressCallback? onStepProgress,
     String statusText, {
     String? detail,
+    AgentLiveStep? card,
   }) {
-    onStepProgress?.call(statusText, detail: detail);
+    onStepProgress?.call(statusText, detail: detail, card: card);
+  }
+
+  /// Construye la tarjeta visual (diff / shell) que se pinta en el chat.
+  AgentLiveStep? _liveCardForTool({
+    required String functionName,
+    required Map<String, dynamic> args,
+    required String result,
+    required bool failed,
+    required bool running,
+  }) {
+    final id =
+        '${functionName}_${DateTime.now().microsecondsSinceEpoch}';
+    final now = DateTime.now();
+    switch (functionName) {
+      case 'edit_file':
+      case 'write_file':
+      case 'create_file':
+        final path = args['file_path'] as String? ?? 'file';
+        final stats = RegExp(r'([+-]\d+)\s+([+-]\d+)').firstMatch(result);
+        int? added;
+        int? removed;
+        if (stats != null) {
+          added = int.tryParse(stats.group(1)!.replaceAll('+', ''));
+          removed = int.tryParse(stats.group(2)!.replaceAll('-', ''));
+        }
+        final lines = <AgentLiveStepLine>[];
+        if (functionName == 'edit_file') {
+          final search = (args['search_block'] as String? ?? '').split('\n');
+          final replace = (args['replace_block'] as String? ?? '').split('\n');
+          for (final l in search.take(8)) {
+            lines.add(AgentLiveStepLine(mark: '-', text: l));
+          }
+          if (search.length > 8) {
+            lines.add(const AgentLiveStepLine(mark: ' ', text: '…'));
+          }
+          for (final l in replace.take(8)) {
+            lines.add(AgentLiveStepLine(mark: '+', text: l));
+          }
+          if (replace.length > 8) {
+            lines.add(const AgentLiveStepLine(mark: ' ', text: '…'));
+          }
+          added ??= replace.isEmpty ? 0 : replace.length;
+          removed ??= search.isEmpty ? 0 : search.length;
+        } else {
+          final content = (args['content'] as String? ?? '').split('\n');
+          for (final l in content.take(10)) {
+            lines.add(AgentLiveStepLine(mark: '+', text: l));
+          }
+          if (content.length > 10) {
+            lines.add(const AgentLiveStepLine(mark: ' ', text: '…'));
+          }
+          added ??= content.isEmpty ? 0 : content.length;
+          removed ??= functionName == 'write_file' ? null : 0;
+        }
+        return AgentLiveStep(
+          id: id,
+          kind: functionName == 'create_file'
+              ? AgentLiveStepKind.create
+              : AgentLiveStepKind.edit,
+          title: path.split('/').last,
+          filePath: path,
+          added: failed ? null : added,
+          removed: failed ? null : removed,
+          previewLines: failed ? const [] : lines,
+          running: running,
+          at: now,
+        );
+      case 'execute_command':
+      case 'compile_project':
+        final cmd = functionName == 'compile_project'
+            ? 'flutter run (${args['platform'] ?? 'auto'})'
+            : (args['command'] as String? ?? 'command');
+        final out = result.length > 600
+            ? '${result.substring(0, 600)}…'
+            : result;
+        return AgentLiveStep(
+          id: id,
+          kind: AgentLiveStepKind.shell,
+          title: running ? 'Running' : (failed ? 'Failed' : 'Ran'),
+          command: cmd,
+          output: running ? null : out,
+          running: running,
+          at: now,
+        );
+      case 'read_file':
+      case 'list_files':
+      case 'grep_search':
+      case 'read_console_logs':
+      case 'get_available_devices':
+      case 'read_image':
+        return AgentLiveStep(
+          id: id,
+          kind: functionName == 'grep_search'
+              ? AgentLiveStepKind.search
+              : AgentLiveStepKind.explore,
+          title: _completedStatusForTool(functionName, args, result),
+          filePath: args['file_path'] as String?,
+          running: running,
+          at: now,
+        );
+      case 'open_external_url':
+      case 'navigate_web':
+        return AgentLiveStep(
+          id: id,
+          kind: AgentLiveStepKind.browser,
+          title: args['reason'] as String? ??
+              (args['url'] as String? ?? 'browser'),
+          command: args['url'] as String?,
+          running: running,
+          at: now,
+        );
+      default:
+        return AgentLiveStep(
+          id: id,
+          kind: AgentLiveStepKind.status,
+          title: _stepStatusForTool(functionName, args),
+          running: running,
+          at: now,
+        );
+    }
   }
 
   /// Línea compacta post-tool (estilo Cursor: Edited X +2 -1 / Ran …).
@@ -599,6 +765,8 @@ class OpenAIService {
         }
       case 'navigate_web':
         return 'Navigated ${args['url'] ?? ''}';
+      case 'open_external_url':
+        return 'Opened ${args['url'] ?? 'url'} in browser';
       default:
         return 'Ran $functionName';
     }
@@ -646,21 +814,41 @@ class OpenAIService {
     required String projectPath,
     required List<String> editedPaths,
     required bool runPubGet,
-    Function(String statusText, {String? detail})? onStepProgress,
+    AgentStepProgressCallback? onStepProgress,
   }) async {
     try {
       if (runPubGet) {
-        _emitStep(onStepProgress, 'Running flutter pub get');
+        _emitStep(
+          onStepProgress,
+          'Running flutter pub get',
+          card: AgentLiveStep(
+            id: 'pubget_${DateTime.now().microsecondsSinceEpoch}',
+            kind: AgentLiveStepKind.shell,
+            title: 'Running',
+            command: 'flutter pub get',
+            running: true,
+            at: DateTime.now(),
+          ),
+        );
         final pub = await _executeCommand(
           'flutter pub get',
           null,
           projectPath,
         );
+        final pubFailed =
+            pub.toLowerCase().contains('error') || pub.startsWith('❌');
         _emitStep(
           onStepProgress,
-          pub.toLowerCase().contains('error') || pub.startsWith('❌')
-              ? 'Failed flutter pub get'
-              : 'Ran flutter pub get',
+          pubFailed ? 'Failed flutter pub get' : 'Ran flutter pub get',
+          card: AgentLiveStep(
+            id: 'pubget_${DateTime.now().microsecondsSinceEpoch}',
+            kind: AgentLiveStepKind.shell,
+            title: pubFailed ? 'Failed' : 'Ran',
+            command: 'flutter pub get',
+            output: _compressTerminalOutput(pub, maxChars: 600),
+            running: false,
+            at: DateTime.now(),
+          ),
         );
         if (pub.startsWith('❌') || pub.toLowerCase().startsWith('error')) {
           return 'flutter pub get failed after editing pubspec.yaml:\n'
@@ -669,19 +857,51 @@ class OpenAIService {
         }
       }
 
-      _emitStep(onStepProgress, 'Running flutter analyze');
+      _emitStep(
+        onStepProgress,
+        'Running flutter analyze',
+        card: AgentLiveStep(
+          id: 'analyze_${DateTime.now().microsecondsSinceEpoch}',
+          kind: AgentLiveStepKind.shell,
+          title: 'Running',
+          command: 'dart analyze',
+          running: true,
+          at: DateTime.now(),
+        ),
+      );
       final debug = DebugConsoleService();
       final items = await debug.refreshProblemsFromAnalyze(projectPath);
       final errors =
           items.where((p) => p.severity == ProblemSeverity.error).toList();
       if (errors.isEmpty) {
-        _emitStep(onStepProgress, 'Analyze clean');
+        _emitStep(
+          onStepProgress,
+          'Analyze clean',
+          card: AgentLiveStep(
+            id: 'analyze_${DateTime.now().microsecondsSinceEpoch}',
+            kind: AgentLiveStepKind.shell,
+            title: 'Ran',
+            command: 'dart analyze',
+            output: '0 errors found.',
+            running: false,
+            at: DateTime.now(),
+          ),
+        );
         return null;
       }
 
       _emitStep(
         onStepProgress,
         'Analyze found ${errors.length} error(s)',
+        card: AgentLiveStep(
+          id: 'analyze_${DateTime.now().microsecondsSinceEpoch}',
+          kind: AgentLiveStepKind.shell,
+          title: 'Failed',
+          command: 'dart analyze',
+          output: errors.take(8).map((e) => e.toString()).join('\n'),
+          running: false,
+          at: DateTime.now(),
+        ),
       );
       final buffer = StringBuffer();
       // Priorizar errores de archivos que el agente acaba de tocar.
@@ -1040,6 +1260,12 @@ class OpenAIService {
           onFileOperation?.call('navegando', url);
           result = await _executeNavigateWeb(url);
           break;
+        case 'open_external_url':
+          final url = args['url'] as String? ?? '';
+          final reason = args['reason'] as String? ?? '';
+          onFileOperation?.call('abriendo navegador', url);
+          result = await _executeOpenExternalUrl(url, reason);
+          break;
         case 'grep_search':
           onFileOperation?.call('buscando', args['query'] as String? ?? '');
           result = await _executeGrepSearch(args, projectPath);
@@ -1084,6 +1310,25 @@ class OpenAIService {
           liveViewPath,
           line: liveViewLine,
         );
+      }
+
+      // Preview HTML/web-server: el WebView cachea la página. Tras
+      // edit/write/create hay que forzar reload o el usuario sigue viendo
+      // el color/estilo viejo aunque el archivo ya cambió.
+      if (!failed &&
+          (functionName == 'edit_file' ||
+              functionName == 'write_file' ||
+              functionName == 'create_file')) {
+        try {
+          final debug = DebugConsoleService();
+          if (debug.isRunning &&
+              debug.appUrl != null &&
+              debug.appUrl!.isNotEmpty) {
+            await Future<void>.delayed(const Duration(milliseconds: 120));
+            // force: el Preview HTML debe refrescar tras cada edit del agente.
+            debug.bumpPreviewReload(force: true);
+          }
+        } catch (_) {}
       }
 
       if (touchedDartPath != null &&
@@ -1293,7 +1538,7 @@ Sugerencias:
     void Function(String operation, String filePath, {int? line})?
         onFileOperation,
     Function(String partialText)? onStreamChunk,
-    Function(String statusText, {String? detail})? onStepProgress,
+    AgentStepProgressCallback? onStepProgress,
     Future<String> Function(
       String action, {
       Map<String, dynamic>? args,
@@ -1655,7 +1900,17 @@ Sugerencias:
       ) async {
         final functionName = toolCall['function']['name'] as String;
         final arguments = argsOf(toolCall);
-        _emitStep(stepProgress, _stepStatusForTool(functionName, arguments));
+        _emitStep(
+          stepProgress,
+          _stepStatusForTool(functionName, arguments),
+          card: _liveCardForTool(
+            functionName: functionName,
+            args: arguments,
+            result: '',
+            failed: false,
+            running: true,
+          ),
+        );
 
         late final String result;
         if (functionName == 'read_image') {
@@ -1688,17 +1943,26 @@ Sugerencias:
         final failed = result.startsWith('❌') ||
             result.startsWith('Error') ||
             result.toLowerCase().contains('errores de compilación');
+        final card = _liveCardForTool(
+          functionName: functionName,
+          args: arguments,
+          result: result,
+          failed: failed,
+          running: false,
+        );
         if (failed) {
           _emitStep(
             stepProgress,
             'Failed $functionName',
             detail:
                 result.length > 280 ? '${result.substring(0, 280)}…' : result,
+            card: card,
           );
         } else {
           _emitStep(
             stepProgress,
             _completedStatusForTool(functionName, arguments, result),
+            card: card,
           );
         }
         messages.add({
@@ -2005,7 +2269,7 @@ Sugerencias:
     required List<Map<String, dynamic>> messages,
     required String model,
     required Map<String, String> headers,
-    required Function(String statusText, {String? detail})? stepProgress,
+    required AgentStepProgressCallback? stepProgress,
     required int maxIterations,
   }) async {
     _emitStep(stepProgress, 'Resumiendo avance');
@@ -2306,6 +2570,22 @@ Sugerencias:
       buffer.writeln('selected_platform: (unknown)');
     }
 
+    // Elemento señalado en Preview Inspector (si hay)
+    try {
+      buffer.writeln(InspectorSelectionService().toWorkspaceBlock());
+    } catch (_) {
+      buffer.writeln('inspector: (unavailable)');
+    }
+
+    // Claves .env (solo nombres — nunca valores secretos)
+    try {
+      buffer.write(
+        await EnvConnectionsService.toWorkspaceBlock(projectPath),
+      );
+    } catch (_) {
+      buffer.writeln('env_keys: (unavailable)');
+    }
+
     // Árbol nivel 2 (sin flutter devices — caro en tokens/tiempo)
     if (projectPath != null && projectPath.isNotEmpty) {
       try {
@@ -2454,7 +2734,7 @@ Sugerencias:
     onPendingActions, // Callback para acciones pendientes
     Function(int)? onTokensUsed, // ✅ NUEVO: Callback para tokens usados
     Function(String partialText)? onStreamChunk,
-    Function(String statusText, {String? detail})? onStepProgress,
+    AgentStepProgressCallback? onStepProgress,
     Future<String> Function(
       String action, {
       Map<String, dynamic>? args,
@@ -2826,6 +3106,23 @@ Sugerencias:
                 },
               },
               'required': ['url'],
+            },
+          },
+        },
+        {
+          'type': 'function',
+          'function': {
+            'name': 'open_external_url',
+            'description':
+                'Abre una URL en el navegador externo (Supabase, Firebase, '
+                'Stripe, login). Parámetros: url y reason.',
+            'parameters': {
+              'type': 'object',
+              'properties': {
+                'url': {'type': 'string'},
+                'reason': {'type': 'string'},
+              },
+              'required': ['url', 'reason'],
             },
           },
         },
@@ -3947,6 +4244,37 @@ Si falta emulador nativo: compile_project(platform: "android"|"ios") Preview —
     }
   }
 
+  /// Abre una URL en el navegador externo del sistema (login / dashboards).
+  Future<String> _executeOpenExternalUrl(String url, String reason) async {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) {
+      return 'Error: url vacía en open_external_url';
+    }
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null ||
+        !(uri.isScheme('http') || uri.isScheme('https'))) {
+      return 'Error: URL inválida (solo http/https): $trimmed';
+    }
+    try {
+      final ok = await canLaunchUrl(uri);
+      if (!ok) {
+        return '❌ No se puede abrir la URL en este sistema: $trimmed';
+      }
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched) {
+        return '❌ launchUrl devolvió false para: $trimmed';
+      }
+      final why = reason.trim().isEmpty ? '(sin motivo)' : reason.trim();
+      return '✅ Navegador externo abierto\nURL: $trimmed\nMotivo: $why\n'
+          'Guía al usuario con los pasos siguientes (copiar keys, login, etc.).';
+    } catch (e) {
+      return 'Error al abrir URL externa: $e';
+    }
+  }
+
   /// Genera una descripción amigable de la acción basada en el tipo y argumentos
   /// Incluye análisis de riesgo, diff y razonamiento
   Future<Map<String, dynamic>> _generateActionDescriptionWithDetails(
@@ -4048,6 +4376,15 @@ Si falta emulador nativo: compile_project(platform: "android"|"ios") Preview —
         reasoning = 'Obtener información actualizada desde la web';
         break;
 
+      case 'open_external_url':
+        final url = arguments['url'] as String? ?? 'URL';
+        final reason = arguments['reason'] as String? ?? '';
+        description = 'Abrir en navegador: $url';
+        reasoning = reason.isEmpty
+            ? 'Abrir portal externo (login / dashboard / docs)'
+            : reason;
+        break;
+
       default:
         description = 'Ejecutar: $functionName';
         reasoning = 'Operación personalizada solicitada';
@@ -4145,6 +4482,12 @@ Si falta emulador nativo: compile_project(platform: "android"|"ios") Preview —
       case 'navigate_web':
         final url = arguments['url'] as String? ?? 'URL';
         return 'Navegar a la URL: $url y analizar su contenido.';
+      case 'open_external_url':
+        final url = arguments['url'] as String? ?? 'URL';
+        final reason = arguments['reason'] as String? ?? '';
+        return reason.isEmpty
+            ? 'Abrir en el navegador: $url'
+            : 'Abrir $url ($reason)';
       default:
         return 'Ejecutar acción: $functionName';
     }
@@ -4388,7 +4731,9 @@ Responde en español. Actúa con herramientas; no te limites a aconsejar.
 - Explica en 1 frase qué vas a lanzar MIENTRAS ejecutas, no en lugar de ejecutar.
 
 ## 1. Autonomía e Investigación
-- Cada turno incluye un bloque <workspace_state> compacto en el mensaje user (ruta abierta ±120 líneas, ≤15 Problems, ≤15 líneas Output, árbol depth 2). Úsalo primero; no gastes turns adivinando lo que ya está ahí.
+- Cada turno incluye un bloque <workspace_state> compacto en el mensaje user (ruta abierta ±120 líneas, ≤15 Problems, ≤15 líneas Output, nombres de claves .env, árbol depth 2). Úsalo primero; no gastes turns adivinando lo que ya está ahí.
+- Si aparece <inspector_selection>, el usuario está señalando ese elemento en Preview. Cuando pida cambios de UI/estilo/texto ("cámbiale el color", "hazlo más grande", etc.), se refiere OBLIGATORIAMENTE a ESE elemento (tag, text, class, styles). Localízalo con grep_search por su text/class y edítalo con edit_file. En HTML/Tailwind cambia las clases del nodo (ej. bg-pink-600 → bg-green-600). No edites otro botón/sección ni digas que listo si el search_block no coincidió.
+- COLOR DE FONDO / gradiente (OBLIGATORIO): Si pide "color de fondo", "background", "gradiente" o "está muy feo el fondo", mira `bg_paint_owner` / `bg_paint_classes` / capas marcadas `[BG]` en inspector_selection. El fondo visible suele estar en `body`/`html` (ej. `bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500`), NO en un `main` hijo transparente. Edita ESE nodo: quita el gradiente y pon un sólido (ej. `bg-blue-900` o `style="background:#001f3f"`). Verificar con read_file que el search_block coincidió; tras editar el Preview se refresca solo.
 - Antes de editar o afirmar algo que no esté en workspace_state, EXPLORA con list_files, grep_search y read_file.
 - Si grep_search encuentra un texto de UI dentro de `internationalization.dart` / `l10n` / `.arb`, lee o toma la clave de localización justo encima (p. ej. `'mh6nye0z'`) y haz grep_search por esa clave para ir directo al widget que la usa.
 - No encadenes más de 3 grep_search seguidos sin llamar list_files o read_file.
@@ -4435,6 +4780,15 @@ Responde en español. Actúa con herramientas; no te limites a aconsejar.
   (ide_control run_app / compile_project) o reporta que el runner del IDE
   debe actualizarse. Prioriza SIEMPRE el error exacto del Output del usuario.
 - Solo pregunta al usuario si no hay ninguna plataforma viable.
+
+## 6. Bases de datos y APIs externas (Supabase / Firebase / Stripe / REST)
+- En <workspace_state> aparece `env_keys` / `<env_key_names>`: SOLO nombres de variables del `.env` (nunca valores). Úsalo para saber qué ya está configurado.
+- Si el usuario pide conectar Supabase, Firebase, Stripe u otra API:
+  1) Revisa `env_keys` (y el proyecto) para ver qué falta (SUPABASE_URL, SUPABASE_ANON_KEY, FIREBASE_*, STRIPE_*, API_KEY, etc.).
+  2) Si faltan credenciales o login, abre el portal con open_external_url (url + reason) — p. ej. https://supabase.com/dashboard, https://console.firebase.google.com, https://dashboard.stripe.com — y guíalo paso a paso para copiar las keys.
+  3) Escribe/actualiza `.env` con create_file/edit_file (asegura `.env` en `.gitignore`) y el código REAL de cliente (supabase_flutter / @supabase/supabase-js / firebase_core / fetch REST). NUNCA inventes URLs, keys ni datos simulados/hardcoded falsos.
+  4) Diferencia: navigate_web = leer HTML de una URL; open_external_url = abrir el navegador del usuario para login/dashboards.
+- Tras integrar, verifica con analyze / run cuando aplique.
 
 ## Reglas operativas
 - Cambios mínimos y enfocados al objetivo del usuario.

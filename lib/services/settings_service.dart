@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsService {
@@ -6,6 +9,104 @@ class SettingsService {
   static const String _systemBehaviorKey = 'system_behavior';
   static const String _selectedModelKey = 'openai_selected_model';
   static const String _autoModeKey = 'openai_auto_mode';
+  static const String _legacyPrefsMigratedKey = 'prefs_migrated_from_lopez_v1';
+
+  /// Bundles anteriores (Lopez / Cursor AI). En macOS cada bundle tiene su
+  /// propio plist; al renombrar a voryxelCode la API Key “desaparece” aunque
+  /// siga en el plist viejo.
+  static const List<String> _legacyMacBundleIds = [
+    'com.cubcolexpress.lopezCode',
+    'com.cubcolexpress.cursorAiAssistant',
+  ];
+
+  static const List<String> _migratablePrefKeys = [
+    _apiKeyKey,
+    _selectedModelKey,
+    _autoModeKey,
+    _systemRulesKey,
+    _systemBehaviorKey,
+  ];
+
+  /// Copia settings faltantes desde el plist de Lopez Code (macOS).
+  static Future<bool> migrateLegacyMacPrefsIfNeeded() async {
+    if (!Platform.isMacOS) return false;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_legacyPrefsMigratedKey) == true) return false;
+
+    final existingKey = prefs.getString(_apiKeyKey);
+    if (existingKey != null && existingKey.isNotEmpty) {
+      await prefs.setBool(_legacyPrefsMigratedKey, true);
+      return false;
+    }
+
+    final home = Platform.environment['HOME'];
+    if (home == null || home.isEmpty) {
+      await prefs.setBool(_legacyPrefsMigratedKey, true);
+      return false;
+    }
+
+    var migratedAny = false;
+    for (final bundleId in _legacyMacBundleIds) {
+      final plistPath = '$home/Library/Preferences/$bundleId.plist';
+      if (!File(plistPath).existsSync()) continue;
+
+      final legacy = await _readMacPrefsPlist(plistPath);
+      if (legacy == null || legacy.isEmpty) continue;
+
+      for (final key in _migratablePrefKeys) {
+        final flutterKey = 'flutter.$key';
+        final value = legacy[flutterKey];
+        if (value == null) continue;
+
+        // No pisar valores ya presentes en Voryxel.
+        if (key == _autoModeKey) {
+          if (prefs.containsKey(key)) continue;
+          if (value is bool) {
+            await prefs.setBool(key, value);
+            migratedAny = true;
+          }
+          continue;
+        }
+
+        final current = prefs.getString(key);
+        if (current != null && current.isNotEmpty) continue;
+        final asString = value.toString();
+        if (asString.isEmpty) continue;
+        await prefs.setString(key, asString);
+        migratedAny = true;
+        print('✅ Migrado $key desde $bundleId');
+      }
+
+      // Con API Key ya basta; no hace falta seguir buscando.
+      final keyNow = prefs.getString(_apiKeyKey);
+      if (keyNow != null && keyNow.isNotEmpty) break;
+    }
+
+    await prefs.setBool(_legacyPrefsMigratedKey, true);
+    if (migratedAny) {
+      print('✅ Preferencias migradas desde Lopez Code → Voryxel Code');
+    }
+    return migratedAny;
+  }
+
+  static Future<Map<String, dynamic>?> _readMacPrefsPlist(String path) async {
+    try {
+      final result = await Process.run(
+        'plutil',
+        ['-convert', 'json', '-o', '-', path],
+      );
+      if (result.exitCode != 0) return null;
+      final decoded = jsonDecode(result.stdout as String);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v));
+      }
+    } catch (e) {
+      print('⚠️ No se pudo leer plist legacy ($path): $e');
+    }
+    return null;
+  }
 
   // API Key
   static Future<void> saveApiKey(String apiKey) async {
@@ -14,6 +115,7 @@ class SettingsService {
   }
 
   static Future<String?> getApiKey() async {
+    await migrateLegacyMacPrefsIfNeeded();
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_apiKeyKey);
   }

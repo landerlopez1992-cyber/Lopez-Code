@@ -267,15 +267,35 @@ class DebugConsoleService extends ChangeNotifier {
     return false;
   }
 
+  /// Access log de `python -m http.server` (una línea por GET).
+  bool _isStaticHttpAccessLog(String lower) {
+    return (lower.contains('"get ') ||
+            lower.contains('"post ') ||
+            lower.contains('"head ') ||
+            lower.contains('"put ')) &&
+        (lower.contains(' http/') ||
+            lower.contains('" 200') ||
+            lower.contains('" 304') ||
+            lower.contains('" 404'));
+  }
+
   /// Enruta stdout/stderr del proceso Flutter:
   /// • siempre → Output (log crudo)
   /// • trazas de runtime / errores → Debug Console (en vivo)
   void ingestProcessLine(String line) {
     final t = line.trimRight();
     if (t.isEmpty) return;
+    final lower = t.toLowerCase();
+
+    // Access log de http.server: silenciar por completo.
+    // Si llegan al Output → notifyListeners → rebuild del Preview → otro GET /
+    // → temblequeo / scroll roto.
+    if (_isStaticHttpAccessLog(lower)) {
+      return;
+    }
+
     _output.add(t);
 
-    final lower = t.toLowerCase();
     if (_isAppRuntimeTrace(t, lower)) {
       _debugConsole.add(t);
     }
@@ -288,8 +308,11 @@ class DebugConsoleService extends ChangeNotifier {
     for (final line in chunk.split('\n')) {
       final t = line.trimRight();
       if (t.isEmpty) continue;
-      _output.add(t);
       final lower = t.toLowerCase();
+      if (_isStaticHttpAccessLog(lower)) {
+        continue;
+      }
+      _output.add(t);
       if (_isAppRuntimeTrace(t, lower)) {
         _debugConsole.add(t);
       }
@@ -394,53 +417,97 @@ class DebugConsoleService extends ChangeNotifier {
   int _previewReloadNonce = 0;
   int get previewReloadNonce => _previewReloadNonce;
 
-  /// Fuerza reload del Preview (tras Hot Reload/Restart reales).
-  void bumpPreviewReload() {
+  /// `false` = soft (⚡ Hot Reload / reload página).
+  /// `true`  = hard (🔄 Hot Restart / cache-bust + URL raíz).
+  bool _previewReloadHard = true;
+  bool get previewReloadHard => _previewReloadHard;
+
+  DateTime? _lastPreviewBumpAt;
+
+  /// Fuerza reload del Preview (tras Hot Reload/Restart / edit del agente).
+  /// Debounce: evita tormentas de recarga si el agente edita en ráfaga.
+  /// [force] salta el debounce (rayo ⚡ / Hot Restart / botón manual).
+  /// [hard] true = reinicio fuerte (cache-bust); false = soft reload.
+  void bumpPreviewReload({bool force = false, bool hard = true}) {
+    final now = DateTime.now();
+    if (!force &&
+        _lastPreviewBumpAt != null &&
+        now.difference(_lastPreviewBumpAt!) <
+            const Duration(milliseconds: 800)) {
+      return;
+    }
+    _lastPreviewBumpAt = now;
+    _previewReloadHard = hard;
     _previewReloadNonce++;
     notifyListeners();
   }
 
-  /// Hot Reload (`r` → stdin de flutter run).
+  /// ⚡ Hot Reload: aplica cambios de código sin reiniciar el estado.
+  /// Flutter → stdin `r`. HTML → soft reload del WebView (misma URL).
   Future<bool> requestHotReload() async {
     _setHotAction('reloading');
     try {
       final ok = await AdvancedDebuggingService.hotReload() ||
           await RunDebugService.hotReload();
-      addDebugConsole(
-        ok
-            ? '⚡ Hot Reload enviado'
-            : '⚠️ Hot Reload: no hay proceso Flutter activo',
-      );
-      // WebView (web-server) no siempre recibe DWDS: refrescar Preview.
-      if (ok && _appUrl != null && _appUrl!.isNotEmpty) {
-        await Future<void>.delayed(const Duration(milliseconds: 450));
-        bumpPreviewReload();
+      final hasPreview = _appUrl != null && _appUrl!.isNotEmpty;
+      if (ok) {
+        addDebugConsole('⚡ Hot Reload (código en caliente)');
+        if (hasPreview) {
+          await Future<void>.delayed(const Duration(milliseconds: 450));
+          bumpPreviewReload(force: true, hard: false);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        return true;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 400));
-      return ok;
+      // HTML / preview sin flutter run: soft refresh (no reinicio total).
+      if (hasPreview && _isRunning) {
+        bumpPreviewReload(force: true, hard: false);
+        addDebugConsole(
+          '⚡ Hot Reload → Preview soft refresh (HTML)',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        return true;
+      }
+      addDebugConsole(
+        '⚠️ Hot Reload: no hay proceso Flutter ni Preview activo',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      return false;
     } finally {
       _setHotAction('idle');
     }
   }
 
-  /// Hot Restart (`R` → stdin de flutter run).
+  /// 🔄 Hot Restart: reinicia la app / Preview desde cero (estado limpio).
+  /// Flutter → stdin `R`. HTML → hard reload con cache-bust a la URL raíz.
   Future<bool> requestHotRestart() async {
     _setHotAction('restarting');
     try {
       final ok = await AdvancedDebuggingService.hotRestart() ||
           await RunDebugService.hotRestart();
-      addDebugConsole(
-        ok
-            ? '🔄 Hot Restart enviado'
-            : '⚠️ Hot Restart: no hay proceso Flutter activo',
-      );
-      // Hot Restart en web-server: hay que recargar el WebView sí o sí.
-      if (ok && _appUrl != null && _appUrl!.isNotEmpty) {
-        await Future<void>.delayed(const Duration(milliseconds: 700));
-        bumpPreviewReload();
+      final hasPreview = _appUrl != null && _appUrl!.isNotEmpty;
+      if (ok) {
+        addDebugConsole('🔄 Hot Restart (reinicio completo)');
+        if (hasPreview) {
+          await Future<void>.delayed(const Duration(milliseconds: 700));
+          bumpPreviewReload(force: true, hard: true);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        return true;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-      return ok;
+      if (hasPreview && _isRunning) {
+        bumpPreviewReload(force: true, hard: true);
+        addDebugConsole(
+          '🔄 Hot Restart → Preview hard reload (HTML, estado limpio)',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        return true;
+      }
+      addDebugConsole(
+        '⚠️ Hot Restart: no hay proceso Flutter ni Preview activo',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      return false;
     } finally {
       _setHotAction('idle');
     }

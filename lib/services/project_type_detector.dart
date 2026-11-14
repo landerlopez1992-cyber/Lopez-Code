@@ -652,12 +652,21 @@ class ProjectTypeDetector {
         );
         
       case ProjectType.html:
-        // Usar python -m http.server para servir HTML estático
+        // Puerto fijo 8000 chocaba con Runs anteriores (Address already in use).
+        // Liberar zombie típico y elegir puerto libre; bind IPv4 para Preview.
+        await killProcessOnPort(8000);
+        final htmlPort = await findAvailablePort(8000);
         return RunCommand(
           command: 'python3',
-          args: ['-m', 'http.server', '8000'],
+          args: [
+            '-m',
+            'http.server',
+            '$htmlPort',
+            '--bind',
+            '127.0.0.1',
+          ],
           workingDirectory: projectPath,
-          description: 'Static HTML Server',
+          description: 'Static HTML Server :$htmlPort',
           requiresDevice: false,
         );
         

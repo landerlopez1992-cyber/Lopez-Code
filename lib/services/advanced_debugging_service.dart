@@ -147,6 +147,18 @@ class AdvancedDebuggingService {
             debug.setCompilationProgress(0.7, 'Servidor web listo, compilando…');
           }
         }
+        return;
+      }
+
+      // python3 -m http.server → "Serving HTTP on :: port 8000 (...)"
+      final pyHttp = RegExp(
+        r'serving http on .+ port (\d+)',
+        caseSensitive: false,
+      ).firstMatch(line);
+      if (pyHttp != null) {
+        final url = 'http://127.0.0.1:${pyHttp.group(1)}';
+        debug.setAppUrl(url);
+        debug.setCompilationProgress(1.0, 'Página web en Preview ✅');
       }
     } catch (_) {}
   }

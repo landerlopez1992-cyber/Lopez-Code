@@ -381,6 +381,22 @@ class _CursorChatInputState extends State<CursorChatInput> {
     _overlayEntry = null;
   }
 
+  /// Inserta `@` en el cursor para abrir el menú de contexto (Files / Docs / …).
+  void _insertAtMention() {
+    _closeOverlay();
+    final text = widget.controller.text;
+    final sel = widget.controller.selection;
+    final start = sel.isValid ? sel.start.clamp(0, text.length) : text.length;
+    final end = sel.isValid ? sel.end.clamp(0, text.length) : text.length;
+    final lo = start <= end ? start : end;
+    final hi = end >= start ? end : start;
+    final newText = text.replaceRange(lo, hi, '@');
+    widget.controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: lo + 1),
+    );
+  }
+
   @override
   void dispose() {
     _closeOverlay();
@@ -565,8 +581,25 @@ class _CursorChatInputState extends State<CursorChatInput> {
               ),
               child: Focus(
                 onKeyEvent: (node, event) {
-                  // Cmd/Ctrl+V: ruta de imagen, archivos, o bytes (captura macOS).
                   if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+                  // Return envía; Shift+Return inserta nueva línea (como Cursor).
+                  // Con maxLines: null, onSubmitted casi nunca se dispara en desktop.
+                  final isEnter =
+                      event.logicalKey == LogicalKeyboardKey.enter ||
+                      event.logicalKey == LogicalKeyboardKey.numpadEnter;
+                  if (isEnter &&
+                      !HardwareKeyboard.instance.isShiftPressed &&
+                      !HardwareKeyboard.instance.isAltPressed &&
+                      !HardwareKeyboard.instance.isMetaPressed &&
+                      !HardwareKeyboard.instance.isControlPressed) {
+                    if (!widget.isLoading) {
+                      widget.onSend();
+                    }
+                    return KeyEventResult.handled;
+                  }
+
+                  // Cmd/Ctrl+V: ruta de imagen, archivos, o bytes (captura macOS).
                   final isPaste = (HardwareKeyboard.instance.isMetaPressed ||
                           HardwareKeyboard.instance.isControlPressed) &&
                       event.logicalKey == LogicalKeyboardKey.keyV;
@@ -585,8 +618,10 @@ class _CursorChatInputState extends State<CursorChatInput> {
                   ),
                   maxLines: null,
                   minLines: 1,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => widget.onSend(),
+                  textInputAction: TextInputAction.newline,
+                  onSubmitted: (_) {
+                    if (!widget.isLoading) widget.onSend();
+                  },
                   onTap: _closeOverlay,
                   decoration: InputDecoration(
                     hintText: widget.placeholder ??
@@ -725,93 +760,79 @@ class _CursorChatInputState extends State<CursorChatInput> {
                           ),
                         ),
                         
-                        const SizedBox(width: 8),
-                        
-                        // Botón @ para documentación
-                        Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () {
-                              _closeOverlay();
-                              _showDocumentationSelector();
-                            },
-                            borderRadius: BorderRadius.circular(20),
-                            child: Padding(
-                              padding: const EdgeInsets.all(6),
-                              child: Text(
-                                '@',
-                                style: TextStyle(
-                                  color: CursorTheme.textSecondary.withOpacity(0.8),
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
+                        const SizedBox(width: 4),
+
+                        // @ → inserta "@" y abre el menú de contexto (Docs incluido)
+                        _CompactIconButton(
+                          tooltip: 'Add context (@)',
+                          onTap: _insertAtMention,
+                          child: Text(
+                            '@',
+                            style: TextStyle(
+                              color: CursorTheme.textSecondary.withOpacity(0.85),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              height: 1,
                             ),
                           ),
                         ),
-                        
-                        // Botones de adjuntar
-                        if (widget.onAttachImage != null) ...[
-                          const SizedBox(width: 4),
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: widget.onAttachImage,
-                              borderRadius: BorderRadius.circular(20),
-                              child: Padding(
-                                padding: const EdgeInsets.all(6),
-                                child: Icon(
-                                  Icons.image_outlined,
-                                  size: 18,
-                                  color: CursorTheme.textSecondary.withOpacity(0.8),
-                                ),
-                              ),
+                        if (widget.onAttachImage != null)
+                          _CompactIconButton(
+                            tooltip: 'Adjuntar imagen',
+                            onTap: widget.onAttachImage!,
+                            child: Icon(
+                              Icons.image_outlined,
+                              size: 15,
+                              color: CursorTheme.textSecondary.withOpacity(0.85),
                             ),
                           ),
-                        ],
-                        if (widget.onAttachFile != null) ...[
-                          const SizedBox(width: 4),
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: widget.onAttachFile,
-                              borderRadius: BorderRadius.circular(20),
-                              child: Padding(
-                                padding: const EdgeInsets.all(6),
-                                child: Icon(
-                                  Icons.insert_drive_file_outlined,
-                                  size: 18,
-                                  color: CursorTheme.textSecondary.withOpacity(0.8),
-                                ),
-                              ),
+                        if (widget.onAttachFile != null)
+                          _CompactIconButton(
+                            tooltip: 'Adjuntar archivo',
+                            onTap: widget.onAttachFile!,
+                            child: Icon(
+                              Icons.insert_drive_file_outlined,
+                              size: 15,
+                              color: CursorTheme.textSecondary.withOpacity(0.85),
                             ),
                           ),
-                        ],
+                        _CompactIconButton(
+                          tooltip: 'Docs (URL de documentación)',
+                          onTap: () {
+                            _closeOverlay();
+                            _showDocumentationSelector();
+                          },
+                          child: Icon(
+                            Icons.menu_book_outlined,
+                            size: 15,
+                            color: CursorTheme.textSecondary.withOpacity(0.85),
+                          ),
+                        ),
                       ],
                     ),
                   ),
                 ),
                 
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 
-                // Botón enviar/stop (estilo Cursor) - siempre visible a la derecha
+                // Botón enviar/stop (estilo Cursor) - compacto
                 Material(
                   color: widget.isLoading 
                       ? Colors.red.withOpacity(0.9)
                       : CursorTheme.primary,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                   child: InkWell(
                     onTap: widget.isLoading 
                         ? (widget.onStop ?? () {})
                         : widget.onSend,
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(6),
                     child: Container(
-                      width: 36,
-                      height: 36,
+                      width: 28,
+                      height: 28,
                       alignment: Alignment.center,
                       child: widget.isLoading
-                          ? const Icon(Icons.stop, size: 18, color: Colors.white)
-                          : const Icon(Icons.send, size: 18, color: Colors.white),
+                          ? const Icon(Icons.stop, size: 14, color: Colors.white)
+                          : const Icon(Icons.send, size: 13, color: Colors.white),
                     ),
                   ),
                 ),
@@ -897,6 +918,37 @@ class _CursorChatInputState extends State<CursorChatInput> {
       default:
         return model;
     }
+  }
+}
+
+/// Botón de acción compacto (estilo Cursor) para @ / imagen / archivo / docs.
+class _CompactIconButton extends StatelessWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final String? tooltip;
+
+  const _CompactIconButton({
+    required this.child,
+    required this.onTap,
+    this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final button = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: SizedBox(
+          width: 24,
+          height: 24,
+          child: Center(child: child),
+        ),
+      ),
+    );
+    if (tooltip == null || tooltip!.isEmpty) return button;
+    return Tooltip(message: tooltip!, child: button);
   }
 }
 

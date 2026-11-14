@@ -6,12 +6,14 @@ import '../models/chat_checkpoint.dart';
 
 /// Time-travel de archivos: checkpoints agrupados por turno de chat.
 ///
-/// Persistencia por proyecto en `.lopez_code/checkpoints/`.
+/// Persistencia por proyecto en `.voryxel/checkpoints/`.
+/// (antes `.lopez_code/` — se migra al vuelo si existe).
 /// Independiente de chat / OpenAI / BackupService (usa su propia carpeta).
 class CheckpointService {
   CheckpointService._();
 
-  static const String _rootDirName = '.lopez_code';
+  static const String _rootDirName = '.voryxel';
+  static const String _legacyRootDirName = '.lopez_code';
   static const String _checkpointsDirName = 'checkpoints';
   static const String _indexFileName = 'index.json';
   static const String _metaFileName = 'meta.json';
@@ -244,11 +246,23 @@ class CheckpointService {
   // ---------------------------------------------------------------------------
 
   static String _checkpointsRoot(String projectPath) {
-    return _join(
-      _normalizePath(projectPath),
-      _rootDirName,
-      _checkpointsDirName,
-    );
+    final root = _normalizePath(projectPath);
+    final modern = _join(root, _rootDirName, _checkpointsDirName);
+    final legacy = _join(root, _legacyRootDirName, _checkpointsDirName);
+    // Migrar carpeta legacy Lopez Code → Voryxel si aún no existe la nueva.
+    final modernDir = Directory(_join(root, _rootDirName));
+    final legacyDir = Directory(_join(root, _legacyRootDirName));
+    if (!modernDir.existsSync() && legacyDir.existsSync()) {
+      try {
+        legacyDir.renameSync(modernDir.path);
+      } catch (_) {
+        // Si el rename falla, seguir leyendo de legacy abajo.
+      }
+    }
+    if (Directory(modern).existsSync() || !Directory(legacy).existsSync()) {
+      return modern;
+    }
+    return legacy;
   }
 
   static Future<Directory> _ensureCheckpointDir(

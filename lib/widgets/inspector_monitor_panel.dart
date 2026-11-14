@@ -23,6 +23,7 @@ class InspectorMonitorPanel extends StatelessWidget {
         final selected = service.selected;
         final hovered = service.hovered;
         final focus = selected ?? hovered;
+        final layers = service.layers;
         final isSelected = selected != null;
 
         return Container(
@@ -33,7 +34,7 @@ class InspectorMonitorPanel extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: isSelected
-                  ? CursorTheme.primary.withOpacity(0.7)
+                  ? CursorTheme.primary.withValues(alpha: 0.7)
                   : CursorTheme.border,
             ),
           ),
@@ -51,9 +52,46 @@ class InspectorMonitorPanel extends StatelessWidget {
               Expanded(
                 child: focus == null
                     ? const _EmptyState()
-                    : _ElementDetails(
-                        element: focus,
-                        isSelected: isSelected,
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                        children: [
+                          if (layers.isNotEmpty) ...[
+                            Text(
+                              'CAPAS (${layers.length})',
+                              style: const TextStyle(
+                                color: CursorTheme.textSecondary,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'De adentro hacia afuera. Clic para fijar una.',
+                              style: TextStyle(
+                                color: CursorTheme.textSecondary
+                                    .withValues(alpha: 0.8),
+                                fontSize: 10,
+                                height: 1.3,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            for (var i = 0; i < layers.length; i++)
+                              _LayerTile(
+                                index: i,
+                                element: layers[i],
+                                active: _same(layers[i], focus),
+                                onTap: () => service.selectLayer(layers[i]),
+                              ),
+                            const SizedBox(height: 12),
+                            const Divider(height: 1, color: CursorTheme.border),
+                            const SizedBox(height: 10),
+                          ],
+                          _ElementDetails(
+                            element: focus,
+                            isSelected: isSelected,
+                          ),
+                        ],
                       ),
               ),
               if (focus != null) ...[
@@ -63,9 +101,9 @@ class InspectorMonitorPanel extends StatelessWidget {
                   child: Text(
                     isSelected
                         ? 'El agente ya ve este elemento en el contexto.'
-                        : 'Clic para fijar la selección al agente.',
+                        : 'Clic en una capa o en el preview para fijarla.',
                     style: TextStyle(
-                      color: CursorTheme.textSecondary.withOpacity(0.9),
+                      color: CursorTheme.textSecondary.withValues(alpha: 0.9),
                       fontSize: 10,
                       height: 1.3,
                     ),
@@ -76,6 +114,103 @@ class InspectorMonitorPanel extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  static bool _same(InspectorElement a, InspectorElement b) {
+    return a.tagName == b.tagName &&
+        a.id == b.id &&
+        a.className == b.className &&
+        a.textContent == b.textContent &&
+        a.boundingRect?.width == b.boundingRect?.width &&
+        a.boundingRect?.height == b.boundingRect?.height &&
+        a.boundingRect?.x == b.boundingRect?.x &&
+        a.boundingRect?.y == b.boundingRect?.y;
+  }
+}
+
+class _LayerTile extends StatefulWidget {
+  const _LayerTile({
+    required this.index,
+    required this.element,
+    required this.active,
+    required this.onTap,
+  });
+
+  final int index;
+  final InspectorElement element;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  State<_LayerTile> createState() => _LayerTileState();
+}
+
+class _LayerTileState extends State<_LayerTile> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = widget.active
+        ? CursorTheme.primary.withValues(alpha: 0.18)
+        : (_hover
+            ? CursorTheme.surfaceHover
+            : CursorTheme.background);
+    final border = widget.active
+        ? CursorTheme.primary.withValues(alpha: 0.55)
+        : CursorTheme.border;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: Material(
+          color: bg,
+          borderRadius: BorderRadius.circular(5),
+          child: InkWell(
+            onTap: widget.onTap,
+            borderRadius: BorderRadius.circular(5),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: border),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '${widget.index + 1}',
+                    style: TextStyle(
+                      color: widget.active
+                          ? CursorTheme.primary
+                          : CursorTheme.textDisabled,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.element.layerLabel,
+                      style: TextStyle(
+                        color: widget.active
+                            ? CursorTheme.textPrimary
+                            : CursorTheme.textSecondary,
+                        fontSize: 11,
+                        fontWeight:
+                            widget.active ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -112,7 +247,7 @@ class _Header extends StatelessWidget {
                   : hasFocus
                       ? 'Apuntando'
                       : 'Inspector',
-              style: TextStyle(
+              style: const TextStyle(
                 color: CursorTheme.textPrimary,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
@@ -139,24 +274,24 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(14),
+    return const Padding(
+      padding: EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Pasa el mouse sobre la app y haz clic en un elemento.',
+            'Pasa el mouse sobre un botón u otro control.',
             style: TextStyle(
               color: CursorTheme.textSecondary,
               fontSize: 11,
               height: 1.35,
             ),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           Text(
-            'Ese elemento queda en contexto para el agente.',
+            'Verás la pila de capas (control, texto, contenedor…) y podrás elegir cuál fijar.',
             style: TextStyle(
-              color: CursorTheme.textSecondary.withOpacity(0.75),
+              color: CursorTheme.textDisabled,
               fontSize: 10,
               height: 1.35,
             ),
@@ -182,8 +317,9 @@ class _ElementDetails extends StatelessWidget {
     final rect = element.boundingRect;
     final styles = element.computedStyles;
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -192,8 +328,8 @@ class _ElementDetails extends StatelessWidget {
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: isSelected
-                  ? const Color(0xFF22C55E).withOpacity(0.5)
-                  : const Color(0xFF3B82F6).withOpacity(0.45),
+                  ? const Color(0xFF22C55E).withValues(alpha: 0.5)
+                  : const Color(0xFF3B82F6).withValues(alpha: 0.45),
             ),
           ),
           child: Row(
@@ -260,7 +396,7 @@ class _ElementDetails extends StatelessWidget {
                 '${rect.x.toStringAsFixed(0)}, ${rect.y.toStringAsFixed(0)}',
           ),
         const SizedBox(height: 8),
-        Text(
+        const Text(
           'Styles',
           style: TextStyle(
             color: CursorTheme.textSecondary,
@@ -302,7 +438,7 @@ class _Row extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: CursorTheme.textSecondary.withOpacity(0.85),
+                color: CursorTheme.textSecondary.withValues(alpha: 0.85),
                 fontSize: 10,
               ),
             ),

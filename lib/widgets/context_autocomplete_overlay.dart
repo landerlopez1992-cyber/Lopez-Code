@@ -6,10 +6,18 @@ import 'package:flutter/services.dart';
 
 import '../models/context_mention.dart';
 import '../services/context_builder_service.dart';
+import '../services/documentation_service.dart';
 import 'cursor_theme.dart';
 
 /// Modo activo del popup de autocompletado.
 enum ContextAutocompleteMode { none, mention, slash }
+
+/// Navegación interna del menú `@` (estilo Cursor).
+enum _MentionBrowse {
+  root,
+  files,
+  docs,
+}
 
 /// Query detectada en el input (`@login` o `/fix`).
 class ContextAutocompleteQuery {
@@ -42,6 +50,9 @@ class ContextAutocompleteItem {
   final IconData icon;
   final ContextMention? mention;
   final SlashCommand? slashCommand;
+  final bool isCategory;
+  final bool hasChevron;
+  final VoidCallback? onActivate;
 
   const ContextAutocompleteItem({
     required this.id,
@@ -50,6 +61,9 @@ class ContextAutocompleteItem {
     required this.icon,
     this.mention,
     this.slashCommand,
+    this.isCategory = false,
+    this.hasChevron = false,
+    this.onActivate,
   });
 }
 
@@ -85,6 +99,9 @@ class ContextAutocompleteOverlay extends StatefulWidget {
     ContextAutocompleteQuery query,
   )? onSlashCommandSelected;
 
+  /// Abrir diálogo para agregar URL de documentación (categoría Docs).
+  final VoidCallback? onOpenAddDocumentation;
+
   final VoidCallback? onDismiss;
 
   const ContextAutocompleteOverlay({
@@ -96,6 +113,7 @@ class ContextAutocompleteOverlay extends StatefulWidget {
     this.maxFileResults = 40,
     this.onMentionSelected,
     this.onSlashCommandSelected,
+    this.onOpenAddDocumentation,
     this.onDismiss,
   });
 
@@ -170,6 +188,7 @@ class _ContextAutocompleteOverlayState
   );
   bool _loading = false;
   Timer? _debounce;
+  _MentionBrowse _browse = _MentionBrowse.root;
 
   @override
   void initState() {
@@ -183,6 +202,29 @@ class _ContextAutocompleteOverlayState
     if (oldWidget.inputText != widget.inputText ||
         oldWidget.cursorOffset != widget.cursorOffset ||
         oldWidget.projectPath != widget.projectPath) {
+      // Al escribir filtro, saltar a archivos; al vaciar @, volver a root.
+      final next = ContextAutocompleteOverlay.detectQuery(
+        widget.inputText,
+        widget.cursorOffset,
+      );
+      if (next.mode == ContextAutocompleteMode.mention) {
+        if (next.filter.isNotEmpty && _browse == _MentionBrowse.root) {
+          _browse = _MentionBrowse.files;
+        } else if (next.filter.isEmpty &&
+            _browse == _MentionBrowse.files &&
+            oldWidget.inputText != widget.inputText) {
+          // Solo reset si el usuario borró el filtro (no al entrar a files).
+          final oldQ = ContextAutocompleteOverlay.detectQuery(
+            oldWidget.inputText,
+            oldWidget.cursorOffset,
+          );
+          if (oldQ.filter.isNotEmpty) {
+            _browse = _MentionBrowse.root;
+          }
+        }
+      } else {
+        _browse = _MentionBrowse.root;
+      }
       _debounce?.cancel();
       _debounce = Timer(const Duration(milliseconds: 60), _refresh);
     }
@@ -268,10 +310,137 @@ class _ContextAutocompleteOverlayState
   }
 
   Future<List<ContextAutocompleteItem>> _buildMentionItems(String filter) async {
+    final q = filter.toLowerCase().trim();
+
+    // Root estilo Cursor cuando @ está vacío.
+    if (q.isEmpty && _browse == _MentionBrowse.root) {
+      return [
+        ContextAutocompleteItem(
+          id: 'cat:files',
+          title: 'Files & Folders',
+          subtitle: 'Archivos y carpetas del proyecto',
+          icon: Icons.description_outlined,
+          isCategory: true,
+          hasChevron: true,
+          onActivate: () {
+            setState(() {
+              _browse = _MentionBrowse.files;
+              _selectedIndex = 0;
+            });
+            _refresh();
+          },
+        ),
+        ContextAutocompleteItem(
+          id: 'cat:docs',
+          title: 'Docs',
+          subtitle: 'URL de documentación para el agente',
+          icon: Icons.menu_book_outlined,
+          isCategory: true,
+          hasChevron: true,
+          onActivate: () {
+            setState(() {
+              _browse = _MentionBrowse.docs;
+              _selectedIndex = 0;
+            });
+            _refresh();
+          },
+        ),
+        ContextAutocompleteItem(
+          id: 'special:problems',
+          title: 'Problems',
+          subtitle: 'Errores actuales del analyzer',
+          icon: Icons.warning_amber_rounded,
+          mention: ContextMention.problems(),
+        ),
+        ContextAutocompleteItem(
+          id: 'special:structure',
+          title: 'Codebase',
+          subtitle: 'Árbol / estructura del proyecto',
+          icon: Icons.account_tree_outlined,
+          mention: ContextMention.codebase(label: '@codebase'),
+        ),
+      ];
+    }
+
+    if (_browse == _MentionBrowse.docs || q.startsWith('docs')) {
+      return _buildDocsItems(q.replaceFirst(RegExp(r'^docs:?\s*'), ''));
+    }
+
+    return _buildFileItems(q);
+  }
+
+  Future<List<ContextAutocompleteItem>> _buildDocsItems(String filter) async {
     final q = filter.toLowerCase();
+    final items = <ContextAutocompleteItem>[
+      if (q.isEmpty)
+        ContextAutocompleteItem(
+          id: 'nav:back-docs',
+          title: '← Back',
+          subtitle: 'Volver al menú @',
+          icon: Icons.arrow_back,
+          isCategory: true,
+          onActivate: () {
+            setState(() {
+              _browse = _MentionBrowse.root;
+              _selectedIndex = 0;
+            });
+            _refresh();
+          },
+        ),
+      ContextAutocompleteItem(
+        id: 'docs:add',
+        title: 'Add documentation…',
+        subtitle: 'Pegar URL · el agente la usará siempre',
+        icon: Icons.add_link,
+        isCategory: true,
+        onActivate: () {
+          widget.onOpenAddDocumentation?.call();
+          widget.onDismiss?.call();
+        },
+      ),
+    ];
+
+    final sources = await DocumentationService.getDocumentationSources();
+    for (final source in sources) {
+      final hay = '${source.name} ${source.url}'.toLowerCase();
+      if (q.isNotEmpty && !hay.contains(q)) continue;
+      items.add(
+        ContextAutocompleteItem(
+          id: 'docs:${source.url}',
+          title: source.name,
+          subtitle: source.isActive
+              ? 'Activa · ${source.url}'
+              : source.url,
+          icon: Icons.menu_book_outlined,
+          mention: ContextMention.docs(name: source.name, url: source.url),
+        ),
+      );
+    }
+    return items;
+  }
+
+  Future<List<ContextAutocompleteItem>> _buildFileItems(String q) async {
     final items = <ContextAutocompleteItem>[];
 
-    // Especiales siempre primero si matchean.
+    if (q.isEmpty) {
+      items.add(
+        ContextAutocompleteItem(
+          id: 'nav:back',
+          title: '← Back',
+          subtitle: 'Volver al menú @',
+          icon: Icons.arrow_back,
+          isCategory: true,
+          onActivate: () {
+            setState(() {
+              _browse = _MentionBrowse.root;
+              _selectedIndex = 0;
+            });
+            _refresh();
+          },
+        ),
+      );
+    }
+
     final specials = <ContextAutocompleteItem>[
       ContextAutocompleteItem(
         id: 'special:problems',
@@ -334,7 +503,6 @@ class _ContextAutocompleteOverlayState
       }
     }
 
-    // Priorizar matches que empiezan con el filtro.
     matched.sort((a, b) {
       final aStarts = a.title.toLowerCase().startsWith('@$q');
       final bStarts = b.title.toLowerCase().startsWith('@$q');
@@ -419,6 +587,11 @@ class _ContextAutocompleteOverlayState
     'DerivedData',
     '.DS_Store',
     'ephemeral',
+    // Datos internos del IDE (nombre viejo + nuevo)
+    '.lopez_code',
+    '.lopez_code_backups',
+    '.voryxel',
+    '.voryxel_backups',
   };
 
   void _moveSelection(int delta) {
@@ -435,7 +608,16 @@ class _ContextAutocompleteOverlayState
   }
 
   void _activate(ContextAutocompleteItem item) {
+    if (item.onActivate != null) {
+      item.onActivate!();
+      return;
+    }
     if (item.mention != null) {
+      // Al elegir un doc, marcarlo activo para que el agente lo use siempre.
+      if (item.mention!.type == ContextMentionType.docs &&
+          item.mention!.path != null) {
+        _ensureDocActive(item.mention!.path!);
+      }
       widget.onMentionSelected?.call(item.mention!, _query);
       return;
     }
@@ -450,6 +632,19 @@ class _ContextAutocompleteOverlayState
         _query,
       );
     }
+  }
+
+  Future<void> _ensureDocActive(String url) async {
+    try {
+      final sources = await DocumentationService.getDocumentationSources();
+      final match = sources.where((s) => s.url == url).toList();
+      if (match.isEmpty) return;
+      final source = match.first;
+      if (source.isActive) return;
+      await DocumentationService.updateDocumentationSource(
+        source.copyWith(isActive: true),
+      );
+    } catch (_) {}
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -490,16 +685,16 @@ class _ContextAutocompleteOverlayState
       child: Material(
         color: Colors.transparent,
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 280),
+          constraints: const BoxConstraints(maxWidth: 320, maxHeight: 240),
           decoration: BoxDecoration(
             color: CursorTheme.surface,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(color: CursorTheme.border),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.45),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
             ],
           ),
@@ -512,25 +707,23 @@ class _ContextAutocompleteOverlayState
                 child: _loading
                     ? const Center(
                         child: SizedBox(
-                          width: 18,
-                          height: 18,
+                          width: 14,
+                          height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                       )
                     : _items.isEmpty
-                        ? Center(
+                        ? const Center(
                             child: Text(
-                              _query.mode == ContextAutocompleteMode.slash
-                                  ? 'No slash commands'
-                                  : 'No matches',
-                              style: const TextStyle(
+                              'No matches',
+                              style: TextStyle(
                                 color: CursorTheme.textSecondary,
-                                fontSize: 12,
+                                fontSize: 11,
                               ),
                             ),
                           )
                         : ListView.builder(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.symmetric(vertical: 2),
                             itemCount: _items.length,
                             itemBuilder: (context, index) {
                               final item = _items[index];
@@ -557,24 +750,57 @@ class _ContextAutocompleteOverlayState
 
   Widget _buildHeader() {
     final isSlash = _query.mode == ContextAutocompleteMode.slash;
+    String title;
+    if (isSlash) {
+      title = 'Commands';
+    } else if (_browse == _MentionBrowse.docs) {
+      title = 'Docs';
+    } else if (_browse == _MentionBrowse.files) {
+      title = 'Files & Folders';
+    } else {
+      title = _query.filter.isEmpty
+          ? 'Add context'
+          : 'Add context · ${_query.filter}';
+    }
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       child: Row(
         children: [
+          if (_browse != _MentionBrowse.root && !isSlash)
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _browse = _MentionBrowse.root;
+                  _selectedIndex = 0;
+                });
+                _refresh();
+              },
+              child: const Padding(
+                padding: EdgeInsets.only(right: 6),
+                child: Icon(
+                  Icons.arrow_back,
+                  size: 12,
+                  color: CursorTheme.textSecondary,
+                ),
+              ),
+            ),
           Icon(
-            isSlash ? Icons.flash_on : Icons.alternate_email,
-            size: 14,
+            isSlash
+                ? Icons.flash_on
+                : _browse == _MentionBrowse.docs
+                    ? Icons.menu_book_outlined
+                    : Icons.alternate_email,
+            size: 12,
             color: CursorTheme.primary,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: Text(
-              isSlash
-                  ? 'Slash commands'
-                  : 'Add context ${_query.filter.isEmpty ? '' : '· ${_query.filter}'}',
+              title,
               style: const TextStyle(
                 color: CursorTheme.textSecondary,
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: FontWeight.w500,
               ),
               overflow: TextOverflow.ellipsis,
@@ -584,7 +810,7 @@ class _ContextAutocompleteOverlayState
             '${_items.length}',
             style: const TextStyle(
               color: CursorTheme.textDisabled,
-              fontSize: 10,
+              fontSize: 9,
             ),
           ),
         ],
@@ -613,7 +839,7 @@ class _SuggestionTile extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           color: selected
               ? CursorTheme.explorerItemSelected
               : Colors.transparent,
@@ -621,12 +847,12 @@ class _SuggestionTile extends StatelessWidget {
             children: [
               Icon(
                 item.icon,
-                size: 16,
+                size: 14,
                 color: selected
                     ? CursorTheme.primary
                     : CursorTheme.textSecondary,
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -635,23 +861,30 @@ class _SuggestionTile extends StatelessWidget {
                       item.title,
                       style: TextStyle(
                         color: CursorTheme.textPrimary,
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight:
                             selected ? FontWeight.w600 : FontWeight.w500,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
-                    Text(
-                      item.subtitle,
-                      style: const TextStyle(
-                        color: CursorTheme.textSecondary,
-                        fontSize: 11,
+                    if (item.subtitle.isNotEmpty)
+                      Text(
+                        item.subtitle,
+                        style: const TextStyle(
+                          color: CursorTheme.textSecondary,
+                          fontSize: 9,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
                   ],
                 ),
               ),
+              if (item.hasChevron)
+                const Icon(
+                  Icons.chevron_right,
+                  size: 14,
+                  color: CursorTheme.textDisabled,
+                ),
             ],
           ),
         ),

@@ -153,8 +153,10 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                 // App lista → controles Hot Reload / Restart / Stop (foto 2)
                 final appReady = running &&
                     (fullyReady || hasUrl || progress > 0.05 || building);
-                // Solo habilitar ⚡/🔄 cuando flutter run debug acepta stdin.
-                final hotReady = AdvancedDebuggingService.supportsHotReload;
+                // Flutter Hot Reload (stdin) O Preview HTML con URL lista.
+                final flutterHot = AdvancedDebuggingService.supportsHotReload;
+                final previewHot = hasUrl && running;
+                final hotReady = flutterHot || previewHot;
                 final hotBusy = debug.isHotBusy;
                 final reloading = debug.isHotReloading;
                 final restarting = debug.isHotRestarting;
@@ -182,9 +184,11 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                             : const Color(0xFFE8A838).withValues(alpha: 0.35),
                         tooltip: reloading
                             ? 'Hot Reloading…'
-                            : (hotReady
+                            : (flutterHot
                                 ? 'Hot Reload'
-                                : 'Hot Reload (espera compile debug…)'),
+                                : (previewHot
+                                    ? 'Refresh Preview (HTML)'
+                                    : 'Hot Reload (espera compile debug…)')),
                         loading: reloading,
                         onPressed: (hotReady && !hotBusy)
                             ? widget.onHotReload
@@ -198,9 +202,11 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                             : const Color(0xFF6FCF97).withValues(alpha: 0.35),
                         tooltip: restarting
                             ? 'Hot Restarting…'
-                            : (hotReady
+                            : (flutterHot
                                 ? 'Hot Restart'
-                                : 'Hot Restart (o reinicio completo)'),
+                                : (previewHot
+                                    ? 'Reload Preview (HTML)'
+                                    : 'Hot Restart (o reinicio completo)')),
                         loading: restarting,
                         onPressed: (!hotBusy)
                             ? (widget.onHotRestart ?? widget.onRestart)
