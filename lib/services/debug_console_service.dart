@@ -1,5 +1,12 @@
 import 'package:flutter/foundation.dart';
 
+import '../models/problem_item.dart';
+import 'advanced_debugging_service.dart';
+import 'platform_service.dart';
+import 'project_platform_support.dart';
+import 'run_debug_service.dart';
+import 'project_service.dart';
+
 /// Servicio compartido para el Debug Console Panel
 /// Permite que ChatScreen actualice el panel en MultiChatScreen
 class DebugConsoleService extends ChangeNotifier {
@@ -10,24 +17,142 @@ class DebugConsoleService extends ChangeNotifier {
   double _panelHeight = 250.0; // Visible por defecto con altura 250
   List<String> _output = [];
   List<String> _debugConsole = [];
-  List<String> _problems = [];
+  List<ProblemItem> _problemItems = [];
   bool _isVisible = true; // Visible por defecto
   bool _isRunning = false;
+  bool _isAnalyzing = false;
   String? _appUrl; // URL de la app ejecutándose (para web)
   String? _vmServiceUri; // URI del VM Service (para Inspector nativo)
   double _compilationProgress = 0.0; // Progreso de compilación (0.0 - 1.0)
   String _compilationStatus = ''; // Estado actual de compilación
+  /// 0 = Problems, 1 = Output, 2 = Debug Console, 3 = Terminal
+  int _preferredConsoleTab = 0;
+
+  /// Feedback visual estilo Cursor en Hot Reload / Hot Restart.
+  /// `idle` | `reloading` | `restarting`
+  String _hotAction = 'idle';
 
   double get panelHeight => _panelHeight;
   List<String> get output => List.unmodifiable(_output);
   List<String> get debugConsole => List.unmodifiable(_debugConsole);
-  List<String> get problems => List.unmodifiable(_problems);
+
+  /// Problemas estructurados de `flutter analyze` (fuente de verdad del panel).
+  List<ProblemItem> get problemItems => List.unmodifiable(_problemItems);
+
+  /// Compatibilidad: representación textual de cada [ProblemItem].
+  List<String> get problems =>
+      _problemItems.map((p) => p.toString()).toList(growable: false);
+
   bool get isVisible => _isVisible;
   bool get isRunning => _isRunning;
+  bool get isAnalyzing => _isAnalyzing;
   String? get appUrl => _appUrl;
   String? get vmServiceUri => _vmServiceUri;
   double get compilationProgress => _compilationProgress;
   String get compilationStatus => _compilationStatus;
+  int get preferredConsoleTab => _preferredConsoleTab;
+
+  /// `idle` | `reloading` | `restarting`
+  String get hotAction => _hotAction;
+  bool get isHotReloading => _hotAction == 'reloading';
+  bool get isHotRestarting => _hotAction == 'restarting';
+  bool get isHotBusy => _hotAction != 'idle';
+
+  void _setHotAction(String action) {
+    if (_hotAction == action) return;
+    _hotAction = action;
+    notifyListeners();
+  }
+
+  /// Abre el panel inferior y selecciona la pestaña Output (logs en vivo).
+  void showOutputTab() {
+    _preferredConsoleTab = 1;
+    if (_panelHeight == 0) {
+      _panelHeight = 250.0;
+      _isVisible = true;
+    }
+    notifyListeners();
+  }
+
+  void setPreferredConsoleTab(int index) {
+    final clamped = index.clamp(0, 3);
+    if (_preferredConsoleTab != clamped) {
+      _preferredConsoleTab = clamped;
+      notifyListeners();
+    }
+  }
+
+  /// Abre el panel inferior y selecciona la pestaña Terminal.
+  void showTerminalTab() {
+    _preferredConsoleTab = 3;
+    if (_panelHeight == 0) {
+      _panelHeight = 250.0;
+      _isVisible = true;
+    }
+    notifyListeners();
+  }
+
+  /// Parsea una línea de `flutter run` y actualiza fase/progreso en vivo.
+  void updateProgressFromFlutterLine(String line) {
+    final lower = line.toLowerCase();
+    double progress = _compilationProgress;
+    String status = _compilationStatus;
+
+    if (lower.contains('resolving dependencies') ||
+        lower.contains('got dependencies') ||
+        lower.contains('downloading packages') ||
+        lower.contains('running "flutter pub get"')) {
+      status = 'Resolviendo dependencias...';
+      progress = progress < 0.2 ? 0.2 : progress;
+    } else if (lower.contains('running gradle') ||
+        lower.contains('running xcode build') ||
+        lower.contains('running pod install') ||
+        lower.contains('cocoapods')) {
+      status = 'Configurando nativo...';
+      progress = progress < 0.35 ? 0.35 : progress;
+    } else if (lower.contains('compiling') ||
+        lower.contains('building flutter') ||
+        lower.contains('building') ||
+        lower.contains('assembling') ||
+        lower.contains('lib/main.dart') ||
+        lower.contains('kernel snapshot')) {
+      status = 'Compilando aplicación...';
+      progress = progress < 0.55 ? 0.55 : progress;
+    } else if (lower.contains('installing') ||
+        lower.contains('launching') ||
+        lower.contains('syncing files to device') ||
+        lower.contains('waiting for') ||
+        lower.contains('starting application')) {
+      status = 'Instalando y lanzando...';
+      progress = progress < 0.85 ? 0.85 : progress;
+    } else if (lower.contains('flutter run key commands') ||
+        lower.contains('an observatory debugger') ||
+        (lower.contains('devtools') && lower.contains('available at')) ||
+        lower.contains('application finished launching') ||
+        lower.contains('is being served at') ||
+        lower.contains('serving at http')) {
+      final p = PlatformService().selectedPlatform.toLowerCase();
+      if (lower.contains('served at') || lower.contains('serving at')) {
+        status = p == 'web'
+            ? 'Aplicación web ejecutándose'
+            : '${ProjectPlatformSupport.humanLabel(p)} ejecutándose';
+      } else {
+        status = 'Aplicación ejecutándose';
+      }
+      progress = 1.0;
+    } else if (RegExp(r'(\d+)%').hasMatch(line)) {
+      final percentMatch = RegExp(r'(\d+)%').firstMatch(line);
+      if (percentMatch != null) {
+        final percent = int.parse(percentMatch.group(1)!);
+        progress = percent / 100.0;
+        status = 'Compilando aplicación... $percent%';
+      }
+    } else {
+      return;
+    }
+
+    setCompilationProgress(progress, status);
+  }
 
   void setPanelHeight(double height) {
     _panelHeight = height;
@@ -35,18 +160,160 @@ class DebugConsoleService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Output = log crudo completo del proceso (flutter run / build / deploy).
   void addOutput(String line) {
     _output.add(line);
     notifyListeners();
   }
 
+  /// Debug Console = trazas en vivo de la app + eventos del IDE
+  /// (print/debugPrint, excepciones, hot reload, tips, URLs).
   void addDebugConsole(String line) {
     _debugConsole.add(line);
     notifyListeners();
   }
 
+  /// Ruido típico del toolchain Flutter (queda en Output, no en Debug).
+  bool _isFlutterToolNoise(String lower) {
+    const noise = [
+      'resolving dependencies',
+      'got dependencies',
+      'downloading packages',
+      'running "flutter pub get"',
+      'running gradle',
+      'running xcode build',
+      'running pod install',
+      'cocoapods',
+      'waiting for connection from debug service',
+      'syncing files to device',
+      'installing and launching',
+      'flutter run key commands',
+      'an observatory debugger and profiler',
+      'a dart vm service on',
+      'the flutter devtools debugger',
+      'to hot reload',
+      'to hot restart',
+      'to quit',
+      'to detach',
+      'trying to load',
+      'changing current working directory',
+      'no supported devices connected',
+      'checking for wireless devices',
+    ];
+    for (final n in noise) {
+      if (lower.contains(n)) return true;
+    }
+    // Líneas de progreso de compilación del tool
+    if (lower.contains('compiling') &&
+        (lower.contains('for ') || lower.contains('lib/'))) {
+      return true;
+    }
+    if (lower.startsWith('✓ built') || lower.startsWith('√ built')) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Línea de runtime de la app (print, stack, framework, carga en vivo).
+  bool _isAppRuntimeTrace(String line, String lower) {
+    if (lower.contains('exception') ||
+        lower.contains('error:') ||
+        lower.contains('failed') ||
+        lower.contains('unhandled') ||
+        lower.contains('overflowed') ||
+        lower.contains('renderflex') ||
+        lower.contains('another exception was thrown') ||
+        lower.contains('the following assertion was thrown')) {
+      return true;
+    }
+    // Stack frames Dart
+    if (RegExp(r'^\s*#\d+\s+').hasMatch(line) ||
+        lower.contains('package:flutter/') ||
+        lower.contains('dart:')) {
+      return true;
+    }
+    // Logs Android / iOS / web del isolate
+    if (lower.contains('i/flutter') ||
+        lower.contains('e/flutter') ||
+        lower.contains('w/flutter') ||
+        lower.contains('d/flutter') ||
+        lower.startsWith('flutter:')) {
+      return true;
+    }
+    // Hot reload/restart resultado (útil en Debug)
+    if (lower.contains('performing hot reload') ||
+        lower.contains('performing hot restart') ||
+        lower.contains('reloaded ') ||
+        lower.contains('restarted application')) {
+      return true;
+    }
+    // URL de la app lista (punto de “ya corre”)
+    if (lower.contains('is being served at') ||
+        RegExp(r'https?://(?:localhost|127\.0\.0\.1):\d+').hasMatch(line)) {
+      return true;
+    }
+    // Cualquier print de la app: si NO es ruido del tool, es traza de runtime
+    if (!_isFlutterToolNoise(lower) && line.trim().isNotEmpty) {
+      // Filtra banners ANSI casi vacíos / separadores del tool
+      final stripped = line.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '').trim();
+      if (stripped.isEmpty || stripped == '─' || stripped.startsWith('═══')) {
+        return false;
+      }
+      // Tras app running, la mayoría de líneas son prints / logs de negocio
+      if (_isRunning || _compilationProgress >= 0.95) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Enruta stdout/stderr del proceso Flutter:
+  /// • siempre → Output (log crudo)
+  /// • trazas de runtime / errores → Debug Console (en vivo)
+  void ingestProcessLine(String line) {
+    final t = line.trimRight();
+    if (t.isEmpty) return;
+    _output.add(t);
+
+    final lower = t.toLowerCase();
+    if (_isAppRuntimeTrace(t, lower)) {
+      _debugConsole.add(t);
+    }
+    notifyListeners();
+  }
+
+  /// Varias líneas / chunk de stdout|stderr del proceso.
+  void ingestProcessChunk(String chunk) {
+    var any = false;
+    for (final line in chunk.split('\n')) {
+      final t = line.trimRight();
+      if (t.isEmpty) continue;
+      _output.add(t);
+      final lower = t.toLowerCase();
+      if (_isAppRuntimeTrace(t, lower)) {
+        _debugConsole.add(t);
+      }
+      any = true;
+    }
+    if (any) notifyListeners();
+  }
+
+  /// Agrega un problema estructurado (preferido).
+  void addProblemItem(ProblemItem item) {
+    _problemItems.add(item);
+    notifyListeners();
+  }
+
+  /// Compatibilidad con callers que aún pasan un String (p. ej. logs).
+  /// No usa regex de consola como fuente primaria: crea un ítem info/error simple.
   void addProblem(String problem) {
-    _problems.add(problem);
+    final parsed = _tryParseProblemString(problem);
+    _problemItems.add(parsed);
+    notifyListeners();
+  }
+
+  void setProblemItems(List<ProblemItem> items) {
+    _problemItems = List<ProblemItem>.from(items);
     notifyListeners();
   }
 
@@ -61,14 +328,14 @@ class DebugConsoleService extends ChangeNotifier {
   }
 
   void clearProblems() {
-    _problems.clear();
+    _problemItems.clear();
     notifyListeners();
   }
 
   void clearAll() {
     _output.clear();
     _debugConsole.clear();
-    _problems.clear();
+    _problemItems.clear();
     _vmServiceUri = null;
     notifyListeners();
   }
@@ -102,7 +369,109 @@ class DebugConsoleService extends ChangeNotifier {
     }
   }
 
+  /// Marca el proceso como terminado (usado por stop / exit real).
+  void notifyProcessEnded() {
+    _isRunning = false;
+    _appUrl = null;
+    _vmServiceUri = null;
+    _compilationProgress = 0.0;
+    _compilationStatus = '';
+    addDebugConsole('🛑 Proceso Flutter terminado');
+    notifyListeners();
+  }
+
+  /// Detiene el `flutter run` real (SIGTERM → SIGKILL) y notifica a la UI.
+  /// El Stop del toolbar / ChatScreen debe llamar esto (además de limpiar
+  /// cualquier Process local) para evitar zombies.
+  Future<void> requestStop() async {
+    addDebugConsole('🛑 Deteniendo proceso Flutter...');
+    await AdvancedDebuggingService.stop();
+    await RunDebugService.stop();
+    notifyProcessEnded();
+  }
+
+  /// Contador: el PhoneEmulator recarga el WebView cuando sube.
+  int _previewReloadNonce = 0;
+  int get previewReloadNonce => _previewReloadNonce;
+
+  /// Fuerza reload del Preview (tras Hot Reload/Restart reales).
+  void bumpPreviewReload() {
+    _previewReloadNonce++;
+    notifyListeners();
+  }
+
+  /// Hot Reload (`r` → stdin de flutter run).
+  Future<bool> requestHotReload() async {
+    _setHotAction('reloading');
+    try {
+      final ok = await AdvancedDebuggingService.hotReload() ||
+          await RunDebugService.hotReload();
+      addDebugConsole(
+        ok
+            ? '⚡ Hot Reload enviado'
+            : '⚠️ Hot Reload: no hay proceso Flutter activo',
+      );
+      // WebView (web-server) no siempre recibe DWDS: refrescar Preview.
+      if (ok && _appUrl != null && _appUrl!.isNotEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+        bumpPreviewReload();
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      return ok;
+    } finally {
+      _setHotAction('idle');
+    }
+  }
+
+  /// Hot Restart (`R` → stdin de flutter run).
+  Future<bool> requestHotRestart() async {
+    _setHotAction('restarting');
+    try {
+      final ok = await AdvancedDebuggingService.hotRestart() ||
+          await RunDebugService.hotRestart();
+      addDebugConsole(
+        ok
+            ? '🔄 Hot Restart enviado'
+            : '⚠️ Hot Restart: no hay proceso Flutter activo',
+      );
+      // Hot Restart en web-server: hay que recargar el WebView sí o sí.
+      if (ok && _appUrl != null && _appUrl!.isNotEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        bumpPreviewReload();
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      return ok;
+    } finally {
+      _setHotAction('idle');
+    }
+  }
+
+  /// ¿URL válida para el Preview (app Flutter), no DevTools / VM Service?
+  static bool isPreviewAppUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return false;
+    final u = url.trim().toLowerCase();
+    if (!(u.startsWith('http://') || u.startsWith('https://'))) return false;
+    if (u.startsWith('ws://') || u.startsWith('wss://')) return false;
+    if (u.contains('devtools')) return false;
+    if (u.contains('/dds')) return false;
+    // VM Service / Observatory suelen llevar ?uri= o path /vm
+    if (u.contains('uri=http') || u.contains('uri=ws')) return false;
+    if (u.contains('/vm/') || u.endsWith('/vm')) return false;
+    return true;
+  }
+
   void setAppUrl(String? url) {
+    // Nunca meter DevTools en el Preview (pantalla "Connected app").
+    if (url != null && !isPreviewAppUrl(url)) {
+      print('🚫 setAppUrl rechazada (no es app Preview): $url');
+      // Guardar como VM Service si parece serlo.
+      if (url.toLowerCase().contains('uri=') ||
+          url.toLowerCase().contains('devtools') ||
+          url.toLowerCase().startsWith('ws')) {
+        setVmServiceUri(url);
+      }
+      return;
+    }
     if (_appUrl != url) {
       print('🌐 DebugConsoleService.setAppUrl: "$_appUrl" -> "$url"');
       _appUrl = url;
@@ -131,5 +500,64 @@ class DebugConsoleService extends ChangeNotifier {
     _compilationProgress = 0.0;
     _compilationStatus = '';
     notifyListeners();
+  }
+
+  /// Ejecuta `flutter analyze` real y actualiza el panel Problems.
+  Future<List<ProblemItem>> refreshProblemsFromAnalyze([String? projectPath]) async {
+    final path = projectPath ?? await ProjectService.getProjectPath();
+    if (path == null || path.isEmpty) {
+      addDebugConsole('⚠️ No hay proyecto para flutter analyze');
+      return [];
+    }
+
+    _isAnalyzing = true;
+    notifyListeners();
+    addDebugConsole('🔍 Ejecutando flutter analyze...');
+
+    try {
+      final items = await AdvancedDebuggingService.runFlutterAnalyze(path);
+      _problemItems = List<ProblemItem>.from(items);
+      addDebugConsole('📊 Problems actualizados: ${items.length}');
+      openPanel();
+      notifyListeners();
+      return items;
+    } catch (e) {
+      addDebugConsole('❌ Error en flutter analyze: $e');
+      return [];
+    } finally {
+      _isAnalyzing = false;
+      notifyListeners();
+    }
+  }
+
+  ProblemItem _tryParseProblemString(String problem) {
+    final classic = RegExp(
+      r'^(.+?):(\d+):(\d+):\s*(error|warning|info):\s*(.+)$',
+      caseSensitive: false,
+    ).firstMatch(problem);
+    if (classic != null) {
+      return ProblemItem.fromSeverityString(
+        filePath: classic.group(1)!,
+        line: int.tryParse(classic.group(2)!) ?? 0,
+        column: int.tryParse(classic.group(3)!) ?? 0,
+        severity: classic.group(4)!,
+        message: classic.group(5)!.trim(),
+      );
+    }
+
+    final lower = problem.toLowerCase();
+    final severity = lower.contains('error')
+        ? ProblemSeverity.error
+        : lower.contains('warning')
+            ? ProblemSeverity.warning
+            : ProblemSeverity.info;
+
+    return ProblemItem(
+      filePath: '',
+      line: 0,
+      column: 0,
+      severity: severity,
+      message: problem,
+    );
   }
 }

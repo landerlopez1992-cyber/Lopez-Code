@@ -37,7 +37,7 @@ class WelcomeScreen extends StatelessWidget {
                   // Acción del botón
                 },
                 style: ElevatedButton.styleFrom(
-                  primary: Colors.blueAccent,
+                  backgroundColor: Colors.blueAccent,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),

@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/project_service.dart';
 import '../services/file_service.dart';
+import '../services/agent_activity_service.dart';
 import 'cursor_theme.dart';
 
 class ProjectExplorer extends StatefulWidget {
@@ -10,9 +12,12 @@ class ProjectExplorer extends StatefulWidget {
   final Function(String)? onFileDoubleClick;
   final Function(String)? onFileDelete;
   final Function(String)? onFileViewCode;
-  final Function(String)? onFileViewScreen;
   final Function(String)? onFileCopy;
+  /// Callback opcional para pedir abrir/seleccionar proyecto (empty state).
+  final VoidCallback? onRequestOpenProject;
   final String mode; // 'explorer' o 'search'
+  /// Archivo que el agente está editando → resalte intermitente + expandir ruta.
+  final String? agentActivePath;
 
   const ProjectExplorer({
     super.key,
@@ -20,45 +25,243 @@ class ProjectExplorer extends StatefulWidget {
     this.onFileDoubleClick,
     this.onFileDelete,
     this.onFileViewCode,
-    this.onFileViewScreen,
     this.onFileCopy,
+    this.onRequestOpenProject,
     this.mode = 'explorer',
+    this.agentActivePath,
   });
 
   @override
   State<ProjectExplorer> createState() => _ProjectExplorerState();
 }
 
-class _ProjectExplorerState extends State<ProjectExplorer> {
+class _ProjectExplorerState extends State<ProjectExplorer>
+    with SingleTickerProviderStateMixin {
   Map<String, dynamic>? _projectTree;
   String? _projectPath;
   String? _selectedPath;
   bool _isLoading = true;
   Set<String> _expandedPaths = {};
   String? _lastLoadedPath; // Para detectar cambios de proyecto
-  
-  // Estado para búsqueda
+  final GlobalKey _agentRowKey = GlobalKey();
+  late final AnimationController _agentPulse;
+  final AgentActivityService _agentActivity = AgentActivityService();
+
+  // Estado para búsqueda (modo search legacy + filtro del explorador)
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _filterFocus = FocusNode();
   List<String> _searchResults = [];
   bool _isSearching = false;
+  /// Filtro en vivo del árbol (nombres de archivo/carpeta).
+  String _treeFilter = '';
+  List<Map<String, String>> _treeFilterHits = [];
 
   @override
   void initState() {
     super.initState();
+    _agentPulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    )..repeat(reverse: true);
+    _agentActivity.addListener(_onAgentActivity);
     _loadProject();
     _searchController.addListener(_onSearchChanged);
+    final initial = widget.agentActivePath ?? _agentActivity.activePath;
+    if (initial != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _revealAgentPath(initial);
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant ProjectExplorer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.agentActivePath != oldWidget.agentActivePath &&
+        widget.agentActivePath != null) {
+      _revealAgentPath(widget.agentActivePath!);
+    }
+  }
+
+  void _onAgentActivity() {
+    final path = _agentActivity.activePath;
+    if (path == null || path.isEmpty) {
+      if (_selectedPath != null && mounted) {
+        setState(() {}); // quitar pulso
+      }
+      return;
+    }
+    _revealAgentPath(path);
   }
   
   @override
   void dispose() {
+    _agentActivity.removeListener(_onAgentActivity);
+    _agentPulse.dispose();
     _searchController.dispose();
+    _filterFocus.dispose();
     super.dispose();
+  }
+
+  String _norm(String p) => p.replaceAll('\\', '/');
+
+  bool _samePath(String? a, String? b) {
+    if (a == null || b == null) return false;
+    return _norm(a) == _norm(b);
+  }
+
+  /// Ruta activa del agente (prop o servicio global) — solo archivos reales.
+  String? get _effectiveAgentPath {
+    if (!_agentActivity.hasFileTarget &&
+        (widget.agentActivePath == null || widget.agentActivePath!.isEmpty)) {
+      return null;
+    }
+    return widget.agentActivePath ?? _agentActivity.activePath;
+  }
+
+  /// Match flexible: path exacto, sufijo relativo, o mismo basename.
+  bool _matchesAgentFile(String treePath) {
+    final agent = _effectiveAgentPath;
+    if (agent == null || agent.isEmpty) return false;
+    final a = _norm(agent);
+    final t = _norm(treePath);
+    if (a == t) return true;
+    if (a.endsWith('/${t.split('/').last}') &&
+        a.split('/').last == t.split('/').last) {
+      // Mismo nombre de archivo
+      final base = t.split('/').last;
+      if (base.contains('.')) return a.endsWith('/$base') || a == base;
+    }
+    if (_projectPath != null) {
+      final root = _norm(_projectPath!);
+      if (t.startsWith('$root/')) {
+        final rel = t.substring(root.length + 1);
+        if (a.endsWith('/$rel') || a.endsWith(rel) || a == rel) return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isAgentAncestor(String dirPath) {
+    final agent = _effectiveAgentPath;
+    if (agent == null || agent.isEmpty) return false;
+    final d = _norm(dirPath);
+    final a = _norm(agent);
+    if (a.startsWith('$d/')) return true;
+    // Si el match es por basename, expandir carpetas del match en árbol
+    final matched = _findTreePathMatchingAgent();
+    if (matched != null && _norm(matched).startsWith('$d/')) return true;
+    return false;
+  }
+
+  String? _findTreePathMatchingAgent() {
+    final agent = _effectiveAgentPath;
+    if (agent == null || _projectTree == null) return null;
+    String? found;
+    void walk(Map<String, dynamic> node) {
+      if (found != null) return;
+      final path = node['path'] as String?;
+      final type = node['type'] as String?;
+      if (path != null && type == 'file' && _matchesAgentFile(path)) {
+        found = path;
+        return;
+      }
+      final children = node['children'] as List<dynamic>?;
+      if (children == null) return;
+      for (final c in children) {
+        walk(c as Map<String, dynamic>);
+      }
+    }
+    walk(_projectTree!);
+    return found;
+  }
+
+  /// Expande carpetas padre, selecciona el archivo y hace scroll hasta él.
+  void _revealAgentPath(String absolutePath) {
+    if (_projectPath == null) return;
+    final root = _norm(_projectPath!);
+    // Preferir el path real del árbol si el agente trae pub-cache / relativo.
+    final treePath = _findTreePathMatchingAgent() ?? absolutePath;
+    final target = _norm(treePath);
+    final toExpand = <String>{root};
+    if (target.startsWith('$root/')) {
+      final relative = target.substring(root.length + 1);
+      final parts = relative.split('/');
+      var acc = root;
+      for (var i = 0; i < parts.length - 1; i++) {
+        acc = '$acc/${parts[i]}';
+        toExpand.add(acc);
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _expandedPaths.addAll(toExpand);
+      _selectedPath = treePath;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _agentRowKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 280),
+          alignment: 0.35,
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
   
   void _onSearchChanged() {
     if (widget.mode == 'search') {
       _searchFiles(_searchController.text);
+      return;
     }
+    // Explorador: filtrar árbol por nombre de archivo/carpeta.
+    final q = _searchController.text.trim();
+    setState(() {
+      _treeFilter = q;
+      _treeFilterHits = q.isEmpty ? [] : _collectNameMatches(_projectTree, q);
+    });
+  }
+
+  /// Recorre el árbol y devuelve coincidencias por nombre (archivo o carpeta).
+  List<Map<String, String>> _collectNameMatches(
+    Map<String, dynamic>? node,
+    String query,
+  ) {
+    final out = <Map<String, String>>[];
+    if (node == null || query.isEmpty) return out;
+    final needle = query.toLowerCase();
+
+    void walk(Map<String, dynamic> item) {
+      final name = (item['name'] as String? ?? '');
+      final path = (item['path'] as String? ?? '');
+      final type = (item['type'] as String? ?? 'file');
+      if (name.toLowerCase().contains(needle) ||
+          path.toLowerCase().contains(needle)) {
+        // No listar la raíz del proyecto como hit.
+        if (path != _projectPath) {
+          out.add({'name': name, 'path': path, 'type': type});
+        }
+      }
+      final children = item['children'] as List<dynamic>?;
+      if (children != null) {
+        for (final child in children) {
+          walk(child as Map<String, dynamic>);
+        }
+      }
+    }
+
+    walk(node);
+    out.sort((a, b) {
+      final aName = a['name']!.toLowerCase();
+      final bName = b['name']!.toLowerCase();
+      final aStarts = aName.startsWith(needle);
+      final bStarts = bName.startsWith(needle);
+      if (aStarts != bStarts) return aStarts ? -1 : 1;
+      return aName.compareTo(bName);
+    });
+    return out;
   }
   
   Future<void> _searchFiles(String query) async {
@@ -294,115 +497,159 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
     final path = item['path'] as String;
     final type = item['type'] as String;
     final isExpanded = _expandedPaths.contains(path);
-    final isSelected = _selectedPath == path;
+    final isSelected = _samePath(_selectedPath, path);
     final isDirectory = type == 'directory';
     final children = item['children'] as List<dynamic>?;
-    
-    // Debug para directorios
-    if (isDirectory && level == 0) {
-      print('ROOT - expandido: $isExpanded, hijos: ${children?.length ?? 0}');
-      if (children != null && children.isNotEmpty) {
-        print('Primeros hijos: ${children.take(3).map((c) => c['name']).toList()}');
-      }
-    }
+    final isAgentFile = !isDirectory && _matchesAgentFile(path);
+    final isAgentFolder = isDirectory && _isAgentAncestor(path);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onSecondaryTap: !isDirectory ? () {
-            _showContextMenu(context, path, name);
-          } : null,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () {
-                if (isDirectory) {
-                  _toggleExpand(path);
-                } else {
-                  setState(() {
-                    _selectedPath = path;
-                  });
-                  widget.onFileSelected?.call(path);
-                }
-              },
-              onDoubleTap: () {
-                if (!isDirectory) {
-                  widget.onFileDoubleClick?.call(path);
-                }
-              },
-              child: Container(
+    Widget row = GestureDetector(
+      onSecondaryTap: () {
+        _showContextMenu(
+          context,
+          path,
+          name,
+          isDirectory: isDirectory,
+        );
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (isDirectory) {
+              _toggleExpand(path);
+            } else {
+              setState(() {
+                _selectedPath = path;
+              });
+              widget.onFileSelected?.call(path);
+            }
+          },
+          onDoubleTap: () {
+            if (!isDirectory) {
+              widget.onFileDoubleClick?.call(path);
+            }
+          },
+          child: AnimatedBuilder(
+            animation: _agentPulse,
+            builder: (context, child) {
+              Color? bg;
+              if (isAgentFile) {
+                bg = Color.lerp(
+                  const Color(0xFF1A3A5C),
+                  CursorTheme.primary.withOpacity(0.55),
+                  _agentPulse.value,
+                );
+              } else if (isAgentFolder) {
+                bg = Color.lerp(
+                  Colors.transparent,
+                  CursorTheme.primary.withOpacity(0.28),
+                  _agentPulse.value,
+                );
+              } else if (isSelected) {
+                bg = CursorTheme.explorerItemSelected;
+              }
+
+              return Container(
+                key: isAgentFile ? _agentRowKey : null,
                 padding: EdgeInsets.only(
-                  left: level * 18.0 + 10, // Más espacio como Cursor
+                  left: level * 18.0 + 10,
                   right: 10,
                   top: 3,
                   bottom: 3,
                 ),
-                color: isSelected
-                    ? CursorTheme.explorerItemSelected
-                    : Colors.transparent,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  onEnter: (_) {
-                    if (!isSelected) {
-                      // Efecto hover sutil
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(4),
-                      color: isSelected
-                          ? CursorTheme.explorerItemSelected
-                          : null,
-                    ),
-                    child: Row(
-                      children: [
-                        // Icono de expandir/colapsar para directorios
-                        if (isDirectory) ...[
-                          Icon(
-                            isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                            size: 14, // Más pequeño como Cursor
-                            color: CursorTheme.textSecondary.withOpacity(0.8),
-                          ),
-                          const SizedBox(width: 6),
-                          Icon(
-                            isExpanded ? Icons.folder_open : Icons.folder,
-                            size: 16,
-                            color: const Color(0xFFFFB800), // Amarillo más suave como Cursor
-                          ),
-                        ] else ...[
-                          const SizedBox(width: 20), // Espacio para alinear con directorios
-                          Icon(
-                            _getFileIcon(name),
-                            size: 16,
-                            color: _getFileColor(name).withOpacity(0.9),
-                          ),
-                        ],
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            name,
-                            style: TextStyle(
-                              color: isSelected 
-                                  ? CursorTheme.textPrimary 
-                                  : CursorTheme.textSecondary,
-                              fontSize: 13,
-                              fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
-                              height: 1.4, // Mejor interlineado
+                color: bg ?? Colors.transparent,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    border: isAgentFile
+                        ? Border.all(
+                            color: CursorTheme.primary.withOpacity(
+                              0.35 + _agentPulse.value * 0.45,
                             ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                            width: 1,
+                          )
+                        : null,
+                  ),
+                  child: child,
+                ),
+              );
+            },
+            child: Row(
+              children: [
+                if (isDirectory) ...[
+                  Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    size: 14,
+                    color: CursorTheme.textSecondary.withOpacity(0.8),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    isExpanded || isAgentFolder
+                        ? Icons.folder_open
+                        : Icons.folder,
+                    size: 16,
+                    color: isAgentFolder
+                        ? CursorTheme.primary
+                        : const Color(0xFFFFB800),
+                  ),
+                ] else ...[
+                  const SizedBox(width: 20),
+                  Icon(
+                    _getFileIcon(name),
+                    size: 16,
+                    color: isAgentFile
+                        ? CursorTheme.primary
+                        : _getFileColor(name).withOpacity(0.9),
+                  ),
+                ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    name,
+                    style: TextStyle(
+                      color: (isSelected || isAgentFile)
+                          ? CursorTheme.textPrimary
+                          : CursorTheme.textSecondary,
+                      fontSize: 13,
+                      fontWeight: (isSelected || isAgentFile || isAgentFolder)
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                      height: 1.4,
                     ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ),
+                if (isAgentFile)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Icon(
+                      Icons.auto_awesome,
+                      size: 12,
+                      color: CursorTheme.primary.withOpacity(
+                        0.5 + _agentPulse.value * 0.5,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
-        if (isDirectory && isExpanded && children != null && children.isNotEmpty) ...[
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row,
+        if (isDirectory &&
+            isExpanded &&
+            children != null &&
+            children.isNotEmpty) ...[
           for (var child in children) ...[
             _buildTreeItem(child as Map<String, dynamic>, level + 1),
           ],
@@ -411,107 +658,469 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
     );
   }
 
-  void _showContextMenu(BuildContext context, String filePath, String fileName) {
-    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  void _showContextMenu(
+    BuildContext context,
+    String filePath,
+    String fileName, {
+    required bool isDirectory,
+  }) {
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
     final RenderBox button = context.findRenderObject() as RenderBox;
     final RelativeRect position = RelativeRect.fromRect(
       Rect.fromPoints(
         button.localToGlobal(Offset.zero, ancestor: overlay),
-        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
       ),
       Offset.zero & overlay.size,
     );
+
+    final parentDir = isDirectory
+        ? filePath
+        : (File(filePath).parent.path);
 
     showMenu<String>(
       context: context,
       position: position,
       color: CursorTheme.surface,
       items: [
+        if (!isDirectory)
+          const PopupMenuItem<String>(
+            value: 'view_code',
+            child: Row(
+              children: [
+                Icon(Icons.code, size: 18, color: CursorTheme.textPrimary),
+                SizedBox(width: 8),
+                Text(
+                  'Abrir',
+                  style: TextStyle(
+                    color: CursorTheme.textPrimary,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
         PopupMenuItem<String>(
-          value: 'view_code',
+          value: 'new_file',
           child: Row(
             children: [
-              const Icon(Icons.code, size: 18, color: CursorTheme.textPrimary),
+              const Icon(
+                Icons.note_add_outlined,
+                size: 18,
+                color: CursorTheme.textPrimary,
+              ),
               const SizedBox(width: 8),
-              const Text('Ver código', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13)),
+              Text(
+                isDirectory ? 'Nuevo archivo aquí' : 'Nuevo archivo',
+                style: const TextStyle(
+                  color: CursorTheme.textPrimary,
+                  fontSize: 13,
+                ),
+              ),
             ],
           ),
         ),
         PopupMenuItem<String>(
-          value: 'view_screen',
+          value: 'new_folder',
           child: Row(
             children: [
-              const Icon(Icons.phone_android, size: 18, color: CursorTheme.textPrimary),
+              const Icon(
+                Icons.create_new_folder_outlined,
+                size: 18,
+                color: CursorTheme.textPrimary,
+              ),
               const SizedBox(width: 8),
-              const Text('Ver pantalla', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13)),
+              Text(
+                isDirectory ? 'Nueva carpeta aquí' : 'Nueva carpeta',
+                style: const TextStyle(
+                  color: CursorTheme.textPrimary,
+                  fontSize: 13,
+                ),
+              ),
             ],
           ),
         ),
-        PopupMenuItem<String>(
-          value: 'copy',
+        const PopupMenuItem<String>(
+          value: 'rename',
           child: Row(
             children: [
-              const Icon(Icons.copy, size: 18, color: CursorTheme.textPrimary),
-              const SizedBox(width: 8),
-              const Text('Copiar ruta', style: TextStyle(color: CursorTheme.textPrimary, fontSize: 13)),
+              Icon(Icons.drive_file_rename_outline,
+                  size: 18, color: CursorTheme.textPrimary),
+              SizedBox(width: 8),
+              Text(
+                'Renombrar',
+                style: TextStyle(
+                  color: CursorTheme.textPrimary,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (!isDirectory)
+          const PopupMenuItem<String>(
+            value: 'duplicate',
+            child: Row(
+              children: [
+                Icon(Icons.copy_all_outlined,
+                    size: 18, color: CursorTheme.textPrimary),
+                SizedBox(width: 8),
+                Text(
+                  'Duplicar',
+                  style: TextStyle(
+                    color: CursorTheme.textPrimary,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const PopupMenuItem<String>(
+          value: 'copy_path',
+          child: Row(
+            children: [
+              Icon(Icons.link, size: 18, color: CursorTheme.textPrimary),
+              SizedBox(width: 8),
+              Text(
+                'Copiar ruta',
+                style: TextStyle(
+                  color: CursorTheme.textPrimary,
+                  fontSize: 13,
+                ),
+              ),
             ],
           ),
         ),
         const PopupMenuDivider(),
-        PopupMenuItem<String>(
+        const PopupMenuItem<String>(
           value: 'delete',
           child: Row(
             children: [
-              const Icon(Icons.delete_outline, size: 18, color: Colors.red),
-              const SizedBox(width: 8),
-              const Text('Eliminar', style: TextStyle(color: Colors.red, fontSize: 13)),
+              Icon(Icons.delete_outline, size: 18, color: Colors.red),
+              SizedBox(width: 8),
+              Text(
+                'Eliminar',
+                style: TextStyle(color: Colors.red, fontSize: 13),
+              ),
             ],
           ),
         ),
       ],
-    ).then((value) {
-      if (value != null) {
-        switch (value) {
-          case 'view_code':
-            widget.onFileViewCode?.call(filePath);
-            break;
-          case 'view_screen':
-            widget.onFileViewScreen?.call(filePath);
-            break;
-          case 'copy':
-            widget.onFileCopy?.call(filePath);
-            break;
-          case 'delete':
-            _confirmDelete(context, filePath, fileName);
-            break;
-        }
+    ).then((value) async {
+      if (value == null) return;
+      switch (value) {
+        case 'view_code':
+          widget.onFileViewCode?.call(filePath);
+          break;
+        case 'new_file':
+          await _createNewFile(parentDir);
+          break;
+        case 'new_folder':
+          await _createNewFolder(parentDir);
+          break;
+        case 'rename':
+          await _renameEntry(filePath, fileName, isDirectory: isDirectory);
+          break;
+        case 'duplicate':
+          await _duplicateFile(filePath);
+          break;
+        case 'copy_path':
+          await Clipboard.setData(ClipboardData(text: filePath));
+          widget.onFileCopy?.call(filePath);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Ruta copiada al portapapeles'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+          break;
+        case 'delete':
+          await _confirmAndDelete(
+            filePath,
+            fileName,
+            isDirectory: isDirectory,
+          );
+          break;
       }
     });
   }
 
-  void _confirmDelete(BuildContext context, String filePath, String fileName) {
-    showDialog(
+  Future<String?> _promptName({
+    required String title,
+    required String label,
+    String initial = '',
+  }) async {
+    final controller = TextEditingController(text: initial);
+    final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         backgroundColor: CursorTheme.surface,
-        title: const Text('Eliminar archivo', style: TextStyle(color: CursorTheme.textPrimary)),
-        content: Text('¿Estás seguro de que deseas eliminar "$fileName"?\n\nEsta acción no se puede deshacer.', 
-          style: const TextStyle(color: CursorTheme.textSecondary)),
+        title: Text(
+          title,
+          style: const TextStyle(color: CursorTheme.textPrimary),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: CursorTheme.textPrimary),
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: const TextStyle(color: CursorTheme.textSecondary),
+            enabledBorder: const UnderlineInputBorder(
+              borderSide: BorderSide(color: CursorTheme.border),
+            ),
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('No', style: TextStyle(color: CursorTheme.textSecondary)),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(color: CursorTheme.textSecondary),
+            ),
           ),
           TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              widget.onFileDelete?.call(filePath);
-            },
-            child: const Text('Sí', style: TextStyle(color: Colors.red)),
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text(
+              'OK',
+              style: TextStyle(color: CursorTheme.primary),
+            ),
           ),
         ],
       ),
     );
+    controller.dispose();
+    if (result == null || result.isEmpty) return null;
+    if (result.contains('/') || result.contains('\\') || result.contains('..')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Nombre inválido'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return null;
+    }
+    return result;
+  }
+
+  Future<void> _createNewFile(String parentDir) async {
+    final name = await _promptName(
+      title: 'Nuevo archivo',
+      label: 'Nombre (ej. main.dart)',
+    );
+    if (name == null) return;
+    final path = '$parentDir/$name'.replaceAll('//', '/');
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        throw Exception('Ya existe: $name');
+      }
+      await file.create(recursive: true);
+      await file.writeAsString('');
+      await _loadProject();
+      if (mounted) {
+        setState(() => _expandedPaths.add(parentDir));
+      }
+      widget.onFileViewCode?.call(path);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Creado: $name')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al crear archivo: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _createNewFolder(String parentDir) async {
+    final name = await _promptName(
+      title: 'Nueva carpeta',
+      label: 'Nombre de la carpeta',
+    );
+    if (name == null) return;
+    final path = '$parentDir/$name'.replaceAll('//', '/');
+    try {
+      final dir = Directory(path);
+      if (await dir.exists()) {
+        throw Exception('Ya existe: $name');
+      }
+      await dir.create(recursive: true);
+      await _loadProject();
+      if (mounted) {
+        setState(() {
+          _expandedPaths.add(parentDir);
+          _expandedPaths.add(path);
+        });
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Carpeta creada: $name')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al crear carpeta: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _renameEntry(
+    String path,
+    String currentName, {
+    required bool isDirectory,
+  }) async {
+    final name = await _promptName(
+      title: 'Renombrar',
+      label: 'Nuevo nombre',
+      initial: currentName,
+    );
+    if (name == null || name == currentName) return;
+    final parent = File(path).parent.path;
+    final newPath = '$parent/$name'.replaceAll('//', '/');
+    try {
+      if (isDirectory) {
+        await Directory(path).rename(newPath);
+      } else {
+        await File(path).rename(newPath);
+      }
+      await _loadProject();
+      if (!isDirectory) {
+        widget.onFileViewCode?.call(newPath);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Renombrado a $name')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al renombrar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _duplicateFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('El archivo no existe');
+      }
+      final dir = file.parent.path;
+      final name = filePath.split('/').last;
+      final dot = name.lastIndexOf('.');
+      final base = dot > 0 ? name.substring(0, dot) : name;
+      final ext = dot > 0 ? name.substring(dot) : '';
+      var candidate = '$dir/${base}_copy$ext';
+      var i = 2;
+      while (await File(candidate).exists()) {
+        candidate = '$dir/${base}_copy$i$ext';
+        i++;
+      }
+      await file.copy(candidate);
+      await _loadProject();
+      widget.onFileViewCode?.call(candidate);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Duplicado: ${candidate.split('/').last}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al duplicar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _confirmAndDelete(
+    String filePath,
+    String fileName, {
+    required bool isDirectory,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: CursorTheme.surface,
+        title: Text(
+          isDirectory ? 'Eliminar carpeta' : 'Eliminar archivo',
+          style: const TextStyle(color: CursorTheme.textPrimary),
+        ),
+        content: Text(
+          isDirectory
+              ? '¿Eliminar la carpeta "$fileName" y todo su contenido?\n\nEsta acción no se puede deshacer.'
+              : '¿Eliminar "$fileName"?\n\nEsta acción no se puede deshacer.',
+          style: const TextStyle(color: CursorTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(color: CursorTheme.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Eliminar', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      if (isDirectory) {
+        await Directory(filePath).delete(recursive: true);
+      } else {
+        await File(filePath).delete();
+      }
+      widget.onFileDelete?.call(filePath);
+      await _loadProject();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eliminado: $fileName')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al eliminar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -540,7 +1149,14 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
             const SizedBox(height: 8),
             ElevatedButton.icon(
               onPressed: () async {
-                // Esto se manejará desde la pantalla principal
+                if (widget.onRequestOpenProject != null) {
+                  widget.onRequestOpenProject!();
+                  return;
+                }
+                final path = await FilePicker.platform.getDirectoryPath();
+                if (path == null) return;
+                await ProjectService.saveProjectPath(path);
+                await _loadProject();
               },
               icon: const Icon(Icons.folder_open),
               label: const Text('Seleccionar Proyecto'),
@@ -729,6 +1345,18 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
                 ),
               ),
               IconButton(
+                icon: const Icon(Icons.note_add_outlined, size: 16),
+                color: Colors.white70,
+                onPressed: () => _createNewFile(_projectPath!),
+                tooltip: 'Nuevo archivo',
+              ),
+              IconButton(
+                icon: const Icon(Icons.create_new_folder_outlined, size: 16),
+                color: Colors.white70,
+                onPressed: () => _createNewFolder(_projectPath!),
+                tooltip: 'Nueva carpeta',
+              ),
+              IconButton(
                 icon: const Icon(Icons.refresh, size: 16),
                 color: Colors.white70,
                 onPressed: _loadProject,
@@ -737,14 +1365,170 @@ class _ProjectExplorerState extends State<ProjectExplorer> {
             ],
           ),
         ),
-        // Tree
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            children: [
-              _buildTreeItem(_projectTree!, 0),
-            ],
+        // Filtro rápido por nombre (archivos / carpetas)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+          child: TextField(
+            controller: _searchController,
+            focusNode: _filterFocus,
+            style: const TextStyle(
+              color: CursorTheme.textPrimary,
+              fontSize: 12,
+            ),
+            cursorColor: CursorTheme.primary,
+            decoration: InputDecoration(
+              hintText: 'Filtrar archivos y carpetas…',
+              hintStyle: const TextStyle(
+                color: CursorTheme.textDisabled,
+                fontSize: 12,
+              ),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 8,
+              ),
+              prefixIcon: const Icon(
+                Icons.filter_list,
+                size: 15,
+                color: CursorTheme.textSecondary,
+              ),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 30,
+                minHeight: 28,
+              ),
+              suffixIcon: _treeFilter.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close, size: 14),
+                      color: CursorTheme.textSecondary,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      onPressed: () => _searchController.clear(),
+                    ),
+              filled: true,
+              fillColor: CursorTheme.background,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(4),
+                borderSide: const BorderSide(color: CursorTheme.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(4),
+                borderSide: const BorderSide(color: CursorTheme.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(4),
+                borderSide: const BorderSide(color: CursorTheme.primary),
+              ),
+            ),
           ),
+        ),
+        // Tree o resultados del filtro
+        Expanded(
+          child: _treeFilter.isEmpty
+              ? ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  children: [
+                    _buildTreeItem(_projectTree!, 0),
+                  ],
+                )
+              : _treeFilterHits.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'Sin coincidencias',
+                        style: TextStyle(
+                          color: CursorTheme.textDisabled,
+                          fontSize: 12,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      itemCount: _treeFilterHits.length,
+                      itemBuilder: (context, index) {
+                        final hit = _treeFilterHits[index];
+                        final name = hit['name']!;
+                        final path = hit['path']!;
+                        final isDir = hit['type'] == 'directory';
+                        final rel = _projectPath != null
+                            ? path.replaceFirst('$_projectPath/', '')
+                            : path;
+                        final isSelected = _samePath(_selectedPath, path);
+                        return Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () {
+                              if (isDir) {
+                                setState(() {
+                                  _expandedPaths.add(path);
+                                  _selectedPath = path;
+                                  _searchController.clear();
+                                });
+                              } else {
+                                setState(() => _selectedPath = path);
+                                widget.onFileSelected?.call(path);
+                              }
+                            },
+                            onDoubleTap: () {
+                              if (!isDir) {
+                                widget.onFileDoubleClick?.call(path);
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              color: isSelected
+                                  ? CursorTheme.explorerItemSelected
+                                  : Colors.transparent,
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    isDir
+                                        ? Icons.folder
+                                        : _getFileIcon(name),
+                                    size: 16,
+                                    color: isDir
+                                        ? const Color(0xFFFFB800)
+                                        : _getFileColor(name),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name,
+                                          style: const TextStyle(
+                                            color: CursorTheme.textPrimary,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        if (rel != name)
+                                          Text(
+                                            rel,
+                                            style: const TextStyle(
+                                              color: CursorTheme.textSecondary,
+                                              fontSize: 10,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
         ),
       ],
     );

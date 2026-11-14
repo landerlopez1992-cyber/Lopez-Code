@@ -20,7 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSaving = false;
   bool _apiKeySaved = false;
   bool _showApiKey = false;
-  String _selectedModel = 'gpt-4o';
+  String _selectedModel = SettingsService.defaultModel;
   
   // Indexación de código
   bool _isIndexing = false;
@@ -473,8 +473,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           dropdownColor: const Color(0xFF3C3C3C),
                           style: const TextStyle(color: Colors.white),
                           items: const [
+                            DropdownMenuItem(value: 'gpt-4o', child: Text('GPT-4o (Por defecto / Agente)')),
+                            DropdownMenuItem(value: 'gpt-4.1', child: Text('GPT-4.1 (Agéntico superior)')),
+                            DropdownMenuItem(value: 'o4-mini', child: Text('o4-mini (Razonamiento rápido)')),
                             DropdownMenuItem(value: 'gpt-4o-mini', child: Text('GPT-4o Mini (Bajo Costo)')),
-                            DropdownMenuItem(value: 'gpt-4o', child: Text('GPT-4o (Recomendado)')),
                             DropdownMenuItem(value: 'gpt-4-turbo', child: Text('GPT-4 Turbo')),
                             DropdownMenuItem(value: 'gpt-4', child: Text('GPT-4')),
                             DropdownMenuItem(value: 'gpt-3.5-turbo', child: Text('GPT-3.5 Turbo')),
@@ -490,7 +492,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'GPT-4o Mini: Muy económico (~\$0.15/millón tokens). Recomendado para uso frecuente.\nGPT-4o: El más reciente y potente. Soporta análisis de imágenes.',
+                          'GPT-4o (default): mejor para el Agent Loop (multi-paso, run/debug).\n'
+                          'GPT-4.1 / o4-mini: alternativas de razonamiento agéntico.\n'
+                          'GPT-4o Mini: más económico para tareas simples.',
                           style: TextStyle(
                             color: Colors.white60,
                             fontSize: 12,

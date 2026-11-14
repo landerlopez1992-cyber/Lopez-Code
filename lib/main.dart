@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Lopez Code',
+      title: 'Voryxel Code',
       debugShowCheckedModeBanner: false,
       theme: CursorTheme.theme,
       home: const AppInitializer(),

@@ -23,15 +23,21 @@ class ModelSelector extends StatefulWidget {
 
 class _ModelSelectorState extends State<ModelSelector> {
   bool _autoMode = false;
-  String _selectedModel = 'gpt-4o-mini';
+  String _selectedModel = SettingsService.defaultModel;
   
   // Lista de modelos disponibles de OpenAI (oficial según docs)
   // Fuente: https://platform.openai.com/docs/models
   final List<AIModel> _availableModels = [
     AIModel(
+      id: 'gpt-4.1',
+      name: 'GPT-4.1',
+      description: 'Agente por defecto: tool-calling + coding',
+      hasBrain: true,
+    ),
+    AIModel(
       id: 'gpt-4o',
       name: 'GPT-4o',
-      description: 'Más inteligente, más rápido, visión y audio',
+      description: 'Razonamiento multi-paso + visión',
       hasBrain: true,
     ),
     AIModel(
@@ -39,6 +45,12 @@ class _ModelSelectorState extends State<ModelSelector> {
       name: 'GPT-4o Mini',
       description: 'Modelo asequible e inteligente',
       hasBrain: false,
+    ),
+    AIModel(
+      id: 'o4-mini',
+      name: 'o4-mini',
+      description: 'Razonamiento rápido orientado a agentes',
+      hasBrain: true,
     ),
     AIModel(
       id: 'gpt-4-turbo',
@@ -184,13 +196,13 @@ class _ModelSelectorState extends State<ModelSelector> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               constraints: const BoxConstraints(maxHeight: 50),
               child: Text(
-                'Balanced quality and speed, recommended for most tasks.',
+                'Auto: gpt-4.1-mini (ahorro). Escala a gpt-4.1 si falla 2× o @codebase/refactor.',
                 style: TextStyle(
                   color: CursorTheme.textSecondary.withOpacity(0.6),
                   fontSize: 9.5,
                   height: 1.2,
                 ),
-                maxLines: 2,
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis,
               ),
             ),

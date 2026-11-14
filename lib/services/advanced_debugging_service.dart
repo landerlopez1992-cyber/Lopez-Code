@@ -2,10 +2,244 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 
+import '../models/problem_item.dart';
+import 'debug_console_service.dart';
+import 'project_platform_support.dart';
+
 /// Servicio avanzado de debugging y análisis de compilación
 /// Proporciona herramientas para ejecutar, analizar y depurar código Flutter
 
 class AdvancedDebuggingService {
+  /// Referencia real del `Process` de `dart:io` para el `flutter run` activo.
+  static Process? _activeProcess;
+  static void Function()? _onProcessEnded;
+  /// `debug` | `profile` | `release` del flutter run activo.
+  static String _activeMode = 'debug';
+  static bool _appInteractive = false; // true cuando stdin acepta r/R
+
+  /// Proceso Flutter actualmente en ejecución (si hay alguno).
+  static Process? get activeProcess => _activeProcess;
+
+  static bool get isRunning => _activeProcess != null;
+
+  /// Hot Reload/Restart solo funcionan en debug (JIT).
+  static bool get supportsHotReload =>
+      isRunning && _activeMode == 'debug' && _appInteractive;
+
+  /// Notifica a la UI cuando el proceso realmente termina (exit o stop).
+  static void setOnProcessEnded(void Function()? callback) {
+    _onProcessEnded = callback;
+  }
+
+  static void _clearActiveProcess({bool notify = true}) {
+    _activeProcess = null;
+    _appInteractive = false;
+    _activeMode = 'debug';
+    if (notify) {
+      try {
+        // Actualiza toolbar / console sin reentrar en stop().
+        final debug = DebugConsoleService();
+        debug.setRunning(false);
+        debug.setCompilationProgress(0.0, '');
+        debug.addDebugConsole('🛑 Proceso Flutter terminado');
+      } catch (_) {}
+      _onProcessEnded?.call();
+    }
+  }
+
+  static void _markProcessActive(Process process, {String mode = 'debug'}) {
+    _activeProcess = process;
+    _activeMode = mode;
+    _appInteractive = false;
+    try {
+      final debug = DebugConsoleService();
+      debug.setRunning(true);
+      debug.setCompilationProgress(0.15, 'Compilando ($mode)...');
+      debug.addDebugConsole(
+        '🚀 flutter run activo (pid=${process.pid}, mode=$mode)',
+      );
+    } catch (_) {}
+  }
+
+  /// Detecta cuando la app ya está lista para Hot Reload / Hot Restart.
+  static void _maybeMarkAppReady(String line) {
+    final lower = line.toLowerCase();
+    final strongReady = lower.contains('flutter run key commands') ||
+        lower.contains('to hot reload') ||
+        lower.contains('an observatory debugger') ||
+        lower.contains('dart vm service is listening') ||
+        lower.contains('observatory listening');
+    final warming = lower.contains('syncing files to device') ||
+        lower.contains('launching lib/main.dart') ||
+        lower.contains('waiting for connection') ||
+        lower.contains('running with sound null safety');
+
+    if (!strongReady && !warming) {
+      // Solo URL de la app ("is being served at"), nunca DevTools.
+      _capturePreviewUrlFromLine(line, softProgress: true);
+      return;
+    }
+
+    try {
+      final debug = DebugConsoleService();
+      debug.setRunning(true);
+      if (strongReady) {
+        _appInteractive = _activeMode == 'debug';
+        debug.setCompilationProgress(
+          1.0,
+          _appInteractive
+              ? 'Aplicación en ejecución (Hot Reload listo)'
+              : 'Aplicación en ejecución ($_activeMode — sin Hot Reload)',
+        );
+        debug.addDebugConsole(
+          _appInteractive
+              ? '⚡ Hot Reload/Restart disponibles (stdin r/R)'
+              : '⚠️ Modo $_activeMode: Hot Reload no disponible',
+        );
+      } else if (debug.compilationProgress < 0.85) {
+        debug.setCompilationProgress(0.85, 'Iniciando aplicación...');
+      }
+      _capturePreviewUrlFromLine(line, softProgress: false);
+    } catch (_) {}
+  }
+
+  /// Extrae la URL del Preview (web-server), ignorando DevTools / VM Service.
+  static void _capturePreviewUrlFromLine(
+    String line, {
+    required bool softProgress,
+  }) {
+    try {
+      final debug = DebugConsoleService();
+      // Preferir el patrón explícito de flutter web-server.
+      final served = RegExp(
+        r'(?:is being served at|serving at|Serving at)\s*(https?://[^\s]+)',
+        caseSensitive: false,
+      ).firstMatch(line);
+      if (served != null) {
+        final url = served.group(1)!.trim();
+        if (DebugConsoleService.isPreviewAppUrl(url)) {
+          debug.setAppUrl(url);
+          if (softProgress && debug.compilationProgress < 0.7) {
+            debug.setCompilationProgress(0.7, 'Servidor web listo, compilando…');
+          }
+        }
+        return;
+      }
+
+      // No capturar líneas de DevTools / Observatory.
+      final lower = line.toLowerCase();
+      if (lower.contains('devtools') ||
+          lower.contains('vm service') ||
+          lower.contains('observatory') ||
+          lower.contains('debugger and profiler')) {
+        final vm = RegExp(r'https?://[^\s]+').firstMatch(line);
+        if (vm != null) debug.setVmServiceUri(vm.group(0));
+        return;
+      }
+
+      final urlOnly =
+          RegExp(r'https?://(?:localhost|127\.0\.0\.1):\d+[^\s]*').firstMatch(line);
+      if (urlOnly != null) {
+        final url = urlOnly.group(0)!;
+        if (DebugConsoleService.isPreviewAppUrl(url)) {
+          debug.setAppUrl(url);
+          if (softProgress && debug.compilationProgress < 0.7) {
+            debug.setCompilationProgress(0.7, 'Servidor web listo, compilando…');
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Hot Reload: envía `r` al stdin de `flutter run` (solo debug).
+  static Future<bool> hotReload() async {
+    return _sendFlutterCommand('r', label: 'Hot Reload');
+  }
+
+  /// Hot Restart: envía `R` al stdin de `flutter run` (solo debug).
+  static Future<bool> hotRestart() async {
+    return _sendFlutterCommand('R', label: 'Hot Restart');
+  }
+
+  static Future<bool> _sendFlutterCommand(
+    String key, {
+    required String label,
+  }) async {
+    final process = _activeProcess;
+    final debug = DebugConsoleService();
+    if (process == null) {
+      debug.addDebugConsole(
+        '⚠️ $label: no hay proceso Flutter activo. Pulsa Run primero.',
+      );
+      print('⚠️ $label: no hay proceso Flutter activo');
+      return false;
+    }
+    if (_activeMode != 'debug') {
+      debug.addDebugConsole(
+        '⚠️ $label no funciona en modo $_activeMode. '
+        'Stop + Run (debug) para habilitar Hot Reload.',
+      );
+      return false;
+    }
+    if (!_appInteractive) {
+      debug.addDebugConsole(
+        '⚠️ $label: la app aún no está lista (espera '
+        '"Flutter run key commands" / VM Service).',
+      );
+      return false;
+    }
+    try {
+      process.stdin.writeln(key);
+      await process.stdin.flush();
+      debug.addDebugConsole('✅ $label enviado (pid=${process.pid})');
+      print('✅ $label enviado al proceso pid=${process.pid}');
+      return true;
+    } catch (e) {
+      debug.addDebugConsole('❌ Error enviando $label: $e');
+      print('❌ Error enviando $label: $e');
+      return false;
+    }
+  }
+
+  /// Detiene `flutter run`: SIGTERM; si sigue vivo a los 2s, SIGKILL.
+  /// Limpia la referencia y notifica a la UI.
+  static Future<void> stop() async {
+    final process = _activeProcess;
+    if (process == null) {
+      _clearActiveProcess();
+      return;
+    }
+
+    try {
+      print('🛑 AdvancedDebuggingService: SIGTERM pid=${process.pid}');
+      process.kill(ProcessSignal.sigterm);
+
+      var exited = false;
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 2));
+        exited = true;
+      } on TimeoutException {
+        exited = false;
+      }
+
+      if (!exited) {
+        print('⚠️ Proceso vivo tras 2s — SIGKILL pid=${process.pid}');
+        try {
+          process.kill(ProcessSignal.sigkill);
+        } catch (_) {}
+        try {
+          await process.exitCode.timeout(const Duration(seconds: 2));
+        } on TimeoutException {
+          print('⚠️ SIGKILL: el proceso no respondió a tiempo');
+        }
+      }
+    } catch (e) {
+      print('⚠️ Error al detener proceso Flutter: $e');
+    } finally {
+      _clearActiveProcess();
+    }
+  }
+
   /// Lista los dispositivos disponibles de Flutter
   static Future<List<Map<String, String>>> getAvailableDevices() async {
     final devices = <Map<String, String>>[];
@@ -159,23 +393,204 @@ class AdvancedDebuggingService {
     return null;
   }
 
-  /// Ejecuta flutter run y analiza la salida en tiempo real
+  /// Lanza AVD (Android) o Simulator (iOS) vía `flutter emulators --launch`.
+  static Future<bool> launchNativeEmulator(
+    String platform, [
+    Function(String line)? onOutput,
+  ]) async {
+    final base = ProjectPlatformSupport.basePlatform(platform);
+    try {
+      final listed = await Process.run(
+        'flutter',
+        ['emulators'],
+        runInShell: false,
+      );
+      final out = '${listed.stdout}\n${listed.stderr}';
+      onOutput?.call(out.trim().isEmpty ? 'flutter emulators (vacío)' : out.trim());
+
+      // Líneas tipo: "Pixel_6 • Pixel 6 • Google • android"
+      final ids = <String>[];
+      for (final line in out.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || trimmed.toLowerCase().startsWith('id')) continue;
+        final id = trimmed.split(RegExp(r'\s+•\s+|\s+')).first.trim();
+        if (id.isEmpty) continue;
+        final lower = trimmed.toLowerCase();
+        if (base == 'android' &&
+            (lower.contains('android') ||
+                lower.contains('pixel') ||
+                lower.contains('api'))) {
+          ids.add(id);
+        } else if (base == 'ios' &&
+            (lower.contains('ios') ||
+                lower.contains('iphone') ||
+                lower.contains('ipad') ||
+                lower.contains('apple'))) {
+          ids.add(id);
+        }
+      }
+
+      if (ids.isEmpty && base == 'ios') {
+        // Fallback: abrir Simulator.app en macOS
+        onOutput?.call('📲 Abriendo Simulator.app…');
+        await Process.run('open', ['-a', 'Simulator'], runInShell: false);
+        return true;
+      }
+
+      if (ids.isEmpty) {
+        onOutput?.call('❌ No hay emuladores listados para $base');
+        return false;
+      }
+
+      final id = ids.first;
+      onOutput?.call('📲 flutter emulators --launch $id');
+      final launch = await Process.run(
+        'flutter',
+        ['emulators', '--launch', id],
+        runInShell: false,
+      );
+      onOutput?.call('${launch.stdout}${launch.stderr}'.trim());
+      return launch.exitCode == 0;
+    } catch (e) {
+      onOutput?.call('❌ Error lanzando emulador: $e');
+      return false;
+    }
+  }
+
+  /// `flutter run -d web-server` → URL en DebugConsole para el WebView central.
+  static Future<CompilationResult> _startEmbeddedWebPreview({
+    required String projectPath,
+    required String platform,
+    required String mode,
+    required CompilationResult result,
+    Function(String line)? onOutput,
+    Function(CompilationError error)? onError,
+    bool useWebServer = true,
+  }) async {
+    final label = ProjectPlatformSupport.humanLabel(platform);
+    final isMobile = ProjectPlatformSupport.isEmbeddedMobilePreview(platform) ||
+        platform == 'android' ||
+        platform == 'ios';
+
+    print('🌐 Preview embebido ($label)…');
+    onOutput?.call(
+      isMobile
+          ? '📱 $label → web-server en el marco de teléfono (sin emulador externo)'
+          : '🌐 Iniciando compilación para Web…',
+    );
+    onOutput?.call('💡 No requiere dispositivo físico ni emulador de Android Studio');
+
+    final port = await _findFreeWebPort(preferred: 8085);
+    final args = <String>[
+      'run',
+      '-d',
+      'web-server',
+      '--web-hostname',
+      '127.0.0.1',
+      '--web-port',
+      '$port',
+    ];
+    if (mode == 'release') {
+      args.add('--release');
+    } else if (mode == 'profile') {
+      args.add('--profile');
+    }
+
+    final previewUrl = 'http://127.0.0.1:$port';
+    onOutput?.call(
+      '🌐 web-server ($previewUrl) — Preview dentro de Voryxel Code'
+      '${isMobile ? ' · carcasa $label' : ''}',
+    );
+
+    try {
+      final debug = DebugConsoleService();
+      debug.setRunning(true);
+      debug.setAppUrl(previewUrl);
+      debug.setCompilationProgress(
+        0.35,
+        isMobile ? 'Compilando $label Preview…' : 'Compilando Web Preview…',
+      );
+      debug.addDebugConsole(
+        '🌐 Preview → $previewUrl (useWebServer=$useWebServer)',
+      );
+    } catch (_) {}
+
+    print('🌐 Comando: flutter ${args.join(' ')}');
+    final process = await Process.start(
+      'flutter',
+      args,
+      workingDirectory: projectPath,
+      mode: ProcessStartMode.normal,
+      runInShell: false,
+    );
+    _markProcessActive(process, mode: mode);
+    return _processFlutterOutput(process, result, onOutput, onError);
+  }
+
+  /// Puerto libre para `flutter run -d web-server` (preferido [preferred]).
+  static Future<int> _findFreeWebPort({int preferred = 8085}) async {
+    Future<bool> isFree(int port) async {
+      try {
+        final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, port);
+        await socket.close();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    if (await isFree(preferred)) return preferred;
+    for (var port = preferred + 1; port < preferred + 40; port++) {
+      if (await isFree(port)) return port;
+    }
+    // Último recurso: SO elige puerto efímero
+    final ephemeral =
+        await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final port = ephemeral.port;
+    await ephemeral.close();
+    return port;
+  }
+
+  /// Ejecuta flutter run y analiza la salida en tiempo real.
+  /// Almacena la referencia real del [Process] para [stop].
+  ///
+  /// Preview embebido: `web`, `android` (Preview) e `ios` (Preview) usan
+  /// `-d web-server` → WebView dentro del marco central.
+  /// `android_native` / `ios_native` lanzan emulador/simulador externo.
   static Future<CompilationResult> runFlutterApp({
     required String projectPath,
     String platform = 'macos',
     String mode = 'debug',
-    bool useWebServer = false, // Si es true, usa web-server en lugar de chrome para plataforma web
-    String? webRenderer, // html | canvaskit | auto
+    bool useWebServer = true,
+    // Flutter 3.22+ eliminó --web-renderer; se ignora (compat con callers viejos).
+    String? webRenderer,
     Function(String line)? onOutput,
     Function(CompilationError error)? onError,
+    void Function()? onProcessEnded,
   }) async {
     final result = CompilationResult(
       platform: platform,
       mode: mode,
       startTime: DateTime.now(),
     );
+    // Compat: callers antiguos pasaban html/canvaskit; Flutter ya no lo acepta.
+    assert(() {
+      // ignore: unnecessary_statements
+      webRenderer;
+      return true;
+    }());
+
+    if (onProcessEnded != null) {
+      _onProcessEnded = onProcessEnded;
+    }
 
     try {
+      // Detener proceso previo para evitar zombies
+      if (_activeProcess != null) {
+        await stop();
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+
       // Validar que el directorio del proyecto existe
       final projectDir = Directory(projectPath);
       if (!await projectDir.exists()) {
@@ -211,101 +626,115 @@ class AdvancedDebuggingService {
         print('⚠️ Error al leer nombre del proyecto: $e');
       }
       
-      // Para Web, usar -d chrome o -d web-server
-      if (platform == 'web') {
-        print('🌐 Ejecutando Flutter Web...');
-        onOutput?.call('🌐 Iniciando compilación para Web...');
-        onOutput?.call('💡 Web no requiere dispositivo físico o emulador');
-        
-        // Usar web-server si se solicita (no abre navegador externo), de lo contrario usar chrome
-        final webDevice = useWebServer ? 'web-server' : 'chrome';
-        final List<String> args = ['run', '-d', webDevice];
-        if (mode == 'release') {
-          args.add('--release');
-        } else if (mode == 'profile') {
-          args.add('--profile');
-        }
-        // debug es el modo por defecto, no necesita flag
-        if (webRenderer != null && webRenderer.isNotEmpty) {
-          args.add('--web-renderer=$webRenderer');
-        }
-        
-        if (useWebServer) {
-          print('🌐 Usando web-server (NO abrirá navegador externo)');
-          onOutput?.call('🌐 Usando web-server (servidor interno sin navegador externo)');
-        } else {
-          print('🌐 Usando Chrome (abrirá navegador externo)');
-          onOutput?.call('🌐 Usando Chrome (abrirá navegador en ventana separada)');
-        }
-        
-        print('🌐 Comando: flutter ${args.join(' ')}');
-        print('🌐 Working Directory: $projectPath');
-        final process = await Process.start(
-          'flutter',
-          args,
-          workingDirectory: projectPath,
-          runInShell: true,
+      final plat = platform.toLowerCase().trim();
+
+      // Web + Android/iOS (Preview) → web-server en el Preview central.
+      // No falla por falta de emulador: siempre hay marco de teléfono / WebView.
+      if (plat == 'web' ||
+          ProjectPlatformSupport.isEmbeddedMobilePreview(plat)) {
+        return _startEmbeddedWebPreview(
+          projectPath: projectPath,
+          platform: plat,
+          mode: mode,
+          result: result,
+          onOutput: onOutput,
+          onError: onError,
+          useWebServer: useWebServer,
         );
-        
-        return _processFlutterOutput(process, result, onOutput, onError);
       }
-      
-      // Para otras plataformas, verificar dispositivos disponibles
+
+      // Target nativo: android_native / ios_native / macos / etc.
+      final devicePlatform = ProjectPlatformSupport.basePlatform(plat);
       final devices = await getAvailableDevices();
-      
+
       if (devices.isEmpty) {
         onOutput?.call('⚠️ No se detectaron dispositivos disponibles');
-        onOutput?.call('💡 Ejecuta "flutter devices" en la terminal para verificar');
       } else {
         onOutput?.call('📱 Dispositivos disponibles: ${devices.length}');
         for (var device in devices) {
-          final devicePlatform = device['platform'] ?? device['category'] ?? 'desconocida';
-          onOutput?.call('  - ${device['name']} (${device['id']}) - $devicePlatform');
+          final devicePlatformLabel =
+              device['platform'] ?? device['category'] ?? 'desconocida';
+          onOutput?.call(
+            '  - ${device['name']} (${device['id']}) - $devicePlatformLabel',
+          );
         }
       }
-      
-      // Encontrar el ID del dispositivo correcto
-      String? deviceId = await findDeviceId(platform);
-      
-      if (deviceId == null) {
-        final errorMsg = '❌ No se encontró dispositivo disponible para la plataforma "$platform".\n'
-            '📱 Dispositivos detectados (${devices.length}):\n'
-            '${devices.isEmpty ? "   - Ningún dispositivo disponible\n" : devices.map((d) => "   - ${d['name']} (ID: ${d['id']}, Plataforma: ${d['platform'] ?? d['category'] ?? "desconocida"})\n").join("")}'
-            '💡 Soluciones posibles:\n'
-            '   1. Verifica que el emulador/dispositivo esté abierto y listo\n'
-            '   2. Ejecuta "flutter devices" en la terminal para verificar\n'
-            '   3. Para Android: Abre Android Studio > AVD Manager y inicia un emulador\n'
-            '   4. Para iOS: Abre el Simulador desde Xcode\n'
-            '   5. Para macOS: Asegúrate de tener Xcode instalado';
-        result.errors.add(errorMsg);
-        result.success = false;
-        result.endTime = DateTime.now(); // Establecer endTime para indicar que el proceso terminó
-        result.phase = 'error'; // Marcar como error
-        // Enviar el mensaje de error también a onOutput para que se muestre en Debug Console
-        onOutput?.call(errorMsg);
-        onError?.call(CompilationError(
-          file: '',
-          line: 0,
-          column: 0,
-          type: 'error',
-          message: errorMsg,
-        ));
-        print('❌ ABORTANDO: No se encontró dispositivo para "$platform". NO se ejecutará flutter run.');
-        return result;
+
+      var deviceId = await findDeviceId(devicePlatform);
+
+      // Emulador Nativo: si no hay device, intentar lanzar AVD / Simulator.
+      if (deviceId == null &&
+          ProjectPlatformSupport.isNativeMobileTarget(plat)) {
+        onOutput?.call(
+          '📲 Lanzando emulador nativo ($devicePlatform)…',
+        );
+        final launched = await launchNativeEmulator(devicePlatform, onOutput);
+        if (launched) {
+          for (var i = 0; i < 20 && deviceId == null; i++) {
+            await Future.delayed(const Duration(seconds: 2));
+            deviceId = await findDeviceId(devicePlatform);
+          }
+        }
       }
-      
-      print('🚀 Iniciando flutter run en $deviceId ($platform, $mode)...');
-      print('🚀 Working Directory: $projectPath');
+
+      if (deviceId == null) {
+        // Fallback de seguridad: Preview embebido en vez de error duro
+        // (excepto si el usuario pidió explícitamente nativo y falló el launch).
+        if (ProjectPlatformSupport.isNativeMobileTarget(plat)) {
+          final errorMsg =
+              '❌ No se pudo iniciar el emulador nativo "$devicePlatform".\n'
+              '💡 Usa Android (Preview) / iOS (Preview) para ver la app '
+              'dentro de Voryxel Code, o abre el AVD/Simulador manualmente.';
+          result.errors.add(errorMsg);
+          result.success = false;
+          result.endTime = DateTime.now();
+          result.phase = 'error';
+          onOutput?.call(errorMsg);
+          onError?.call(CompilationError(
+            file: '',
+            line: 0,
+            column: 0,
+            type: 'error',
+            message: errorMsg,
+          ));
+          return result;
+        }
+
+        onOutput?.call(
+          '📱 Sin dispositivo $devicePlatform — usando Preview embebido '
+          '(web-server en el marco central).',
+        );
+        return _startEmbeddedWebPreview(
+          projectPath: projectPath,
+          platform: devicePlatform,
+          mode: mode,
+          result: result,
+          onOutput: onOutput,
+          onError: onError,
+          useWebServer: useWebServer,
+        );
+      }
+
+      print('🚀 Iniciando flutter run en $deviceId ($plat, $mode)...');
       onOutput?.call('🚀 Ejecutando en dispositivo: $deviceId');
       onOutput?.call('📁 Proyecto: $projectPath');
 
+      final runArgs = <String>['run', '-d', deviceId];
+      if (mode == 'release') {
+        runArgs.add('--release');
+      } else if (mode == 'profile') {
+        runArgs.add('--profile');
+      }
+
       final process = await Process.start(
         'flutter',
-        ['run', '-d', deviceId, '--$mode'],
+        runArgs,
         workingDirectory: projectPath,
-        runInShell: true,
+        mode: ProcessStartMode.normal,
+        runInShell: false,
       );
-      
+      _markProcessActive(process, mode: mode);
+
       return _processFlutterOutput(process, result, onOutput, onError);
 
     } catch (e) {
@@ -313,6 +742,7 @@ class AdvancedDebuggingService {
       result.endTime = DateTime.now();
       result.success = false;
       result.errors.add('Error: $e');
+      _clearActiveProcess();
       return result;
     }
   }
@@ -324,20 +754,17 @@ class AdvancedDebuggingService {
     Function(String line)? onOutput,
     Function(CompilationError error)? onError,
   ) async {
-    final outputController = StreamController<String>();
-    final errorController = StreamController<String>();
-
     // Capturar stdout
     process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      outputController.add(line);
       result.output.add(line);
       onOutput?.call(line);
 
       // Analizar línea para detectar errores o warnings
       _analyzeLine(line, result);
+      _maybeMarkAppReady(line);
     });
 
     // Capturar stderr (errores reales de compilación)
@@ -345,13 +772,12 @@ class AdvancedDebuggingService {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      errorController.add(line);
       result.errors.add(line);
       
       // También agregar a output para que se muestre en Debug Console
-      outputController.add(line);
       result.output.add(line);
       onOutput?.call(line);
+      _maybeMarkAppReady(line);
 
       // Parsear error
       final error = _parseError(line);
@@ -361,17 +787,201 @@ class AdvancedDebuggingService {
       }
     });
 
-    // Esperar a que termine
+    // Esperar a que termine y limpiar referencia + notificar UI
     final exitCode = await process.exitCode;
     result.exitCode = exitCode;
     result.endTime = DateTime.now();
     result.success = exitCode == 0;
+
+    if (identical(_activeProcess, process)) {
+      _clearActiveProcess();
+    }
 
     print(result.success 
         ? '✅ Compilación exitosa' 
         : '❌ Compilación fallida (exit code: $exitCode)');
 
     return result;
+  }
+
+  /// Ejecuta `flutter analyze --no-pub` (y, si existe, salida machine/JSON)
+  /// y parsea diagnósticos a [ProblemItem] estructurados.
+  static Future<List<ProblemItem>> runFlutterAnalyze(String projectPath) async {
+    final problems = <ProblemItem>[];
+    final projectDir = Directory(projectPath);
+    if (!await projectDir.exists()) {
+      return problems;
+    }
+
+    try {
+      // Preferir formato humano estable (`--machine` no está en todas las versiones).
+      print('🔍 Ejecutando: flutter analyze --no-pub');
+      final process = await Process.run(
+        'flutter',
+        ['analyze', '--no-pub'],
+        workingDirectory: projectPath,
+        runInShell: false,
+      );
+
+      final combined = '${process.stdout}\n${process.stderr}';
+      for (final line in combined.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty) continue;
+
+        // Si alguna toolchain emite JSON por línea, también lo aceptamos.
+        final fromMachine = _parseMachineAnalyzeLine(trimmed, projectPath);
+        if (fromMachine != null) {
+          problems.add(fromMachine);
+          continue;
+        }
+
+        final fromHuman = _parseHumanAnalyzeLine(trimmed, projectPath);
+        if (fromHuman != null) {
+          problems.add(fromHuman);
+        }
+      }
+
+      print('📊 flutter analyze: ${problems.length} problema(s)');
+    } catch (e) {
+      print('❌ Error en runFlutterAnalyze: $e');
+    }
+
+    return problems;
+  }
+
+  /// Parsea una línea JSON de `flutter analyze --machine`.
+  static ProblemItem? _parseMachineAnalyzeLine(String line, String projectPath) {
+    if (!line.startsWith('{')) return null;
+    try {
+      final json = jsonDecode(line);
+      if (json is! Map<String, dynamic>) return null;
+
+      // Formato Analysis Server / dart analyze --format=machine (JSON por línea)
+      final severityRaw = (json['severity'] ?? json['type'] ?? '').toString();
+      if (severityRaw.isEmpty && json['event'] != null) {
+        // Eventos con params.errors[]
+        final params = json['params'];
+        if (params is Map<String, dynamic>) {
+          final errors = params['errors'];
+          // Este método solo parsea un ítem; los arrays se expanden en el caller
+          // vía líneas individuales. Si viene embebido, no lo tratamos aquí.
+          if (errors is List) return null;
+        }
+        return null;
+      }
+
+      String filePath = '';
+      int lineNum = 0;
+      int column = 0;
+
+      final location = json['location'];
+      if (location is Map<String, dynamic>) {
+        filePath = (location['file'] ?? location['path'] ?? '').toString();
+        final range = location['range'];
+        if (range is Map<String, dynamic>) {
+          final start = range['start'];
+          if (start is Map<String, dynamic>) {
+            lineNum = (start['line'] as num?)?.toInt() ?? 0;
+            column = (start['column'] as num?)?.toInt() ?? 0;
+          }
+        }
+        lineNum = lineNum != 0
+            ? lineNum
+            : (location['line'] as num?)?.toInt() ?? 0;
+        column = column != 0
+            ? column
+            : (location['column'] as num?)?.toInt() ?? 0;
+      } else {
+        filePath = (json['file'] ?? json['path'] ?? '').toString();
+        lineNum = (json['line'] as num?)?.toInt() ?? 0;
+        column = (json['column'] as num?)?.toInt() ?? 0;
+      }
+
+      final message = (json['message'] ?? json['problemMessage'] ?? '').toString();
+      final code = (json['code'] ?? json['errorCode'] ?? '').toString();
+      if (message.isEmpty && filePath.isEmpty) return null;
+
+      return ProblemItem.fromSeverityString(
+        filePath: _toRelativePath(filePath, projectPath),
+        line: lineNum,
+        column: column,
+        severity: severityRaw.isEmpty ? 'info' : severityRaw,
+        message: message,
+        code: code,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Parsea formatos humanos de analyzer:
+  /// - `  error • msg • lib/a.dart:10:5 • code`
+  /// - `lib/a.dart:10:5: Error: message`
+  /// - `  error - message at lib/a.dart:10:5 - (code)`
+  static ProblemItem? _parseHumanAnalyzeLine(String line, String projectPath) {
+    if (line.isEmpty) return null;
+
+    // Formato bullet: severity • message • path:line:col • code
+    final bullet = RegExp(
+      r'^\s*(error|warning|info|hint)\s*[•·\-]\s*(.+?)\s*[•·\-]\s*(.+?):(\d+):(\d+)\s*[•·\-]\s*(.+)\s*$',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (bullet != null) {
+      return ProblemItem.fromSeverityString(
+        filePath: _toRelativePath(bullet.group(3)!, projectPath),
+        line: int.tryParse(bullet.group(4)!) ?? 0,
+        column: int.tryParse(bullet.group(5)!) ?? 0,
+        severity: bullet.group(1)!,
+        message: bullet.group(2)!.trim(),
+        code: bullet.group(6)!.trim().replaceAll(RegExp(r'[()]'), ''),
+      );
+    }
+
+    // Formato "at": severity - message at path:line:col - (code)
+    final atFmt = RegExp(
+      r'^\s*(error|warning|info|hint)\s*[-–]\s*(.+?)\s+at\s+(.+?):(\d+):(\d+)(?:\s*[-–]\s*\(?([^)\s]+)\)?)?',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (atFmt != null) {
+      return ProblemItem.fromSeverityString(
+        filePath: _toRelativePath(atFmt.group(3)!, projectPath),
+        line: int.tryParse(atFmt.group(4)!) ?? 0,
+        column: int.tryParse(atFmt.group(5)!) ?? 0,
+        severity: atFmt.group(1)!,
+        message: atFmt.group(2)!.trim(),
+        code: atFmt.group(6)?.trim() ?? '',
+      );
+    }
+
+    // Formato clásico: path:line:col: error: message
+    final classic = RegExp(
+      r'^(.+?):(\d+):(\d+):\s*(error|warning|info|hint):\s*(.+)$',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (classic != null) {
+      return ProblemItem.fromSeverityString(
+        filePath: _toRelativePath(classic.group(1)!, projectPath),
+        line: int.tryParse(classic.group(2)!) ?? 0,
+        column: int.tryParse(classic.group(3)!) ?? 0,
+        severity: classic.group(4)!,
+        message: classic.group(5)!.trim(),
+      );
+    }
+
+    return null;
+  }
+
+  static String _toRelativePath(String filePath, String projectPath) {
+    var normalized = filePath.replaceAll('\\', '/');
+    final root = projectPath.replaceAll('\\', '/');
+    if (normalized.startsWith('$root/')) {
+      return normalized.substring(root.length + 1);
+    }
+    // Quitar prefijos absolutos comunes si el analyzer ya devolvió relativo
+    if (normalized.startsWith('./')) {
+      normalized = normalized.substring(2);
+    }
+    return normalized;
   }
 
   /// Ejecuta flutter test y analiza resultados
@@ -432,37 +1042,22 @@ class AdvancedDebuggingService {
     }
   }
 
-  /// Analiza errores de compilación de Dart/Flutter
+  /// Analiza errores de compilación de Dart/Flutter (delega a [runFlutterAnalyze]).
   static Future<List<CompilationError>> analyzeCompilationErrors(
     String projectPath,
   ) async {
-    final errors = <CompilationError>[];
-
-    try {
-      print('🔍 Analizando errores de compilación...');
-
-      final process = await Process.run(
-        'flutter',
-        ['analyze'],
-        workingDirectory: projectPath,
-      );
-
-      final output = process.stdout.toString();
-      final lines = output.split('\n');
-
-      for (var line in lines) {
-        final error = _parseError(line);
-        if (error != null) {
-          errors.add(error);
-        }
-      }
-
-      print('📊 Encontrados ${errors.length} errores/warnings');
-    } catch (e) {
-      print('❌ Error al analizar: $e');
-    }
-
-    return errors;
+    final items = await runFlutterAnalyze(projectPath);
+    return items
+        .map(
+          (p) => CompilationError(
+            file: p.filePath,
+            line: p.line,
+            column: p.column,
+            type: p.severityLabel,
+            message: p.code.isNotEmpty ? '${p.message} (${p.code})' : p.message,
+          ),
+        )
+        .toList();
   }
 
   /// Analiza un stack trace y extrae información útil

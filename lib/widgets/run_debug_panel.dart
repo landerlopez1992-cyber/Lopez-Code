@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import '../services/debug_console_service.dart';
+import '../services/platform_service.dart';
+import '../services/project_platform_support.dart';
+import '../services/project_service.dart';
 import '../services/run_debug_service.dart';
 import 'cursor_theme.dart';
 
@@ -15,12 +19,42 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
   String _output = '';
   bool _isRunning = false;
   bool _isFlutterAvailable = false;
+  Set<String> _supportedPlatforms = const {
+    'macos',
+    'ios',
+    'android',
+    'web',
+  };
   final ScrollController _scrollController = ScrollController();
+  final DebugConsoleService _debugService = DebugConsoleService();
+  final PlatformService _platformService = PlatformService();
 
   @override
   void initState() {
     super.initState();
+    _selectedPlatform = _platformService.selectedPlatform;
+    _supportedPlatforms = _platformService.supportedPlatforms;
     _checkFlutter();
+    _refreshSupportedPlatforms();
+    RunDebugService.setOnProcessEnded(() {
+      if (!mounted) return;
+      setState(() {
+        _isRunning = false;
+        _output += '\n⏹️ Proceso terminado\n';
+      });
+      _debugService.notifyProcessEnded();
+    });
+  }
+
+  Future<void> _refreshSupportedPlatforms() async {
+    final path = await ProjectService.getProjectPath();
+    if (path == null || path.isEmpty) return;
+    await _platformService.refreshFromProject(path);
+    if (!mounted) return;
+    setState(() {
+      _supportedPlatforms = _platformService.supportedPlatforms;
+      _selectedPlatform = _platformService.selectedPlatform;
+    });
   }
 
   @override
@@ -50,12 +84,31 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
       _isRunning = true;
       _output = 'Iniciando ejecución...\n';
     });
+    _debugService.showOutputTab();
+    _debugService.setCompilationProgress(0.08, 'Iniciando...');
 
     try {
+      if (!ProjectPlatformSupport.isSupportedVariant(
+        _selectedPlatform,
+        _supportedPlatforms,
+      )) {
+        final preferred = ProjectPlatformSupport.preferPlatform(
+          _supportedPlatforms,
+        );
+        if (preferred != null) {
+          setState(() => _selectedPlatform = preferred);
+          _platformService.setPlatform(preferred);
+          _output +=
+              '⚠️ Plataforma no disponible. Cambiando a $preferred...\n';
+        }
+      }
+
       final result = await RunDebugService.runFlutterProject(
         mode: _selectedMode,
         platform: _selectedPlatform,
             onOutput: (output) {
+              _debugService.addOutput(output);
+              _debugService.updateProgressFromFlutterLine(output);
               setState(() {
                 _output += output;
                 // Auto-scroll al final después de un breve delay
@@ -87,7 +140,10 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
             },
       );
 
-      // El proceso se ejecuta en background, no esperamos que termine aquí
+      // Esperó a que la compilación arrancara o fallara.
+      if (mounted && result['success'] != true) {
+        setState(() => _isRunning = false);
+      }
     } catch (e) {
       setState(() {
         _isRunning = false;
@@ -98,10 +154,12 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
 
   Future<void> _stopProject() async {
     await RunDebugService.stop();
+    if (!mounted) return;
     setState(() {
       _isRunning = false;
-      _output += '\n⏹️ Proceso detenido\n';
+      _output += '\n⏹️ Proceso detenido (SIGTERM/SIGKILL)\n';
     });
+    _debugService.notifyProcessEnded();
   }
 
   @override
@@ -207,11 +265,38 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
                     onChanged: _isRunning
                         ? null
                         : (value) {
-                            if (value != null) {
-                              setState(() {
-                                _selectedPlatform = value;
-                              });
+                            if (value == null) return;
+                            if (!ProjectPlatformSupport.isSupportedVariant(
+                              value,
+                              _supportedPlatforms,
+                            )) {
+                              final preferred =
+                                  ProjectPlatformSupport.preferPlatform(
+                                    _supportedPlatforms,
+                                  );
+                              final hint =
+                                  ProjectPlatformSupport.missingFolderHint(
+                                    value,
+                                    _supportedPlatforms,
+                                  );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    preferred == null
+                                        ? hint
+                                        : '$hint\n→ Usando ${ProjectPlatformSupport.humanLabel(preferred)}.',
+                                  ),
+                                  backgroundColor: Colors.orange.shade800,
+                                ),
+                              );
+                              if (preferred != null) {
+                                setState(() => _selectedPlatform = preferred);
+                                _platformService.setPlatform(preferred);
+                              }
+                              return;
                             }
+                            setState(() => _selectedPlatform = value);
+                            _platformService.setPlatform(value);
                           },
                   ),
                 ),

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'cursor_theme.dart';
+import 'voryxel_brand_logo.dart';
 import '../models/inspector_element.dart';
+import '../services/inspector_selection_service.dart';
 
 /// Emulador de teléfono Android/iOS
 /// Similar a Flutter Flow - muestra la app dentro de un frame de teléfono
@@ -18,6 +20,9 @@ class PhoneEmulator extends StatefulWidget {
   final String compilationStatus; // Estado de compilación
   final bool inspectorMode; // Modo inspector activo desde el exterior
   final Function(InspectorElement)? onElementSelected; // Callback cuando se selecciona un elemento
+  final Function(InspectorElement?)? onElementHovered;
+  /// Cuando cambia (Hot Reload/Restart), recarga el WebView con [appUrl].
+  final int previewReloadNonce;
 
   const PhoneEmulator({
     super.key,
@@ -31,6 +36,8 @@ class PhoneEmulator extends StatefulWidget {
     this.compilationStatus = '',
     this.inspectorMode = false,
     this.onElementSelected,
+    this.onElementHovered,
+    this.previewReloadNonce = 0,
   });
 
   @override
@@ -97,381 +104,328 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
 
   /// Inyecta el script JavaScript para el inspector de elementos
   Future<void> _injectInspectorScript() async {
-    const script = '''
+    const script = r'''
       (function() {
-        // Remover listeners anteriores si existen
-        if (window.__inspectorActive) {
-          document.removeEventListener('click', window.__inspectorClickHandler, true);
-          document.removeEventListener('touchstart', window.__inspectorTouchStartHandler, true);
-          document.removeEventListener('touchend', window.__inspectorTouchEndHandler, true);
-          document.removeEventListener('touchmove', window.__inspectorTouchMoveHandler, true);
-          document.removeEventListener('mouseover', window.__inspectorHoverHandler, true);
-          document.removeEventListener('mouseout', window.__inspectorHoverOutHandler, true);
-          
-          // Restaurar navegación
-          const eventsToBlock = ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'touchmove', 
-                                 'contextmenu', 'dblclick', 'submit', 'change', 'input', 'keydown', 'keyup'];
-          eventsToBlock.forEach(eventType => {
-            document.removeEventListener(eventType, preventAllNavigation, true);
+        function teardown() {
+          if (!window.__inspectorActive) return;
+          [
+            ['click', window.__inspectorClickHandler],
+            ['mousedown', window.__inspectorMouseDownHandler],
+            ['mousemove', window.__inspectorMouseMoveHandler],
+            ['mouseout', window.__inspectorHoverOutHandler],
+            ['touchstart', window.__inspectorTouchStartHandler],
+            ['touchmove', window.__inspectorTouchMoveHandler],
+            ['touchend', window.__inspectorTouchEndHandler],
+          ].forEach(function(pair) {
+            if (pair[1]) document.removeEventListener(pair[0], pair[1], true);
           });
-          
-          // Restaurar history API
-          if (window.__originalPushState) {
-            history.pushState = window.__originalPushState;
-          }
-          if (window.__originalReplaceState) {
-            history.replaceState = window.__originalReplaceState;
-          }
-          
-          if (window.__inspectorHighlightDiv) {
-            window.__inspectorHighlightDiv.remove();
-          }
-          if (window.__inspectorSelectedDiv) {
-            window.__inspectorSelectedDiv.remove();
-          }
+          if (window.__inspectorHighlightDiv) window.__inspectorHighlightDiv.remove();
+          if (window.__inspectorSelectedDiv) window.__inspectorSelectedDiv.remove();
+          if (window.__inspectorLabelDiv) window.__inspectorLabelDiv.remove();
+          window.__inspectorActive = false;
         }
+        teardown();
 
-        // Crear divs para resaltar elementos (hover y seleccionado)
-        const highlightDiv = document.createElement('div');
+        function ensureChannel() {
+          if (typeof InspectorChannel === 'undefined') return false;
+          window.flutter_inspector = {
+            postMessage: function(message) {
+              try { InspectorChannel.postMessage(message); } catch (e) {}
+            }
+          };
+          return true;
+        }
+        ensureChannel();
+        setTimeout(ensureChannel, 400);
+
+        // Intentar exponer nodos de semántica Flutter (mejor hit-test).
+        try {
+          if (window.flutterCanvasKit == null) {
+            // html renderer / glass pane
+          }
+          var a11yBtn = document.querySelector('flt-semantics-placeholder') ||
+                        document.querySelector('[aria-label="Enable accessibility"]');
+          if (a11yBtn && a11yBtn.click) a11yBtn.click();
+        } catch (e) {}
+
+        var highlightDiv = document.createElement('div');
         highlightDiv.id = '__inspector_highlight';
-        highlightDiv.style.cssText = 'position: fixed; pointer-events: none; z-index: 999998; border: 2px solid #007AFF; background: rgba(0, 122, 255, 0.1); box-sizing: border-box; display: none;';
+        highlightDiv.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483645;border:2px solid #3B82F6;background:rgba(59,130,246,0.12);box-sizing:border-box;display:none;';
         document.body.appendChild(highlightDiv);
         window.__inspectorHighlightDiv = highlightDiv;
 
-        const selectedDiv = document.createElement('div');
+        var selectedDiv = document.createElement('div');
         selectedDiv.id = '__inspector_selected';
-        selectedDiv.style.cssText = 'position: fixed; pointer-events: none; z-index: 999999; border: 3px solid #00FF00; background: rgba(0, 255, 0, 0.15); box-sizing: border-box; display: none;';
+        selectedDiv.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;border:2px solid #22C55E;background:rgba(34,197,94,0.14);box-sizing:border-box;display:none;';
         document.body.appendChild(selectedDiv);
         window.__inspectorSelectedDiv = selectedDiv;
 
-        let currentHoveredElement = null;
-        let currentSelectedElement = null;
-        let touchStartElement = null;
-        let touchStartTime = null;
+        var labelDiv = document.createElement('div');
+        labelDiv.id = '__inspector_label';
+        labelDiv.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;display:none;padding:4px 8px;border-radius:4px;background:rgba(15,23,42,0.92);color:#E2E8F0;font:11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis;box-shadow:0 4px 14px rgba(0,0,0,0.35);border:1px solid rgba(148,163,184,0.35);';
+        document.body.appendChild(labelDiv);
+        window.__inspectorLabelDiv = labelDiv;
 
-        // Función para actualizar la posición del div de resaltado
-        function updateHighlightDiv(element, div, color, bgColor) {
-          if (!element || element === document.body || element === document.documentElement) {
-            div.style.display = 'none';
-            return;
-          }
+        var currentHoveredElement = null;
+        var currentSelectedElement = null;
+        var lastHoverSentAt = 0;
 
-          const rect = element.getBoundingClientRect();
-          const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-          const scrollY = window.pageYOffset || document.documentElement.scrollTop;
-
-          div.style.left = (rect.left + scrollX) + 'px';
-          div.style.top = (rect.top + scrollY) + 'px';
-          div.style.width = rect.width + 'px';
-          div.style.height = rect.height + 'px';
-          div.style.borderColor = color;
-          div.style.background = bgColor;
-          div.style.display = 'block';
+        function isOverlay(el) {
+          if (!el || !el.id) return false;
+          return el.id === '__inspector_highlight' ||
+                 el.id === '__inspector_selected' ||
+                 el.id === '__inspector_label';
         }
 
-        // Función para obtener información de un elemento
+        function isBoring(el) {
+          if (!el || !el.tagName) return true;
+          var tag = el.tagName.toLowerCase();
+          if (tag === 'html' || tag === 'body' || tag === 'script' || tag === 'style') return true;
+          if (tag === 'flt-glass-pane' || tag === 'flt-scene-host' || tag === 'canvas') return true;
+          return false;
+        }
+
+        function scoreElement(el) {
+          if (!el || isOverlay(el) || isBoring(el)) return -1;
+          var score = 1;
+          var tag = el.tagName.toLowerCase();
+          if (tag.indexOf('flt-semantics') === 0) score += 8;
+          if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'textarea') score += 6;
+          if (el.getAttribute && (el.getAttribute('role') || el.getAttribute('aria-label'))) score += 5;
+          if (el.id) score += 3;
+          var text = (el.innerText || el.textContent || '').trim();
+          if (text && text.length > 0 && text.length < 40) score += 4;
+          var rect = el.getBoundingClientRect();
+          var area = Math.max(0, rect.width) * Math.max(0, rect.height);
+          if (area > 0 && area < 40000) score += 2;
+          if (area > 120000) score -= 3;
+          return score;
+        }
+
+        function pickInspectable(x, y, fallback) {
+          var stack = [];
+          try { stack = document.elementsFromPoint(x, y) || []; } catch (e) {}
+          var best = null;
+          var bestScore = -1;
+          for (var i = 0; i < stack.length; i++) {
+            var el = stack[i];
+            var s = scoreElement(el);
+            if (s > bestScore) {
+              bestScore = s;
+              best = el;
+            }
+          }
+          if (best) return best;
+          var cur = fallback;
+          while (cur && (isOverlay(cur) || isBoring(cur))) {
+            cur = cur.parentElement;
+          }
+          return cur || fallback;
+        }
+
+        function updateBox(element, div) {
+          if (!element || element === document.body || element === document.documentElement) {
+            div.style.display = 'none';
+            return null;
+          }
+          var rect = element.getBoundingClientRect();
+          div.style.left = rect.left + 'px';
+          div.style.top = rect.top + 'px';
+          div.style.width = Math.max(0, rect.width) + 'px';
+          div.style.height = Math.max(0, rect.height) + 'px';
+          div.style.display = 'block';
+          return rect;
+        }
+
+        function updateLabel(element, rect, selected) {
+          if (!element || !rect) {
+            labelDiv.style.display = 'none';
+            return;
+          }
+          var tag = (element.tagName || 'node').toLowerCase();
+          var text = (element.getAttribute && (element.getAttribute('aria-label') || element.getAttribute('title'))) ||
+                     (element.innerText || element.textContent || '');
+          text = (text || '').trim().replace(/\s+/g, ' ').substring(0, 28);
+          var size = Math.round(rect.width) + '×' + Math.round(rect.height);
+          labelDiv.textContent = (selected ? '✓ ' : '') + tag + (text ? ' "' + text + '"' : '') + '  ' + size;
+          labelDiv.style.borderColor = selected ? 'rgba(34,197,94,0.55)' : 'rgba(59,130,246,0.55)';
+          var left = rect.left;
+          var top = rect.top - 26;
+          if (top < 4) top = rect.bottom + 6;
+          if (left + 200 > window.innerWidth) left = Math.max(4, window.innerWidth - 210);
+          labelDiv.style.left = left + 'px';
+          labelDiv.style.top = top + 'px';
+          labelDiv.style.display = 'block';
+        }
+
+        function classNameOf(el) {
+          var c = el.className;
+          if (!c) return null;
+          if (typeof c === 'string') return c;
+          if (typeof c.baseVal === 'string') return c.baseVal;
+          return String(c);
+        }
+
         function getElementInfo(element) {
           if (!element || !element.tagName) return null;
-
-          const rect = element.getBoundingClientRect();
-          const computed = window.getComputedStyle(element);
-          
-          // Obtener estilos relevantes
-          const styles = {};
-          const styleProps = ['width', 'height', 'padding', 'margin', 'backgroundColor', 
-                             'color', 'fontSize', 'fontFamily', 'display', 'position',
-                             'border', 'borderRadius', 'opacity', 'zIndex'];
-          styleProps.forEach(prop => {
+          var rect = element.getBoundingClientRect();
+          var computed = window.getComputedStyle(element);
+          var styles = {};
+          ['width','height','padding','margin','backgroundColor','color','fontSize','fontFamily','display','position','border','borderRadius','opacity','zIndex'].forEach(function(prop) {
             styles[prop] = computed.getPropertyValue(prop);
           });
-
-          // Obtener atributos
-          const attrs = {};
-          for (let attr of element.attributes) {
-            attrs[attr.name] = attr.value;
+          var attrs = {};
+          if (element.attributes) {
+            for (var i = 0; i < element.attributes.length; i++) {
+              var a = element.attributes[i];
+              attrs[a.name] = a.value;
+            }
           }
-
-          // Obtener hijos
-          const children = [];
-          for (let child of element.children) {
-            const childInfo = getElementInfo(child);
-            if (childInfo) children.push(childInfo);
+          var children = [];
+          var kids = element.children || [];
+          for (var j = 0; j < Math.min(kids.length, 8); j++) {
+            var child = kids[j];
+            if (!child || !child.tagName || isOverlay(child)) continue;
+            children.push({
+              tagName: child.tagName,
+              id: child.id || null,
+              className: classNameOf(child),
+              attributes: {},
+              textContent: (child.innerText || child.textContent || '').trim().substring(0, 40) || null,
+              computedStyles: {},
+              boundingRect: null,
+              children: []
+            });
           }
-
+          var labelText = (element.getAttribute && (element.getAttribute('aria-label') || element.getAttribute('title'))) ||
+                          (element.innerText || element.textContent || '');
           return {
             tagName: element.tagName,
             id: element.id || null,
-            className: element.className || null,
+            className: classNameOf(element),
             attributes: attrs,
-            textContent: element.textContent ? element.textContent.trim().substring(0, 100) : null,
+            textContent: (labelText || '').trim().substring(0, 100) || null,
             computedStyles: styles,
-            boundingRect: {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height
-            },
+            boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
             children: children
           };
         }
 
-        // Función para seleccionar un elemento
-        function selectElement(element) {
-          if (!element || element === document.body || element === document.documentElement) {
-            return;
+        function post(type, element) {
+          var info = getElementInfo(element);
+          if (!info) return;
+          if (!window.flutter_inspector || !window.flutter_inspector.postMessage) {
+            ensureChannel();
           }
-
-          currentSelectedElement = element;
-          updateHighlightDiv(element, selectedDiv, '#00FF00', 'rgba(0, 255, 0, 0.15)');
-          
-          const elementInfo = getElementInfo(element);
-          if (elementInfo) {
-            console.log('🔍 Elemento seleccionado:', elementInfo);
-            // Enviar información al Flutter
-            if (window.flutter_inspector && window.flutter_inspector.postMessage) {
-              try {
-                window.flutter_inspector.postMessage(JSON.stringify({
-                  type: 'elementSelected',
-                  element: elementInfo
-                }));
-              } catch (err) {
-                console.error('❌ Error al enviar mensaje:', err);
-              }
-            } else {
-              console.error('❌ window.flutter_inspector no está disponible');
-            }
+          if (window.flutter_inspector && window.flutter_inspector.postMessage) {
+            try {
+              window.flutter_inspector.postMessage(JSON.stringify({ type: type, element: info }));
+            } catch (e) {}
           }
         }
 
-        // Handler para clics (desktop)
+        function hoverElement(element) {
+          if (!element || element === document.body || element === document.documentElement) return;
+          currentHoveredElement = element;
+          var rect = updateBox(element, highlightDiv);
+          updateLabel(element, rect, false);
+          var now = Date.now();
+          if (now - lastHoverSentAt > 80) {
+            lastHoverSentAt = now;
+            post('elementHovered', element);
+          }
+        }
+
+        function selectElement(element) {
+          if (!element || element === document.body || element === document.documentElement) return;
+          currentSelectedElement = element;
+          currentHoveredElement = element;
+          var rect = updateBox(element, selectedDiv);
+          updateBox(element, highlightDiv);
+          updateLabel(element, rect, true);
+          post('elementSelected', element);
+        }
+
+        function stopEvent(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          return false;
+        }
+
+        window.__inspectorMouseMoveHandler = function(e) {
+          if (!window.__inspectorActive) return;
+          var el = pickInspectable(e.clientX, e.clientY, e.target);
+          if (el && el !== currentHoveredElement) hoverElement(el);
+        };
+
+        window.__inspectorHoverOutHandler = function(e) {
+          if (!window.__inspectorActive) return;
+          if (!e.relatedTarget) {
+            if (currentSelectedElement) {
+              var rect = updateBox(currentSelectedElement, selectedDiv);
+              updateLabel(currentSelectedElement, rect, true);
+              highlightDiv.style.display = 'none';
+            } else {
+              highlightDiv.style.display = 'none';
+              labelDiv.style.display = 'none';
+            }
+            currentHoveredElement = null;
+          }
+        };
+
+        window.__inspectorMouseDownHandler = function(e) {
+          if (!window.__inspectorActive) return;
+          stopEvent(e);
+        };
+
         window.__inspectorClickHandler = function(e) {
           if (!window.__inspectorActive) return;
-          
-          // Marcar como procesado por el inspector
-          e.__inspectorProcessed = true;
-          
-          // NO prevenir el evento aquí, solo seleccionar el elemento
-          const element = e.target;
-          if (element && element !== document.body && element !== document.documentElement && 
-              element.id !== '__inspector_highlight' && element.id !== '__inspector_selected') {
-            selectElement(element);
-            // Ahora sí prevenir la navegación
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            return false;
-          }
+          var el = pickInspectable(e.clientX, e.clientY, e.target);
+          if (el) selectElement(el);
+          return stopEvent(e);
         };
 
-        // Handler para touchstart (móvil)
         window.__inspectorTouchStartHandler = function(e) {
           if (!window.__inspectorActive) return;
-          
-          e.__inspectorProcessed = true;
-          
           if (e.touches && e.touches.length > 0) {
-            const touch = e.touches[0];
-            const element = document.elementFromPoint(touch.clientX, touch.clientY);
-            
-            // Ignorar si es el div de resaltado
-            if (element && element.id !== '__inspector_highlight' && element.id !== '__inspector_selected') {
-              touchStartElement = element;
-              touchStartTime = Date.now();
-              
-              if (element !== document.body && element !== document.documentElement) {
-                currentHoveredElement = element;
-                updateHighlightDiv(element, highlightDiv, '#007AFF', 'rgba(0, 122, 255, 0.1)');
-              }
-            }
+            var t = e.touches[0];
+            var el = pickInspectable(t.clientX, t.clientY, document.elementFromPoint(t.clientX, t.clientY));
+            if (el) hoverElement(el);
           }
-          
-          // Prevenir navegación pero permitir selección
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          return false;
+          return stopEvent(e);
         };
 
-        // Handler para touchmove (móvil)
         window.__inspectorTouchMoveHandler = function(e) {
           if (!window.__inspectorActive) return;
-          
-          e.__inspectorProcessed = true;
-          
           if (e.touches && e.touches.length > 0) {
-            const touch = e.touches[0];
-            const element = document.elementFromPoint(touch.clientX, touch.clientY);
-            
-            if (element && element.id !== '__inspector_highlight' && element.id !== '__inspector_selected' &&
-                element !== document.body && element !== document.documentElement) {
-              if (currentHoveredElement !== element) {
-                currentHoveredElement = element;
-                updateHighlightDiv(element, highlightDiv, '#007AFF', 'rgba(0, 122, 255, 0.1)');
-              }
-            }
+            var t = e.touches[0];
+            var el = pickInspectable(t.clientX, t.clientY, document.elementFromPoint(t.clientX, t.clientY));
+            if (el && el !== currentHoveredElement) hoverElement(el);
           }
-          
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          return false;
+          return stopEvent(e);
         };
 
-        // Handler para touchend (móvil) - seleccionar elemento
         window.__inspectorTouchEndHandler = function(e) {
           if (!window.__inspectorActive) return;
-          
-          e.__inspectorProcessed = true;
-          
           if (e.changedTouches && e.changedTouches.length > 0) {
-            const touch = e.changedTouches[0];
-            const element = document.elementFromPoint(touch.clientX, touch.clientY);
-            const touchDuration = Date.now() - (touchStartTime || 0);
-            
-            // Solo seleccionar si fue un tap rápido (no un scroll) y no es el div de resaltado
-            if (touchDuration < 300 && element === touchStartElement && 
-                element && element.id !== '__inspector_highlight' && element.id !== '__inspector_selected' &&
-                element !== document.body && element !== document.documentElement) {
-              selectElement(element);
-            }
-            
-            touchStartElement = null;
-            touchStartTime = null;
+            var t = e.changedTouches[0];
+            var el = pickInspectable(t.clientX, t.clientY, document.elementFromPoint(t.clientX, t.clientY));
+            if (el) selectElement(el);
           }
-          
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          return false;
+          return stopEvent(e);
         };
 
-        // Handler para hover (resaltar elemento con azul)
-        window.__inspectorHoverHandler = function(e) {
-          const element = e.target;
-          if (element && element !== document.body && element !== document.documentElement) {
-            currentHoveredElement = element;
-            updateHighlightDiv(element, highlightDiv, '#007AFF', 'rgba(0, 122, 255, 0.1)');
-            element.style.cursor = 'pointer';
-          }
-        };
-
-        // Handler para quitar hover
-        window.__inspectorHoverOutHandler = function(e) {
-          const element = e.target;
-          if (element && element.style) {
-            element.style.cursor = '';
-          }
-          // Solo ocultar el highlight si no es el elemento seleccionado
-          if (currentHoveredElement !== currentSelectedElement) {
-            highlightDiv.style.display = 'none';
-          }
-          currentHoveredElement = null;
-        };
-
-        // Agregar listeners con captura para interceptar antes que otros handlers
-        // IMPORTANTE: Los handlers del inspector deben ejecutarse PRIMERO
+        document.addEventListener('mousemove', window.__inspectorMouseMoveHandler, true);
+        document.addEventListener('mouseout', window.__inspectorHoverOutHandler, true);
+        document.addEventListener('mousedown', window.__inspectorMouseDownHandler, true);
         document.addEventListener('click', window.__inspectorClickHandler, true);
         document.addEventListener('touchstart', window.__inspectorTouchStartHandler, true);
         document.addEventListener('touchmove', window.__inspectorTouchMoveHandler, true);
         document.addEventListener('touchend', window.__inspectorTouchEndHandler, true);
-        document.addEventListener('mouseover', window.__inspectorHoverHandler, true);
-        document.addEventListener('mouseout', window.__inspectorHoverOutHandler, true);
-        
-        // Prevenir navegación SOLO después de que el inspector haya procesado el evento
-        // Esto permite que el inspector seleccione elementos pero previene la navegación
-        document.addEventListener('click', function(e) {
-          if (window.__inspectorActive && !e.__inspectorProcessed) {
-            const target = e.target;
-            const link = target.closest('a');
-            const button = target.closest('button');
-            const form = target.closest('form');
-            
-            // Solo prevenir si NO es el div de resaltado
-            if ((link || button || form) && target.id !== '__inspector_highlight' && target.id !== '__inspector_selected') {
-              e.preventDefault();
-              e.stopPropagation();
-              e.stopImmediatePropagation();
-              return false;
-            }
-          }
-        }, true);
-        
-        // Prevenir navegación de formularios
-        document.addEventListener('submit', function(e) {
-          if (window.__inspectorActive) {
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-          }
-        }, true);
-        
-        // Prevenir cambios de URL
-        window.addEventListener('beforeunload', function(e) {
-          if (window.__inspectorActive) {
-            e.preventDefault();
-            e.returnValue = '';
-            return '';
-          }
-        }, true);
-        
-        // Prevenir navegación programática
-        window.__originalPushState = history.pushState;
-        window.__originalReplaceState = history.replaceState;
-        
-        history.pushState = function() {
-          if (!window.__inspectorActive) {
-            return window.__originalPushState.apply(history, arguments);
-          }
-        };
-        
-        history.replaceState = function() {
-          if (!window.__inspectorActive) {
-            return window.__originalReplaceState.apply(history, arguments);
-          }
-        };
-        
-        // Actualizar posición del highlight cuando se hace scroll
-        window.addEventListener('scroll', function() {
-          if (currentHoveredElement) {
-            updateHighlightDiv(currentHoveredElement, highlightDiv, '#007AFF', 'rgba(0, 122, 255, 0.1)');
-          }
-          if (currentSelectedElement) {
-            updateHighlightDiv(currentSelectedElement, selectedDiv, '#00FF00', 'rgba(0, 255, 0, 0.15)');
-          }
-        }, true);
-        
+
         window.__inspectorActive = true;
-        
-        // Crear canal de comunicación con Flutter
-        if (typeof InspectorChannel !== 'undefined') {
-          window.flutter_inspector = {
-            postMessage: function(message) {
-              try {
-                InspectorChannel.postMessage(message);
-                console.log('✅ Mensaje enviado al inspector');
-              } catch (e) {
-                console.error('❌ Error enviando mensaje al inspector:', e);
-              }
-            }
-          };
-          console.log('✅ Canal de inspector inicializado');
-        } else {
-          console.error('❌ InspectorChannel no está disponible');
-          setTimeout(function() {
-            if (typeof InspectorChannel !== 'undefined') {
-              window.flutter_inspector = {
-                postMessage: function(message) {
-                  try {
-                    InspectorChannel.postMessage(message);
-                    console.log('✅ Mensaje enviado al inspector (reintento)');
-                  } catch (e) {
-                    console.error('❌ Error enviando mensaje al inspector:', e);
-                  }
-                }
-              };
-            }
-          }, 1000);
-        }
+        document.documentElement.style.cursor = 'crosshair';
       })();
     ''';
 
@@ -485,46 +439,34 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
 
   /// Remueve el script del inspector
   Future<void> _removeInspectorScript() async {
-    const script = '''
+    const script = r'''
       (function() {
-        if (window.__inspectorActive) {
-          document.removeEventListener('click', window.__inspectorClickHandler, true);
-          document.removeEventListener('touchstart', window.__inspectorTouchStartHandler, true);
-          document.removeEventListener('touchmove', window.__inspectorTouchMoveHandler, true);
-          document.removeEventListener('touchend', window.__inspectorTouchEndHandler, true);
-          document.removeEventListener('mouseover', window.__inspectorHoverHandler, true);
-          document.removeEventListener('mouseout', window.__inspectorHoverOutHandler, true);
-          
-          // Los listeners se remueven individualmente arriba
-          
-          // Restaurar history API
-          if (window.__originalPushState) {
-            history.pushState = window.__originalPushState;
-          }
-          if (window.__originalReplaceState) {
-            history.replaceState = window.__originalReplaceState;
-          }
-          
-          // Remover divs de resaltado
-          if (window.__inspectorHighlightDiv) {
-            window.__inspectorHighlightDiv.remove();
-            window.__inspectorHighlightDiv = null;
-          }
-          if (window.__inspectorSelectedDiv) {
-            window.__inspectorSelectedDiv.remove();
-            window.__inspectorSelectedDiv = null;
-          }
-          
-          // Remover cursor pointer de todos los elementos
-          const allElements = document.querySelectorAll('*');
-          allElements.forEach(el => {
-            if (el.style) {
-              el.style.cursor = '';
-            }
-          });
-          
-          window.__inspectorActive = false;
+        if (!window.__inspectorActive) return;
+        [
+          ['click', window.__inspectorClickHandler],
+          ['mousedown', window.__inspectorMouseDownHandler],
+          ['mousemove', window.__inspectorMouseMoveHandler],
+          ['mouseout', window.__inspectorHoverOutHandler],
+          ['touchstart', window.__inspectorTouchStartHandler],
+          ['touchmove', window.__inspectorTouchMoveHandler],
+          ['touchend', window.__inspectorTouchEndHandler],
+        ].forEach(function(pair) {
+          if (pair[1]) document.removeEventListener(pair[0], pair[1], true);
+        });
+        if (window.__inspectorHighlightDiv) {
+          window.__inspectorHighlightDiv.remove();
+          window.__inspectorHighlightDiv = null;
         }
+        if (window.__inspectorSelectedDiv) {
+          window.__inspectorSelectedDiv.remove();
+          window.__inspectorSelectedDiv = null;
+        }
+        if (window.__inspectorLabelDiv) {
+          window.__inspectorLabelDiv.remove();
+          window.__inspectorLabelDiv = null;
+        }
+        document.documentElement.style.cursor = '';
+        window.__inspectorActive = false;
       })();
     ''';
 
@@ -536,22 +478,28 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     }
   }
 
-
   /// Maneja mensajes del JavaScript del inspector
   void _handleInspectorMessage(String message) {
     try {
       final data = jsonDecode(message);
-      if (data['type'] == 'elementSelected' && data['element'] != null) {
-        final element = InspectorElement.fromJson(data['element']);
+      final type = data['type']?.toString();
+      if (data['element'] == null) return;
+      final element = InspectorElement.fromJson(
+        Map<String, dynamic>.from(data['element'] as Map),
+      );
+
+      if (type == 'elementHovered') {
+        InspectorSelectionService().setHovered(element);
+        widget.onElementHovered?.call(element);
+        return;
+      }
+
+      if (type == 'elementSelected') {
         setState(() {
           _selectedElement = element;
-          print('✅ Elemento seleccionado: ${element.tagName}');
         });
-        
-        // Notificar al callback si existe
-        if (widget.onElementSelected != null) {
-          widget.onElementSelected!(element);
-        }
+        InspectorSelectionService().setSelected(element);
+        widget.onElementSelected?.call(element);
       }
     } catch (e) {
       print('❌ Error al procesar mensaje del inspector: $e');
@@ -567,6 +515,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     if (widget.inspectorMode != oldWidget.inspectorMode) {
       setState(() {
         _inspectorMode = widget.inspectorMode;
+        InspectorSelectionService().setActive(_inspectorMode);
         if (_inspectorMode) {
           if (_webViewInitialized) {
             Future.delayed(const Duration(milliseconds: 300), () {
@@ -581,15 +530,35 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         }
       });
     }
+
+    // Hot Reload / Hot Restart → recargar Preview con la URL de la app.
+    if (widget.previewReloadNonce != oldWidget.previewReloadNonce &&
+        widget.previewReloadNonce > 0 &&
+        widget.isRunning &&
+        widget.appUrl != null &&
+        widget.appUrl!.isNotEmpty) {
+      print(
+        '🔄 PhoneEmulator: previewReloadNonce '
+        '${oldWidget.previewReloadNonce} → ${widget.previewReloadNonce}',
+      );
+      _loadAppUrl(forceReload: true);
+    }
     
     // Cargar URL si cambió o si ahora está disponible
+    final becameReady = widget.compilationProgress >= 1.0 &&
+        oldWidget.compilationProgress < 1.0 &&
+        widget.appUrl != null &&
+        widget.appUrl!.isNotEmpty &&
+        widget.isRunning;
     if (widget.appUrl != null && 
         widget.appUrl!.isNotEmpty && 
         widget.isRunning &&
         (widget.appUrl != oldWidget.appUrl || 
          (oldWidget.appUrl == null && widget.appUrl != null) ||
-         !_webViewInitialized)) {
-      print('🔄 PhoneEmulator: URL actualizada de "${oldWidget.appUrl}" a "${widget.appUrl}"');
+         !_webViewInitialized ||
+         becameReady)) {
+      print('🔄 PhoneEmulator: URL actualizada de "${oldWidget.appUrl}" a "${widget.appUrl}"'
+          '${becameReady ? ' (app lista → reload)' : ''}');
       print('   isRunning: ${widget.isRunning}');
       print('   appUrl: ${widget.appUrl}');
       print('   _webViewInitialized: $_webViewInitialized');
@@ -613,23 +582,24 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     }
   }
 
-  void _loadAppUrl() {
-    if (widget.appUrl != null && widget.appUrl!.isNotEmpty) {
-      print('📱 PhoneEmulator._loadAppUrl: Cargando app en WebView: ${widget.appUrl}');
-      print('   isRunning: ${widget.isRunning}');
-      print('   platform: ${widget.platform}');
-      try {
-        final uri = Uri.parse(widget.appUrl!);
-        print('   URI parseado: $uri');
-        _webViewController.loadRequest(uri);
-        print('✅ loadRequest llamado en WebViewController');
-      } catch (e) {
-        print('❌ Error al parsear URL: $e');
-      }
-    } else {
+  void _loadAppUrl({bool forceReload = false}) {
+    final raw = widget.appUrl;
+    if (raw == null || raw.isEmpty) {
       print('⚠️ PhoneEmulator._loadAppUrl: No hay URL disponible');
-      print('   appUrl: ${widget.appUrl}');
-      print('   isRunning: ${widget.isRunning}');
+      return;
+    }
+    // Cache-bust para que Hot Restart no sirva la página vieja.
+    final base = raw.split('#').first;
+    final sep = base.contains('?') ? '&' : '?';
+    final url = forceReload
+        ? '$base${sep}_lopez_preview=${DateTime.now().millisecondsSinceEpoch}'
+        : raw;
+    print('📱 PhoneEmulator._loadAppUrl: $url (forceReload=$forceReload)');
+    try {
+      final uri = Uri.parse(url);
+      _webViewController.loadRequest(uri);
+    } catch (e) {
+      print('❌ Error al cargar URL en WebView: $e');
     }
   }
 
@@ -637,11 +607,12 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
   Widget build(BuildContext context) {
     try {
       final platform = widget.platform.toLowerCase();
-      final isIOS = platform == 'ios';
-      final isAndroid = platform == 'android';
-      final isWeb = platform == 'web';
-      
-      // Si es web, mostrar monitor de PC rectangular sin frame de teléfono
+      final isIOS = platform == 'ios' || platform == 'ios_native';
+      final isAndroid =
+          platform == 'android' || platform == 'android_native';
+      final isWeb = platform == 'web' || platform == 'macos';
+
+      // Web/macOS: monitor rectangular sin carcasa de teléfono
       if (isWeb) {
         if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
           print('🌐 PhoneEmulator (Web): Mostrando WebView con URL: ${widget.appUrl}');
@@ -677,19 +648,31 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           print('⏳ PhoneEmulator (Web): Esperando URL... isRunning: ${widget.isRunning}, appUrl: ${widget.appUrl}');
           return _buildWebMonitor(
             child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(color: CursorTheme.primary),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Esperando URL de la app...',
-                    style: TextStyle(
-                      color: CursorTheme.textSecondary,
-                      fontSize: 12,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: CursorTheme.primary,
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    Text(
+                      'Esperando URL de la app...',
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 12,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
               ),
             ),
           );
@@ -739,18 +722,11 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         );
       }
 
-      return Container(
+      // Frame móvil: usa width/height del Preview (pegado arriba, sin hueco).
+      return SizedBox(
         width: widget.width,
         height: widget.height,
-        color: CursorTheme.background,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(), // Scroll funcional en el emulador
-          padding: EdgeInsets.zero, // Sin padding adicional
-          child: Align(
-            alignment: Alignment.topCenter, // Alinear arriba en lugar de centrar
-            child: _buildPhoneFrame(isIOS),
-          ),
-        ),
+        child: _buildPhoneFrame(isIOS),
       );
     } catch (e, stackTrace) {
       print('❌ Error en PhoneEmulator.build: $e');
@@ -782,122 +758,108 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     }
   }
 
-  /// Construye un contenedor tipo monitor de PC para Web (rectangular, sin frame de teléfono)
+  /// Monitor Web: llena width×height del Preview (sin hueco hasta la Debug Console).
   Widget _buildWebMonitor({required Widget child}) {
-    // Si width y height están especificados, usarlos; si no, expandir para llenar el espacio disponible
-    if (widget.width != null && widget.height != null) {
-      return Container(
-        width: widget.width,
-        height: widget.height,
+    return SizedBox(
+      width: widget.width ?? double.infinity,
+      height: widget.height ?? double.infinity,
+      child: DecoratedBox(
         decoration: BoxDecoration(
           color: CursorTheme.background,
           border: Border.all(
             color: CursorTheme.border,
             width: 1,
           ),
-          borderRadius: BorderRadius.circular(4),
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: child,
-        ),
-      );
-    } else {
-      // Expandir para llenar el espacio disponible
-      return Container(
-        decoration: BoxDecoration(
-          color: CursorTheme.background,
-          border: Border.all(
-            color: CursorTheme.border,
-            width: 1,
-          ),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: child,
-        ),
-      );
-    }
+        child: child,
+      ),
+    );
   }
 
   Widget _buildPhoneFrame(bool isIOS) {
+    // Carcasa según plataforma: iOS notch/home · Android status + nav.
     if (isIOS) {
       return _buildIOSFrame();
-    } else {
-      return _buildAndroidFrame();
     }
+    return _buildAndroidFrame();
   }
 
   Widget _buildIOSFrame() {
-    // Dimensiones más realistas y estrechas (iPhone 14 Pro: 393x852, pero en emulador más pequeño)
-    return Container(
-      width: 300, // Más estrecho para emulador
-      height: 650, // Proporción mantenida
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(50),
-        border: Border.all(
-          color: Colors.grey.shade800,
-          width: 8,
+    final frameW = widget.width ?? 300;
+    final frameH = widget.height ?? 650;
+    final notchH = (frameH * 0.06).clamp(22.0, 44.0);
+    final homeH = (frameH * 0.04).clamp(16.0, 28.0);
+    final islandW = (frameW * 0.38).clamp(60.0, frameW * 0.7);
+    final islandH = (notchH * 0.55).clamp(12.0, notchH - 4);
+    final homeBarW = (frameW * 0.35).clamp(48.0, 120.0);
+    return SizedBox(
+      width: frameW,
+      height: frameH,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(50),
+          border: Border.all(
+            color: Colors.grey.shade800,
+            width: 8,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 20,
+              spreadRadius: 5,
+            ),
+          ],
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 20,
-            spreadRadius: 5,
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(42),
-        child: Container(
-          decoration: BoxDecoration(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(42),
+          clipBehavior: Clip.hardEdge,
+          child: ColoredBox(
             color: CursorTheme.surface,
-          ),
-          child: Column(
-            children: [
-              // Notch (Dynamic Island)
-              Container(
-                height: 50,
-                width: double.infinity,
-                color: Colors.black,
-                child: Center(
-                  child: Container(
-                    width: 126,
-                    height: 37,
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                ),
-              ),
-              // Screen content
-              Expanded(
-                child: Container(
+            child: Column(
+              children: [
+                SizedBox(
+                  height: notchH,
                   width: double.infinity,
-                  color: CursorTheme.surface,
-                  child: _buildScreenContent(),
-                ),
-              ),
-              // Home indicator
-              Container(
-                height: 34,
-                width: double.infinity,
-                color: Colors.black,
-                child: Center(
-                  child: Container(
-                    width: 134,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(3),
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: Container(
+                        width: islandW,
+                        height: islandH,
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+                Expanded(
+                  child: ColoredBox(
+                    color: CursorTheme.surface,
+                    child: ClipRect(child: _buildScreenContent()),
+                  ),
+                ),
+                SizedBox(
+                  height: homeH,
+                  width: double.infinity,
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: Container(
+                        width: homeBarW,
+                        height: (homeH * 0.22).clamp(3.0, 5.0),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -905,173 +867,170 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
   }
 
   Widget _buildAndroidFrame() {
-    // Dimensiones más realistas y estrechas
-    return Container(
-      width: 300, // Más estrecho para emulador
-      height: 650, // Proporción mantenida
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(
-          color: Colors.grey.shade800,
-          width: 6,
+    final frameW = widget.width ?? 300;
+    final frameH = widget.height ?? 650;
+    // Chrome flexible: NUNCA overflow del marco (solo el proyecto en WebView puede).
+    final statusH = (frameH * 0.035).clamp(12.0, 22.0);
+    final navH = (frameH * 0.07).clamp(28.0, 44.0);
+    // Botones siempre caben dentro de navH (antes 48px en nav de 32 → overflow).
+    final sideBtn = (navH - 6).clamp(16.0, 36.0);
+    final homeBtn = (navH - 4).clamp(18.0, 40.0);
+    final sideIcon = (sideBtn * 0.45).clamp(10.0, 18.0);
+    final homeDot = (homeBtn * 0.45).clamp(8.0, 18.0);
+    final statusIcon = (statusH * 0.55).clamp(8.0, 12.0);
+    final statusFont = (statusH * 0.55).clamp(8.0, 11.0);
+
+    return SizedBox(
+      width: frameW,
+      height: frameH,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(
+            color: Colors.grey.shade800,
+            width: 6,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 20,
+              spreadRadius: 5,
+            ),
+          ],
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 20,
-            spreadRadius: 5,
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: Container(
-          decoration: BoxDecoration(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          clipBehavior: Clip.hardEdge,
+          child: ColoredBox(
             color: CursorTheme.surface,
-          ),
-          child: Column(
-            children: [
-              // Status bar
-              Container(
-                height: 24,
-                width: double.infinity,
-                color: Colors.black,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(left: 8),
+            child: Column(
+              children: [
+                SizedBox(
+                  height: statusH,
+                  width: double.infinity,
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
                       child: Row(
                         children: [
-                          Icon(Icons.signal_cellular_4_bar, size: 12, color: Colors.white),
-                          const SizedBox(width: 4),
-                          Icon(Icons.wifi, size: 12, color: Colors.white),
-                          const SizedBox(width: 4),
-                          Icon(Icons.battery_full, size: 12, color: Colors.white),
+                          Icon(Icons.signal_cellular_4_bar,
+                              size: statusIcon, color: Colors.white),
+                          SizedBox(width: statusIcon * 0.3),
+                          Icon(Icons.wifi,
+                              size: statusIcon, color: Colors.white),
+                          SizedBox(width: statusIcon * 0.3),
+                          Icon(Icons.battery_full,
+                              size: statusIcon, color: Colors.white),
+                          const Spacer(),
+                          Text(
+                            '9:41',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: statusFont,
+                              fontWeight: FontWeight.w500,
+                              height: 1.0,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: Text(
-                        '9:41',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-              // Screen content
-              Expanded(
-                child: Container(
+                // Área del proyecto: único sitio donde puede haber overflow real.
+                Expanded(
+                  child: ColoredBox(
+                    color: CursorTheme.surface,
+                    child: ClipRect(child: _buildScreenContent()),
+                  ),
+                ),
+                SizedBox(
+                  height: navH,
                   width: double.infinity,
-                  color: CursorTheme.surface,
-                  child: _buildScreenContent(),
-                ),
-              ),
-              // Navigation bar con botones funcionales
-              Container(
-                height: 48,
-                width: double.infinity,
-                color: Colors.black,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    // Botón Atrás (izquierda)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () {
-                          // Navegar hacia atrás en el WebView si está disponible
-                          if (_webViewInitialized && widget.isRunning) {
-                            _webViewController.goBack();
-                            print('🔙 Navegación hacia atrás');
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(24),
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.1),
-                            shape: BoxShape.circle,
-                          ),
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _navCircleButton(
+                          size: sideBtn,
+                          onTap: () {
+                            if (_webViewInitialized && widget.isRunning) {
+                              _webViewController.goBack();
+                            }
+                          },
                           child: Icon(
                             Icons.arrow_back,
-                            size: 20,
-                            color: Colors.white.withOpacity(0.8),
+                            size: sideIcon,
+                            color: Colors.white.withOpacity(0.85),
                           ),
                         ),
-                      ),
-                    ),
-                    // Botón Home (centro)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () {
-                          // Ir al inicio/raíz de la app
-                          if (_webViewInitialized && widget.isRunning && widget.appUrl != null) {
-                            _webViewController.loadRequest(Uri.parse(widget.appUrl!));
-                            print('🏠 Navegación al inicio');
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(24),
-                        child: Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.15),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                              ),
+                        _navCircleButton(
+                          size: homeBtn,
+                          fill: 0.15,
+                          onTap: () {
+                            if (_webViewInitialized &&
+                                widget.isRunning &&
+                                widget.appUrl != null) {
+                              _webViewController
+                                  .loadRequest(Uri.parse(widget.appUrl!));
+                            }
+                          },
+                          child: Container(
+                            width: homeDot,
+                            height: homeDot,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    // Botón Opciones/Menú (derecha)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () {
-                          // Mostrar menú de opciones o recargar
-                          if (_webViewInitialized && widget.isRunning) {
-                            _webViewController.reload();
-                            print('🔄 Recargando aplicación');
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(24),
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.1),
-                            shape: BoxShape.circle,
-                          ),
+                        _navCircleButton(
+                          size: sideBtn,
+                          onTap: () {
+                            if (_webViewInitialized && widget.isRunning) {
+                              _webViewController.reload();
+                            }
+                          },
                           child: Icon(
                             Icons.more_vert,
-                            size: 20,
-                            color: Colors.white.withOpacity(0.8),
+                            size: sideIcon,
+                            color: Colors.white.withOpacity(0.85),
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _navCircleButton({
+    required double size,
+    required Widget child,
+    required VoidCallback onTap,
+    double fill = 0.1,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(size),
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(fill),
+              shape: BoxShape.circle,
+            ),
+            child: Center(child: child),
           ),
         ),
       ),
@@ -1088,111 +1047,136 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     print('   compilationStatus: ${widget.compilationStatus}');
     print('   child: ${widget.child != null ? "presente" : "null"}');
     
-    final isWeb = widget.platform.toLowerCase() == 'web';
-    final isAndroid = widget.platform.toLowerCase() == 'android';
-    final isIOS = widget.platform.toLowerCase() == 'ios';
-    
+    final plat = widget.platform.toLowerCase();
+    final isWeb = plat == 'web' || plat == 'macos';
+    final isAndroid = plat == 'android' || plat == 'android_native';
+    final isIOS = plat == 'ios' || plat == 'ios_native';
+    final isMobilePreview = plat == 'android' || plat == 'ios';
+
     // PRIORIDAD 0: Si hay un error de compilación, mostrarlo de manera prominente
-    final hasError = widget.compilationStatus.contains('❌') || 
-                     widget.compilationStatus.contains('No se encontró') ||
-                     widget.compilationStatus.contains('Error') ||
-                     widget.compilationStatus.contains('falló') ||
-                     widget.compilationStatus.contains('fallida');
-    
+    final hasError = widget.compilationStatus.contains('❌') ||
+        widget.compilationStatus.contains('No se encontró') ||
+        widget.compilationStatus.contains('Error') ||
+        widget.compilationStatus.contains('falló') ||
+        widget.compilationStatus.contains('fallida');
+
     if (hasError && !widget.isRunning) {
       print('❌ PRIORIDAD 0: Mostrando error de compilación');
       return _buildErrorState();
     }
-    
-    // PRIORIDAD 1: Si es WEB y hay URL, mostrar WebView con inspector
-    if (isWeb && widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
-      print('✅ PRIORIDAD 1: WebView para WEB con URL: ${widget.appUrl}');
-      // Cargar URL si aún no se ha cargado
+
+    // Compilando primero (evita WebView en blanco con URL provisional).
+    final statusLower = widget.compilationStatus.toLowerCase();
+    final stillLaunching = statusLower.contains('instal') ||
+        statusLower.contains('iniciando') ||
+        statusLower.contains('compil') ||
+        statusLower.contains('lanzand') ||
+        statusLower.contains('prepar') ||
+        statusLower.contains('waiting') ||
+        statusLower.contains('syncing');
+    final isBuilding = widget.isRunning &&
+        widget.compilationProgress < 1.0 &&
+        (widget.appUrl == null ||
+            widget.appUrl!.isEmpty ||
+            stillLaunching ||
+            widget.compilationProgress < 0.95);
+    if (isBuilding) {
+      print(
+        '⏳ PRIORIDAD build: Compilando (${widget.compilationProgress}) '
+        '· ${widget.compilationStatus}',
+      );
+      return _buildCompilationProgress();
+    }
+
+    // WebView: Web full-bleed O Android/iOS Preview dentro del marco.
+    final hasUrl = widget.appUrl != null && widget.appUrl!.isNotEmpty;
+    if (widget.isRunning &&
+        hasUrl &&
+        (isWeb || isMobilePreview || isAndroid || isIOS)) {
+      print(
+        '✅ WebView Preview (${widget.platform}) → ${widget.appUrl}'
+        '${isMobilePreview ? ' (marco teléfono)' : ''}',
+      );
       if (!_webViewInitialized) {
-        print('🔄 WebView no inicializado, cargando URL...');
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _loadAppUrl();
         });
       }
       return _buildWebViewWithInspector();
     }
-    
-    // PRIORIDAD 2: Si es ANDROID o iOS y hay URL (fallback web), mostrar WebView dentro del frame del teléfono
-    // Esto simula que la app Android/iOS está ejecutándose, pero en realidad es la versión web
-    if ((isAndroid || isIOS) && widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
-      print('✅ PRIORIDAD 2: WebView para ${widget.platform.toUpperCase()} con URL (fallback web): ${widget.appUrl}');
-      // Cargar URL si aún no se ha cargado
-      if (!_webViewInitialized) {
-        print('🔄 WebView no inicializado, cargando URL...');
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _loadAppUrl();
-        });
-      }
-      return _buildWebViewWithInspector();
-    }
-    
+
     // PRIORIDAD 3: Si es ANDROID o iOS y está ejecutándose (sin URL), mostrar mensaje de que la app está en el dispositivo
     // (Las apps nativas se ejecutan en el emulador/dispositivo real, no en el WebView)
-    if ((isAndroid || isIOS) && widget.isRunning && (widget.appUrl == null || widget.appUrl!.isEmpty)) {
-      if (widget.compilationProgress >= 1.0) {
-        print('✅ PRIORIDAD 3: App ejecutándose en ${widget.platform.toUpperCase()} (dispositivo/emulador)');
-        return Container(
-          color: CursorTheme.surface,
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                isAndroid
-                    ? Icons.android
-                    : isIOS
-                        ? Icons.apple
-                        : Icons.web,
-                size: 64,
-                color: CursorTheme.primary,
-              ),
-              const SizedBox(height: 24),
-              Text(
-                '✅ Aplicación ejecutándose',
-                style: TextStyle(
-                  color: CursorTheme.textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+    if ((isAndroid || isIOS) &&
+        widget.isRunning &&
+        (widget.appUrl == null || widget.appUrl!.isEmpty) &&
+        widget.compilationProgress >= 1.0) {
+      print('✅ PRIORIDAD 3: App ejecutándose en ${widget.platform.toUpperCase()} (dispositivo/emulador)');
+      return Container(
+        color: CursorTheme.surface,
+        width: double.infinity,
+        height: double.infinity,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxHeight < 280;
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(compact ? 12 : 20),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight.isFinite
+                      ? constraints.maxHeight - (compact ? 24 : 40)
+                      : 0,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isAndroid
+                          ? Icons.android
+                          : isIOS
+                              ? Icons.apple
+                              : Icons.web,
+                      size: compact ? 40 : 56,
+                      color: CursorTheme.primary,
+                    ),
+                    SizedBox(height: compact ? 12 : 20),
+                    Text(
+                      '✅ Aplicación ejecutándose',
+                      style: TextStyle(
+                        color: CursorTheme.textPrimary,
+                        fontSize: compact ? 14 : 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    SizedBox(height: compact ? 8 : 12),
+                    Text(
+                      'La aplicación se está ejecutando en el '
+                      '${isAndroid ? "emulador/dispositivo Android" : "simulador/dispositivo iOS"}.\n\n'
+                      'Revisa el emulador o dispositivo físico para verla.',
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: compact ? 12 : 13,
+                        height: 1.35,
+                      ),
+                      textAlign: TextAlign.center,
+                      softWrap: true,
+                    ),
+                    if (widget.child != null) ...[
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: compact ? 120 : 180,
+                        width: double.infinity,
+                        child: widget.child!,
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(height: 16),
-              Text(
-                'La aplicación se está ejecutando en el ${isAndroid ? "emulador/dispositivo Android" : "simulador/dispositivo iOS"}.\n\n'
-                'Revisa el emulador o dispositivo físico para ver la aplicación.',
-                style: TextStyle(
-                  color: CursorTheme.textSecondary,
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              if (widget.child != null) ...[
-                const SizedBox(height: 24),
-                Text(
-                  'Vista previa:',
-                  style: TextStyle(
-                    color: CursorTheme.textSecondary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Expanded(child: widget.child!),
-              ],
-            ],
-          ),
-        );
-      }
-    }
-    
-    // PRIORIDAD 4: Si está compilando, mostrar barra de progreso
-    if (widget.isRunning && widget.compilationProgress > 0.0 && widget.compilationProgress < 1.0) {
-      print('⏳ PRIORIDAD 4: Mostrando barra de progreso: ${widget.compilationProgress}');
-      return _buildCompilationProgress();
+            );
+          },
+        ),
+      );
     }
     
     // PRIORIDAD 5: Si hay child personalizado, usarlo (para casos especiales)
@@ -1211,91 +1195,91 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
 
   Widget _buildCompilationProgress() {
     final progress = widget.compilationProgress;
-    final status = widget.compilationStatus.isNotEmpty 
-        ? widget.compilationStatus 
-        : 'Compilando...';
+    final status = widget.compilationStatus.isNotEmpty
+        ? widget.compilationStatus
+        : 'Iniciando compilación...';
     final percent = (progress * 100).toInt();
+    final useIndeterminate = progress < 0.08 || progress >= 0.99;
 
-    return Container(
+    // FittedBox evita el stripe "OVERFLOWED BY N PIXELS" en frames bajos.
+    return ColoredBox(
       color: CursorTheme.background,
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Icono de la plataforma
-          Icon(
-            widget.platform.toLowerCase() == 'ios'
-                ? Icons.apple
-                : widget.platform.toLowerCase() == 'android'
-                    ? Icons.android
-                    : Icons.web,
-            size: 64,
-            color: CursorTheme.primary.withOpacity(0.7),
-          ),
-          const SizedBox(height: 32),
-          
-          // Estado de compilación
-          Text(
-            status,
-            style: TextStyle(
-              color: CursorTheme.textPrimary,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 24),
-          
-          // Barra de progreso profesional
-          Container(
-            height: 8,
-            decoration: BoxDecoration(
-              color: CursorTheme.surface,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: CursorTheme.border,
-                width: 1,
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Stack(
-                children: [
-                  // Fondo
-                  Container(
-                    width: double.infinity,
-                    color: CursorTheme.surface,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final maxW = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : 280.0;
+          return Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxW),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
                   ),
-                  // Barra de progreso
-                  FractionallySizedBox(
-                    widthFactor: progress,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            CursorTheme.primary,
-                            CursorTheme.primary.withOpacity(0.8),
-                          ],
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        widget.platform.toLowerCase() == 'ios'
+                            ? Icons.apple
+                            : widget.platform.toLowerCase() == 'android'
+                                ? Icons.android
+                                : widget.platform.toLowerCase() == 'macos'
+                                    ? Icons.desktop_mac
+                                    : Icons.web,
+                        size: 48,
+                        color: CursorTheme.primary.withValues(alpha: 0.7),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        status,
+                        style: const TextStyle(
+                          color: CursorTheme.textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          height: 1.3,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: (maxW - 32).clamp(80.0, 220.0),
+                        height: 6,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: useIndeterminate
+                              ? const LinearProgressIndicator(
+                                  minHeight: 6,
+                                  backgroundColor: CursorTheme.surface,
+                                  color: CursorTheme.primary,
+                                )
+                              : LinearProgressIndicator(
+                                  value: progress.clamp(0.0, 1.0),
+                                  minHeight: 6,
+                                  backgroundColor: CursorTheme.surface,
+                                  color: CursorTheme.primary,
+                                ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 8),
+                      Text(
+                        useIndeterminate ? 'En progreso…' : '$percent%',
+                        style: const TextStyle(
+                          color: CursorTheme.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          
-          // Porcentaje
-          Text(
-            '$percent%',
-            style: TextStyle(
-              color: CursorTheme.textSecondary,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1312,72 +1296,54 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
       return _buildErrorState();
     }
     
-    // Contenido placeholder que va DENTRO del frame del teléfono
-    // NO llamar a _buildPhoneFrame() aquí porque ya estamos dentro del frame
-    // Mostrar el logo de la app (igual que en la pantalla de bienvenida)
-    return Container(
+    // Bloque fijo centrado; FittedBox lo escala entero (sin romper líneas).
+    return const ColoredBox(
       color: CursorTheme.surface,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Logo de chevrones azules (igual que en welcome_screen)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.chevron_left,
-                  size: 48,
-                  color: CursorTheme.primary,
+      child: SizedBox.expand(
+        child: Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.center,
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: SizedBox(
+                width: 220,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    VoryxelBrandLogo(
+                      iconSize: 64,
+                      fontSize: 17,
+                    ),
+                    SizedBox(height: 18),
+                    Text(
+                      'Presiona Run/Debug para iniciar',
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        height: 1.3,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'La aplicación aparecerá aquí',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Color(0xB3858585),
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 4),
-                Icon(
-                  Icons.chevron_right,
-                  size: 48,
-                  color: CursorTheme.primary,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'LOPEZ CODE',
-              style: TextStyle(
-                color: CursorTheme.textPrimary,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 2,
               ),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'Pro · Settings',
-              style: TextStyle(
-                color: CursorTheme.textSecondary,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 32),
-            Text(
-              'Presiona Run/Debug para iniciar',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: CursorTheme.textSecondary,
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'La aplicación aparecerá aquí',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: CursorTheme.textSecondary.withOpacity(0.7),
-                fontSize: 12,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

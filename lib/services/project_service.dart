@@ -156,7 +156,7 @@ class ProjectService {
       } on PathAccessException catch (e) {
         print('❌ Error de permisos al listar ${dir.path}: $e');
         print('💡 Solución: Ve a Preferencias del Sistema > Seguridad y Privacidad > Archivos y Carpetas');
-        print('💡 Asegúrate de que "Lopez Code" tenga acceso a la carpeta del proyecto');
+        print('💡 Asegúrate de que "Voryxel Code" tenga acceso a la carpeta del proyecto');
         return tree; // Retornar árbol vacío si no hay permisos
       } catch (e) {
         print('❌ Error al listar directorio ${dir.path}: $e');

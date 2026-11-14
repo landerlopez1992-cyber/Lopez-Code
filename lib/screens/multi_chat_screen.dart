@@ -1,26 +1,42 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/agent_chat.dart';
 import '../widgets/cursor_theme.dart';
+import '../widgets/voryxel_brand_logo.dart';
 import '../widgets/explorer_toolbar.dart';
 import '../widgets/project_explorer.dart';
+import '../widgets/global_search_panel.dart';
+import '../widgets/git_scm_panel.dart';
 import 'git_settings_screen.dart';
 import '../widgets/debug_console_panel.dart';
 import '../widgets/phone_emulator.dart';
 import '../widgets/code_editor_panel.dart';
 import '../models/inspector_element.dart';
+import '../models/problem_item.dart';
 import '../services/project_service.dart';
 import '../services/file_service.dart';
 import '../services/chat_storage_service.dart';
 import '../services/debug_console_service.dart';
+import '../services/advanced_debugging_service.dart';
 import '../services/platform_service.dart';
 import '../services/devtools_service.dart';
 import '../services/credit_service.dart';
+import '../services/openai_service.dart';
+import '../services/backend_project_inspector.dart';
+import '../services/agent_activity_service.dart';
+import '../services/inspector_selection_service.dart';
 import '../widgets/run_debug_toolbar.dart';
+import '../widgets/app_toast.dart';
+import '../widgets/inspector_monitor_panel.dart';
 import 'chat_screen.dart';
 import 'welcome_screen.dart';
+import 'wallet_screen.dart';
 
-/// Widget para mostrar el saldo de créditos con actualización en tiempo real
+/// Chip de saldo estilo Cursor; al hacer clic abre la página de billetera.
 class _CreditBalanceWidget extends StatefulWidget {
   const _CreditBalanceWidget();
 
@@ -30,63 +46,153 @@ class _CreditBalanceWidget extends StatefulWidget {
 
 class _CreditBalanceWidgetState extends State<_CreditBalanceWidget> {
   double _balance = 0.0;
-  
+  bool _hover = false;
+  Timer? _refreshTimer;
+
   @override
   void initState() {
     super.initState();
     _loadBalance();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted) _loadBalance();
+    });
   }
-  
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadBalance() async {
     final balance = await CreditService.getBalance();
-    if (mounted) {
-      setState(() {
-        _balance = balance;
-      });
-    }
+    if (!mounted) return;
+    setState(() => _balance = balance);
   }
-  
+
+  void _openWallet() {
+    Navigator.of(context, rootNavigator: true)
+        .push(
+          MaterialPageRoute(builder: (_) => const WalletScreen()),
+        )
+        .then((_) {
+      if (mounted) _loadBalance();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Recargar balance periódicamente
-    Future.delayed(const Duration(seconds: 1), () {
-      if (mounted) {
-        _loadBalance();
-      }
-    });
-    
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: _balance > 0 
-            ? Colors.green.withOpacity(0.2)
-            : Colors.red.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: _balance > 0 
-              ? Colors.green.withOpacity(0.5)
-              : Colors.red.withOpacity(0.5),
-          width: 1,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.account_balance_wallet,
-            size: 14,
-            color: _balance > 0 ? Colors.green : Colors.red,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '\$${_balance.toStringAsFixed(2)}',
-            style: TextStyle(
-              color: _balance > 0 ? Colors.green : Colors.red,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+    final low = _balance <= 0;
+    final accent = low ? const Color(0xFFE06C75) : CursorTheme.primary;
+    final bg = _hover ? CursorTheme.surfaceHover : CursorTheme.background;
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: Tooltip(
+        message: 'Abrir billetera',
+        waitDuration: const Duration(milliseconds: 400),
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _openWallet,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              height: 28,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: _hover
+                      ? accent.withValues(alpha: 0.55)
+                      : CursorTheme.border,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.account_balance_wallet_outlined,
+                    size: 13,
+                    color: accent,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '\$${_balance.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: CursorTheme.textPrimary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.1,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Icon(
+                    Icons.chevron_right,
+                    size: 14,
+                    color: CursorTheme.textDisabled,
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Viewport del Preview: centra el emulador y hace scroll si el zoom lo agranda.
+class _PreviewZoomViewport extends StatelessWidget {
+  const _PreviewZoomViewport({
+    required this.panelW,
+    required this.panelH,
+    required this.displayW,
+    required this.displayH,
+    required this.child,
+  });
+
+  final double panelW;
+  final double panelH;
+  final double displayW;
+  final double displayH;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final needsScroll = displayW > panelW + 0.5 || displayH > panelH + 0.5;
+    final content = SizedBox(
+      width: displayW,
+      height: displayH,
+      child: child,
+    );
+
+    if (!needsScroll) {
+      return SizedBox(
+        width: panelW,
+        height: panelH,
+        child: Center(child: content),
+      );
+    }
+
+    return SizedBox(
+      width: panelW,
+      height: panelH,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.vertical,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: math.max(panelW, displayW),
+            height: math.max(panelH, displayH),
+            child: Center(child: content),
+          ),
+        ),
       ),
     );
   }
@@ -107,11 +213,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   double _debugPanelWidth =
       350.0; // Ancho del panel de debug (visible por defecto)
   double _debugPanelHeight = 250.0; // Altura del panel de debug console
-  double _emulatorPanelWidth =
-      550.0; // Ancho del panel del emulador - más grande para mostrar todos los controles
   double _chatPanelWidth = 400.0; // Ancho inicial del panel de chat
-  int _selectedToolbarIndex = 0; // Índice del toolbar seleccionado (solo búsqueda ahora)
+  int _selectedToolbarIndex = -1; // -1 = ninguna acción del toolbar activa
   bool _isSearchMode = false; // Modo búsqueda activo
+  /// Vista del sidebar: explorer | git | search (Search in Files)
+  String _sidebarView = 'explorer';
   bool _emulatorVisible = true; // Emulador visible por defecto
   double _emulatorScale =
       1.0; // Escala del emulador fija a 100% para mantener consistencia
@@ -120,32 +226,41 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   InspectorElement? _selectedElement; // Elemento seleccionado en el inspector
   String? _selectedFilePath; // Archivo seleccionado del explorador
   String? _selectedFileContent; // Contenido del archivo seleccionado
+  int? _selectedFileLine; // Línea a posicionar (Problems / analyze)
+  int? _selectedFileColumn;
+  /// Archivo que el agente está tocando ahora (resalte intermitente en explorer).
+  String? _agentActivePath;
 
   String? _lastProjectPath; // Para detectar cambios
   final DebugConsoleService _debugService = DebugConsoleService();
   final PlatformService _platformService = PlatformService();
+  final AgentActivityService _agentActivity = AgentActivityService();
   final Map<String, GlobalKey> _chatScreenKeys =
       {}; // Keys para acceder a ChatScreen
   String? _lastOpenedUrl; // Para evitar abrir la misma URL múltiples veces
+  int _lastAgentRevision = -1;
 
   @override
   void initState() {
     super.initState();
-    // Inicializar plataforma si no está establecida - Android por defecto
-    if (_platformService.selectedPlatform.isEmpty) {
-      _platformService.setPlatform('android');
-    }
+    // Plataforma por defecto al iniciar: Web (selector foto 1).
+    _platformService.setPlatform('web');
     _loadProjectAndChats();
     // Escuchar cambios en el servicio de debug console
     _debugService.addListener(_onDebugServiceChanged);
     _platformService.addListener(_onPlatformChanged);
+    _agentActivity.addListener(_onAgentActivityChanged);
+    // Notificar UI cuando flutter run termina de verdad (stop / exit)
+    AdvancedDebuggingService.setOnProcessEnded(() {
+      _debugService.notifyProcessEnded();
+    });
     // Emulador visible por defecto, Debug Console VISIBLE por defecto (como en la foto)
     _emulatorVisible = true;
     _selectedTab = 0; // SIEMPRE iniciar en Preview para mostrar el emulador
     _debugPanelWidth = 350.0; // Debug Console visible al inicio
-    _emulatorPanelWidth =
-        550.0; // Ancho inicial más grande para mostrar todos los controles
-    _emulatorScale = 0.7; // Escala inicial al 70% como en la foto de referencia
+    // 1.0 = el Preview llena el hueco hasta la Debug Console (sin espacio vacío).
+    // Transform.scale < 1 encogía solo el dibujo y dejaba un hueco muerto debajo.
+    _emulatorScale = 1.0;
     _sidebarWidth = 280.0; // Sidebar más compacto al inicio
     _debugPanelHeight = 250.0; // Altura del Debug Console visible
     _chatPanelWidth = 400.0; // Ancho inicial del panel de chat
@@ -155,7 +270,30 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   void dispose() {
     _debugService.removeListener(_onDebugServiceChanged);
     _platformService.removeListener(_onPlatformChanged);
+    _agentActivity.removeListener(_onAgentActivityChanged);
     super.dispose();
+  }
+
+  /// El agente cambió de actividad → banner + (si hay archivo) Code/pulso.
+  void _onAgentActivityChanged() {
+    if (!mounted) return;
+    final path = _agentActivity.activePath;
+    final line = _agentActivity.focusLine;
+    final rev = _agentActivity.revision;
+    if (rev == _lastAgentRevision) return;
+    _lastAgentRevision = rev;
+
+    // Siempre rebuild del banner (compile / pub get / edit…).
+    setState(() {
+      if (!_agentActivity.hasFileTarget) {
+        _agentActivePath = null;
+      }
+    });
+
+    if (!_agentActivity.hasFileTarget) return;
+    if (path == null || path.isEmpty) return;
+    // No await: UI inmediata; la lectura del archivo sigue en background.
+    _openFileFromAgentLive(path, line: line);
   }
 
   void _onDebugServiceChanged() {
@@ -292,6 +430,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         '✅ MultiChatScreen._loadProjectAndChats: Proyecto Flutter detectado',
       );
       print('   Nombre: ${projectName ?? "N/A"}');
+      // Detectar carpetas + dispositivos: sin AVD/Simulator → Web Preview
+      final preferred =
+          await _platformService.refreshFromProject(projectPath);
+      print(
+        '📱 Plataformas del proyecto: ${_platformService.supportedPlatforms}',
+      );
+      print('🎯 Plataforma seleccionada (dropdown Run): $preferred');
+      if (mounted) setState(() {}); // refresca selector de la barra superior
     } else {
       print(
         'ℹ️ MultiChatScreen._loadProjectAndChats: Proyecto no-Flutter (permitido - editor de código)',
@@ -412,6 +558,28 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     await ChatStorageService.deleteAgentChat(chatId);
   }
 
+  /// Barra vertical arrastrable (←→) para redimensionar paneles.
+  Widget _buildVerticalResizeHandle({
+    required void Function(double dx) onDrag,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragUpdate: (details) => onDrag(details.delta.dx),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeColumn,
+        child: SizedBox(
+          width: 6,
+          child: Center(
+            child: Container(
+              width: 1,
+              color: CursorTheme.border,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Construye una pestaña
   Widget _buildTab(int index, String label, IconData icon) {
     final isSelected = _selectedTab == index;
@@ -479,108 +647,109 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
   /// Construye la pestaña Preview (emulador)
   Widget _buildPreviewTab() {
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita en web
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-        // Emulador - Expanded para ocupar todo el espacio disponible
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Preview: pegado a las pestañas arriba y a la Debug Console abajo.
+        // Sin Transform.scale (dejaba franja vacía arriba o abajo).
         Expanded(
-          child: Container(
-            width: double.infinity,
+          child: ColoredBox(
             color: CursorTheme.background,
-            padding: EdgeInsets.zero,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                return SingleChildScrollView(
-                  padding: EdgeInsets.zero,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
-                      maxHeight: constraints.maxHeight.isFinite 
-                          ? constraints.maxHeight 
-                          : MediaQuery.of(context).size.height,
-                    ),
-                    child: Align(
-                alignment: Alignment.topCenter,
-              child: AnimatedBuilder(
-                animation: _debugService,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: _emulatorScale,
-                      alignment: Alignment.topCenter,
-                    child: PhoneEmulator(
-                      platform: _platformService.selectedPlatform,
-                      isRunning: _debugService.isRunning,
-                      appUrl: _debugService.appUrl,
-                      compilationProgress: _debugService.compilationProgress,
-                      compilationStatus: _debugService.compilationStatus,
-                      inspectorMode: _inspectorMode,
-                      onElementSelected: (element) {
-                          print(
-                            '📥 Elemento seleccionado recibido: ${element.tagName}',
-                          );
-                        setState(() {
-                          _selectedElement = element;
-                            // NO cambiar automáticamente a Code - mantener Preview visible
-                            // para que el usuario vea el elemento resaltado en el emulador
-                            print('✅ Elemento guardado. Preview sigue activo para ver el resaltado.');
-                          });
+                final w = constraints.maxWidth;
+                final h = constraints.maxHeight;
+                if (!w.isFinite || !h.isFinite || w <= 0 || h <= 0) {
+                  return const SizedBox.shrink();
+                }
+
+                return AnimatedBuilder(
+                  animation: Listenable.merge([
+                    _debugService,
+                    _platformService,
+                  ]),
+                  builder: (context, _) {
+                    final platform =
+                        _platformService.selectedPlatform.toLowerCase();
+                    // Solo web/macos llenan el panel; android/ios (Preview o
+                    // Nativo) usan el marco de teléfono central.
+                    final isWeb = platform == 'web' || platform == 'macos';
+
+                    PhoneEmulator buildEmulator({
+                      required double width,
+                      required double height,
+                    }) {
+                      return PhoneEmulator(
+                        width: width,
+                        height: height,
+                        platform: _platformService.selectedPlatform,
+                        isRunning: _debugService.isRunning,
+                        appUrl: _debugService.appUrl,
+                        compilationProgress: _debugService.compilationProgress,
+                        compilationStatus: _debugService.compilationStatus,
+                        previewReloadNonce: _debugService.previewReloadNonce,
+                        inspectorMode: _inspectorMode,
+                        onElementSelected: (element) {
+                          setState(() => _selectedElement = element);
                           final elementInfo =
                               'Elemento seleccionado en el inspector:\n'
-                            'Tag: ${element.tagName}\n'
-                            '${element.id != null && element.id!.isNotEmpty ? "ID: ${element.id}\n" : ""}'
-                            '${element.className != null && element.className!.isNotEmpty ? "Clase: ${element.className}\n" : ""}'
-                            'Selector: ${element.fullSelector}\n'
-                            'Dimensiones: ${element.boundingRect?.width.toInt() ?? 0}x${element.boundingRect?.height.toInt() ?? 0}px';
-                          print(
-                            '📤 Enviando elemento seleccionado al chat: $elementInfo',
-                          );
-                        _sendMessageToActiveChat(elementInfo);
-                      },
-                        child:
-                            _debugService.isRunning &&
-                            _debugService.compilationProgress == 0.0 && 
-                            _debugService.appUrl == null
-                        ? Container(
-                            color: CursorTheme.surface,
-                            child: Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  CircularProgressIndicator(
-                                    color: CursorTheme.primary,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    'Iniciando compilación...',
-                                    style: TextStyle(
-                                      color: CursorTheme.textPrimary,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : null,
-                    ),
-                  );
-                },
-              ),
-                    ),
-                  ),
+                              'Tag: ${element.tagName}\n'
+                              '${element.id != null && element.id!.isNotEmpty ? "ID: ${element.id}\n" : ""}'
+                              '${element.className != null && element.className!.isNotEmpty ? "Clase: ${element.className}\n" : ""}'
+                              'Selector: ${element.fullSelector}\n'
+                              'Dimensiones: ${element.boundingRect?.width.toInt() ?? 0}x${element.boundingRect?.height.toInt() ?? 0}px';
+                          _sendMessageToActiveChat(elementInfo);
+                        },
+                        child: null,
+                      );
+                    }
+
+                    final zoom = _emulatorScale.clamp(0.5, 2.0);
+
+                    // Web/macOS: el zoom escala el viewport real (sin Transform:
+                    // el WebView de macOS rompe los clics si solo se dibuja
+                    // escalado). Si crece más que el panel, se puede hacer scroll.
+                    if (isWeb) {
+                      final displayW = w * zoom;
+                      final displayH = h * zoom;
+                      return _PreviewZoomViewport(
+                        panelW: w,
+                        panelH: h,
+                        displayW: displayW,
+                        displayH: displayH,
+                        child: buildEmulator(
+                          width: displayW,
+                          height: displayH,
+                        ),
+                      );
+                    }
+
+                    // Móvil: cabida al 100% en el panel, luego aplicar zoom.
+                    // (Antes: target*=zoom y luego fit/zoom → el zoom se anulaba.)
+                    const baseW = 300.0;
+                    const baseH = 650.0;
+                    final fit100 = math.min(w / baseW, h / baseH);
+                    final displayW = baseW * fit100 * zoom;
+                    final displayH = baseH * fit100 * zoom;
+
+                    return _PreviewZoomViewport(
+                      panelW: w,
+                      panelH: h,
+                      displayW: displayW,
+                      displayH: displayH,
+                      child: buildEmulator(
+                        width: displayW,
+                        height: displayH,
+                      ),
+                    );
+                  },
                 );
               },
             ),
           ),
         ),
-        // Debug Console Panel (si está visible) - pegado debajo del emulador sin espacio
         if (_debugService.isVisible && _debugPanelWidth > 0)
-          Container(
+          SizedBox(
             height: _debugPanelHeight,
             child: DebugConsolePanel(
               height: _debugPanelHeight,
@@ -589,50 +758,68 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                   _debugPanelHeight = height;
                 });
               },
-              problems: _debugService.problems,
+              problemItems: _debugService.problemItems,
               output: _debugService.output,
               debugConsole: _debugService.debugConsole,
+              projectPath: _currentProjectPath,
               onSendToChat: (message) {
                 _sendMessageToActiveChat(message);
+              },
+              onProblemTap: _handleProblemTap,
+              onRefreshAnalyze: () {
+                _debugService.refreshProblemsFromAnalyze();
               },
             ),
           ),
       ],
-      ),
     );
   }
 
   /// Construye la pestaña Code (editor de código)
   Widget _buildCodeTab() {
+    // El banner superior ya se pinta arriba de _buildTabContent() (sin duplicar).
+
     // PRIORIDAD 1: Si hay un archivo seleccionado del explorador, mostrarlo
     if (_selectedFilePath != null && _selectedFileContent != null) {
       print('📝 _buildCodeTab: Mostrando archivo: $_selectedFilePath');
+      // Key estable: las pestañas multi-archivo viven dentro del panel.
       return CodeEditorPanel(
-        key: ValueKey('file_$_selectedFilePath'),
-        filePath: _selectedFilePath,
-        initialContent: _selectedFileContent,
-        onSave: (path) async {
-          print('💾 Guardando archivo en: $path');
-          try {
-            await FileService.writeFile(path, _selectedFileContent ?? '');
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('✅ Archivo guardado'),
-                  backgroundColor: Colors.green,
-                ),
-              );
+          key: const ValueKey('main_code_editor'),
+          filePath: _selectedFilePath,
+          initialContent: _selectedFileContent,
+          initialLine: _selectedFileLine,
+          initialColumn: _selectedFileColumn,
+          onActiveFileChanged: (path, content) {
+            if (!mounted) return;
+            if (path == _selectedFilePath && content == _selectedFileContent) {
+              return;
             }
-          } catch (e) {
-            print('❌ Error al guardar: $e');
-          }
-        },
-        onClose: () {
-          setState(() {
-            _selectedFilePath = null;
-            _selectedFileContent = null;
-          });
-        },
+            setState(() {
+              _selectedFilePath = path;
+              _selectedFileContent = content;
+            });
+          },
+          onSave: (path) async {
+            try {
+              final savedContent = await FileService.readFile(path);
+              if (mounted) {
+                setState(() {
+                  _selectedFileContent = savedContent;
+                  _selectedFilePath = path;
+                });
+              }
+            } catch (e) {
+              print('❌ Error al sincronizar archivo guardado: $e');
+            }
+          },
+          onClose: () {
+            setState(() {
+              _selectedFilePath = null;
+              _selectedFileContent = null;
+              _selectedFileLine = null;
+              _selectedFileColumn = null;
+            });
+          },
       );
     }
     
@@ -803,10 +990,15 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   void _handleToolbarAction(String action) {
     switch (action) {
       case 'search':
-        _showFileSearchDialog();
+        _toggleGlobalSearch();
         break;
       case 'git':
-        _showGitDialog();
+        setState(() {
+          final openingGit = _sidebarView != 'git';
+          _sidebarView = openingGit ? 'git' : 'explorer';
+          _isSearchMode = false;
+          _selectedToolbarIndex = openingGit ? 1 : -1;
+        });
         break;
       case 'supabase':
         _showSupabaseDialog();
@@ -817,23 +1009,49 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  /// Cambia entre modo explorador y búsqueda
-  void _showFileSearchDialog() {
+  /// Abre o cierra Search in Files en el sidebar.
+  void _toggleGlobalSearch() {
     setState(() {
-      // Cambiar entre explorer y search
-      _isSearchMode = !_isSearchMode;
+      if (_sidebarView == 'search' || _isSearchMode) {
+        _sidebarView = 'explorer';
+        _isSearchMode = false;
+        _selectedToolbarIndex = -1;
+      } else {
+        _sidebarView = 'search';
+        _isSearchMode = true;
+        _selectedToolbarIndex = 0;
+      }
     });
+  }
+
+  /// Abre Search in Files (atajo ⌘⇧F / Ctrl+Shift+F).
+  void _openGlobalSearch() {
+    setState(() {
+      _sidebarView = 'search';
+      _isSearchMode = true;
+      _selectedToolbarIndex = 0;
+    });
+  }
+
+  /// Resultado de grep → abrir en CodeEditorPanel en esa línea.
+  Future<void> _handleGlobalSearchResult(String filePath, int lineNumber) {
+    return _handleFileViewCode(
+      filePath,
+      line: lineNumber > 0 ? lineNumber : null,
+    );
   }
   
   /// Maneja la visualización de código de un archivo
-  void _handleFileViewCode(String path) async {
-    print('📁 Ver código: $path');
+  Future<void> _handleFileViewCode(String path, {int? line, int? column}) async {
+    print('📁 Ver código: $path${line != null ? ':$line' : ''}');
     try {
       // Leer el contenido del archivo
       final content = await FileService.readFile(path);
       setState(() {
         _selectedFilePath = path;
         _selectedFileContent = content;
+        _selectedFileLine = line;
+        _selectedFileColumn = column;
         _selectedTab = 1; // Cambiar a pestaña Code
       });
     } catch (e) {
@@ -858,6 +1076,148 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
+  /// Resuelve una ruta del agente a un archivo del proyecto (si existe).
+  Future<String?> _resolveAgentPathInProject(String rawPath) async {
+    final trimmed = rawPath.trim().replaceAll('\\', '/');
+    if (trimmed.isEmpty) return null;
+
+    final projectPath =
+        (_currentProjectPath ?? await ProjectService.getProjectPath())
+            ?.replaceAll('\\', '/');
+
+    // Absoluta
+    if (trimmed.startsWith('/')) {
+      if (await File(trimmed).exists()) {
+        // Si está dentro del proyecto, úsala; si no, busca mismo basename.
+        if (projectPath != null && trimmed.startsWith('$projectPath/')) {
+          return trimmed;
+        }
+        final base = trimmed.split('/').last;
+        if (projectPath != null && base.isNotEmpty) {
+          final found = await _findFileByBasename(projectPath, base);
+          if (found != null) return found;
+        }
+        // Fuera del proyecto (p.ej. .pub-cache): abrir igual en editor.
+        return trimmed;
+      }
+    }
+
+    if (projectPath == null) return null;
+
+    // Relativa al proyecto
+    final candidate = '$projectPath/$trimmed';
+    if (await File(candidate).exists()) return candidate;
+
+    // Solo basename → buscar en el proyecto
+    final base = trimmed.split('/').last;
+    if (base.isNotEmpty) {
+      final found = await _findFileByBasename(projectPath, base);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  Future<String?> _findFileByBasename(String root, String basename) async {
+    try {
+      final dir = Directory(root);
+      if (!await dir.exists()) return null;
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        final p = entity.path.replaceAll('\\', '/');
+        if (p.contains('/.') || p.contains('/build/')) continue;
+        if (p.split('/').last == basename) return p;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// El agente está editando/leyendo: abrir Code, saltar a la línea y
+  /// remarcar el archivo en el explorador (efecto intermitente).
+  Future<void> _openFileFromAgentLive(String rawPath, {int? line}) async {
+    final trimmed = rawPath.trim();
+    // path vacío = el agente terminó → quitar pulso del explorador
+    if (trimmed.isEmpty) {
+      if (mounted) setState(() => _agentActivePath = null);
+      return;
+    }
+
+    final resolved = await _resolveAgentPathInProject(trimmed);
+    final highlightPath = resolved ?? trimmed;
+
+    if (mounted) {
+      setState(() {
+        _agentActivePath = highlightPath;
+        _selectedTab = 1; // Code
+      });
+    }
+
+    if (resolved == null || !await File(resolved).exists()) {
+      print('⚠️ Agent live view: archivo no encontrado aún: $trimmed');
+      return;
+    }
+
+    await _handleFileViewCode(resolved, line: line);
+  }
+
+  /// Desde "Compilación fallida" → Ver código: abre el editor sin IA.
+  /// Si hay un error con archivo, salta a esa línea; si no, solo pestaña Code.
+  Future<void> _openCodeEditorFromErrorDialog() async {
+    final errors = _debugService.problemItems
+        .where(
+          (p) =>
+              p.severity == ProblemSeverity.error && p.filePath.trim().isNotEmpty,
+        )
+        .toList();
+    if (errors.isNotEmpty) {
+      await _handleProblemTap(errors.first);
+      return;
+    }
+
+    // Fallback: primer warning con path, o archivo ya abierto / main.dart
+    final withPath = _debugService.problemItems
+        .where((p) => p.filePath.trim().isNotEmpty)
+        .toList();
+    if (withPath.isNotEmpty) {
+      await _handleProblemTap(withPath.first);
+      return;
+    }
+
+    if (_selectedFilePath != null && _selectedFilePath!.isNotEmpty) {
+      setState(() => _selectedTab = 1);
+      return;
+    }
+
+    final projectPath =
+        _currentProjectPath ?? await ProjectService.getProjectPath();
+    if (projectPath != null) {
+      final mainDart = File('$projectPath/lib/main.dart');
+      if (await mainDart.exists()) {
+        await _handleFileViewCode(mainDart.path);
+        return;
+      }
+    }
+
+    setState(() => _selectedTab = 1);
+  }
+
+  /// Abre el archivo de un ProblemItem en el editor en la línea indicada.
+  Future<void> _handleProblemTap(ProblemItem problem) async {
+    if (problem.filePath.isEmpty) return;
+
+    final projectPath = await ProjectService.getProjectPath();
+    final absolutePath = problem.filePath.startsWith('/')
+        ? problem.filePath
+        : (projectPath != null
+            ? '$projectPath/${problem.filePath}'
+            : problem.filePath);
+
+    await _handleFileViewCode(
+      absolutePath,
+      line: problem.line > 0 ? problem.line : null,
+      column: problem.column > 0 ? problem.column : null,
+    );
+  }
+
   /// Muestra la pantalla de configuración de Git
   void _showGitDialog() {
     Navigator.of(context).push(
@@ -867,16 +1227,27 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     );
   }
 
-  /// Muestra información sobre Supabase
-  void _showSupabaseDialog() {
-    showDialog(
+  Future<void> _showSupabaseDialog() async {
+    final projectPath =
+        _currentProjectPath ?? await ProjectService.getProjectPath();
+    if (projectPath == null || projectPath.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay proyecto cargado')),
+      );
+      return;
+    }
+    final result =
+        await BackendProjectInspector.inspectSupabase(projectPath);
+    if (!mounted) return;
+    await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         backgroundColor: CursorTheme.surface,
-        title: Row(
+        title: const Row(
           children: [
             Icon(Icons.cloud, color: CursorTheme.primary, size: 20),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             Text(
               'Supabase',
               style: TextStyle(
@@ -887,42 +1258,68 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             ),
           ],
         ),
-        content: Text(
-          'Supabase es una plataforma de backend como servicio (BaaS) que proporciona:\n\n'
-          '• Base de datos PostgreSQL\n'
-          '• Autenticación\n'
-          '• Almacenamiento de archivos\n'
-          '• Funciones serverless\n\n'
-          'Para conectar tu proyecto con Supabase, configura las credenciales en tu código.',
-          style: TextStyle(color: CursorTheme.textSecondary),
+        content: SizedBox(
+          width: 420,
+          child: _buildBackendInspectionBody(result),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
               'Cerrar',
-              style: TextStyle(color: CursorTheme.textPrimary),
+              style: TextStyle(color: CursorTheme.textSecondary),
             ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _sendMessageToActiveChat(
+                'Configura Supabase en este proyecto Flutter con supabase_flutter.\n'
+                'Estado actual: ${result.statusLabel}.\n'
+                'Evidencia: ${result.evidence.isEmpty ? "(ninguna)" : result.evidence.join(", ")}.\n'
+                'Falta: ${result.missingHints.isEmpty ? "(nada crítico detectado)" : result.missingHints.join(", ")}.\n'
+                'Crea/actualiza dependencias, .env de ejemplo (SUPABASE_URL, SUPABASE_ANON_KEY) '
+                'y un servicio de cliente listo para usar.',
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CursorTheme.primary,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.auto_fix_high, size: 16),
+            label: const Text('Configurar Supabase con Agente IA'),
           ),
         ],
       ),
     );
   }
 
-  /// Muestra información sobre Firebase
-  void _showFirebaseDialog() {
-    showDialog(
+  Future<void> _showFirebaseDialog() async {
+    final projectPath =
+        _currentProjectPath ?? await ProjectService.getProjectPath();
+    if (projectPath == null || projectPath.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay proyecto cargado')),
+      );
+      return;
+    }
+    final result =
+        await BackendProjectInspector.inspectFirebase(projectPath);
+    if (!mounted) return;
+    final hasFirebaseJson = result.evidence.any((e) => e.contains('firebase.json'));
+    await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         backgroundColor: CursorTheme.surface,
-        title: Row(
+        title: const Row(
           children: [
             Icon(
               Icons.local_fire_department,
               color: CursorTheme.primary,
               size: 20,
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             Text(
               'Firebase',
               style: TextStyle(
@@ -933,27 +1330,191 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             ),
           ],
         ),
-        content: Text(
-          'Firebase es una plataforma de Google que proporciona:\n\n'
-          '• Base de datos en tiempo real (Firestore)\n'
-          '• Autenticación\n'
-          '• Almacenamiento de archivos\n'
-          '• Hosting\n'
-          '• Cloud Functions\n\n'
-          'Para conectar tu proyecto con Firebase, configura las credenciales en tu código.',
-          style: TextStyle(color: CursorTheme.textSecondary),
+        content: SizedBox(
+          width: 420,
+          child: _buildBackendInspectionBody(result),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
               'Cerrar',
-              style: TextStyle(color: CursorTheme.textPrimary),
+              style: TextStyle(color: CursorTheme.textSecondary),
             ),
+          ),
+          if (hasFirebaseJson)
+            TextButton.icon(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _runFirebaseDeploy(projectPath);
+              },
+              icon: const Icon(Icons.cloud_upload_outlined, size: 16),
+              label: const Text('Deploy (firebase deploy)'),
+            ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _sendMessageToActiveChat(
+                'Inicializa y configura Firebase en este proyecto Flutter '
+                '(firebase_core, opciones Android/iOS/Web según carpetas presentes).\n'
+                'Estado actual: ${result.statusLabel}.\n'
+                'Project ID detectado: ${result.projectId ?? "(ninguno)"}.\n'
+                'Evidencia: ${result.evidence.isEmpty ? "(ninguna)" : result.evidence.join(", ")}.\n'
+                'Falta: ${result.missingHints.isEmpty ? "(nada crítico detectado)" : result.missingHints.join(", ")}.\n'
+                'Añade dependencias, estructura de config y pasos concretos.',
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CursorTheme.primary,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.auto_fix_high, size: 16),
+            label: const Text('Inicializar Firebase con Agente IA'),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildBackendInspectionBody(BackendInspectionResult result) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(
+                result.configured ? Icons.check_circle : Icons.warning_amber,
+                size: 18,
+                color: result.configured ? Colors.greenAccent : Colors.orange,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  result.statusLabel,
+                  style: TextStyle(
+                    color: result.configured
+                        ? Colors.greenAccent
+                        : Colors.orange,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (result.projectId != null && result.projectId!.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Project ID / URL: ${result.projectId}',
+              style: const TextStyle(
+                color: CursorTheme.textPrimary,
+                fontSize: 12,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          const Text(
+            'Detectado en el proyecto:',
+            style: TextStyle(
+              color: CursorTheme.textPrimary,
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (result.evidence.isEmpty)
+            const Text(
+              '— Nada encontrado',
+              style: TextStyle(color: CursorTheme.textSecondary, fontSize: 12),
+            )
+          else
+            ...result.evidence.map(
+              (e) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '• $e',
+                  style: const TextStyle(
+                    color: CursorTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+          if (result.missingHints.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Falta / sugerido:',
+              style: TextStyle(
+                color: CursorTheme.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 6),
+            ...result.missingHints.map(
+              (e) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '• $e',
+                  style: const TextStyle(
+                    color: CursorTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _runFirebaseDeploy(String projectPath) async {
+    _debugService.showOutputTab();
+    _debugService.addOutput('🔥 Ejecutando: firebase deploy');
+    _debugService.addOutput('📁 cwd: $projectPath');
+    try {
+      final process = await Process.start(
+        'firebase',
+        ['deploy'],
+        workingDirectory: projectPath,
+        runInShell: false,
+      );
+      process.stdout.transform(utf8.decoder).listen((chunk) {
+        for (final line in chunk.split('\n')) {
+          if (line.trim().isEmpty) continue;
+          _debugService.addOutput(line);
+        }
+      });
+      process.stderr.transform(utf8.decoder).listen((chunk) {
+        for (final line in chunk.split('\n')) {
+          if (line.trim().isEmpty) continue;
+          _debugService.addOutput('ERR: $line');
+        }
+      });
+      final code = await process.exitCode;
+      _debugService.addOutput(
+        code == 0
+            ? '✅ firebase deploy terminó OK'
+            : '❌ firebase deploy exit code $code',
+      );
+    } catch (e) {
+      _debugService.addOutput('❌ No se pudo ejecutar firebase deploy: $e');
+      _debugService.addOutput(
+        '💡 Instala Firebase CLI (`npm i -g firebase-tools`) y asegúrate de estar logueado.',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('firebase deploy falló: $e'),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
+    }
   }
 
   /// Obtiene el estado del ChatScreen activo
@@ -1012,8 +1573,57 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
+  /// Hot Reload (⚡) — delega al ChatScreen activo
+  void _handleHotReload() {
+    if (!mounted) return;
+    AppToast.show(
+      context,
+      message: 'Flutter: Hot reloading…',
+      icon: Icons.bolt,
+      loading: true,
+      duration: const Duration(milliseconds: 1200),
+    );
+    final state = _getActiveChatScreenState();
+    if (state != null) {
+      try {
+        (state as dynamic).handleHotReload();
+      } catch (e) {
+        print('❌ Error en _handleHotReload: $e');
+        // Fallback directo al servicio si el chat no expone el método.
+        unawaited(_debugService.requestHotReload());
+      }
+    } else {
+      unawaited(_debugService.requestHotReload());
+    }
+  }
+
+  /// Hot Restart (🔄) — delega al ChatScreen activo
+  void _handleHotRestart() {
+    if (!mounted) return;
+    AppToast.show(
+      context,
+      message: 'Flutter: Hot restarting…',
+      icon: Icons.restart_alt,
+      loading: true,
+      duration: const Duration(milliseconds: 1400),
+    );
+    final state = _getActiveChatScreenState();
+    if (state != null) {
+      try {
+        (state as dynamic).handleHotRestart();
+      } catch (e) {
+        print('❌ Error en _handleHotRestart: $e');
+        unawaited(_debugService.requestHotRestart());
+      }
+    } else {
+      unawaited(_debugService.requestHotRestart());
+    }
+  }
+
   /// Obtiene el estado de running/debugging del ChatScreen activo
   bool _getIsRunning() {
+    if (_debugService.isRunning) return true;
+    if (AdvancedDebuggingService.isRunning) return true;
     final state = _getActiveChatScreenState();
     if (state != null) {
       try {
@@ -1115,7 +1725,22 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       _debugPanelWidth = 0.0;
     }
     
-    return Stack(
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(
+          LogicalKeyboardKey.keyF,
+          meta: true,
+          shift: true,
+        ): _openGlobalSearch,
+        const SingleActivator(
+          LogicalKeyboardKey.keyF,
+          control: true,
+          shift: true,
+        ): _openGlobalSearch,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Stack(
       clipBehavior: Clip
           .none, // Permitir que elementos flotantes se muestren fuera del Stack
       children: [
@@ -1126,11 +1751,26 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         elevation: 0,
         title: Row(
           children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: Image.asset(
+                VoryxelBrandLogo.assetTile,
+                width: 20,
+                height: 20,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.code,
+                  size: 18,
+                  color: CursorTheme.primary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
                 _currentProjectPath != null
                     ? 'Proyecto: ${_currentProjectPath!.split('/').last}'
-                    : 'Lopez Code',
+                    : 'Voryxel Code',
                 style: const TextStyle(
                   color: CursorTheme.textPrimary,
                   fontSize: 13,
@@ -1138,11 +1778,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                 ),
               ),
             ),
-            // ✅ NUEVO: Contador de créditos en el centro (con actualización en tiempo real)
-            _CreditBalanceWidget(),
           ],
         ),
         actions: [
+          const Center(child: _CreditBalanceWidget()),
           // Toggle Emulador
           AnimatedBuilder(
             animation: _platformService,
@@ -1213,54 +1852,35 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           ),
           body: LayoutBuilder(
             builder: (context, constraints) {
-              // Calcular el ancho disponible para el emulador y chat
+              // Anchos que NUNCA deben sumar más que el ancho real del body.
+              // El overflow de ~38px venía de forzar mínimos (emulator 300 + chat 250)
+              // aunque no cupieran: 280+8+300+250 = 838 > ventana ~800.
               final screenWidth = constraints.maxWidth;
-              final dividerWidth = 4.0; // Ancho de cada divisor
-              final minChatWidth = 250.0;
-              final fixedWidth =
-                  _sidebarWidth + dividerWidth + dividerWidth; // Sidebar + divisores
-              final safetyMargin = 40.0; // Margen pequeño para evitar overflow
+              const dividerWidth = 6.0;
+              const softMinChat = 220.0;
+              const softMinCenter = 280.0;
 
-              // Calcular ancho efectivo del emulador
-              final availableForEmulator =
-                  screenWidth - fixedWidth - minChatWidth - safetyMargin;
-              double effectiveEmulatorWidth = 0.0;
-              if (_emulatorVisible) {
-                final maxEmulatorWidth = availableForEmulator.clamp(300.0, 800.0);
-                effectiveEmulatorWidth =
-                    _emulatorPanelWidth.clamp(300.0, maxEmulatorWidth);
-              }
-
-              // Calcular ancho efectivo del chat (siempre fijo y movible por el usuario)
-              // ✅ FIX: Asegurar que no exceda el espacio disponible
-              final availableForChat = screenWidth -
-                  fixedWidth -
-                  (_emulatorVisible ? effectiveEmulatorWidth : 0.0) -
-                  safetyMargin;
-              final maxChatWidth = availableForChat.clamp(minChatWidth, screenWidth);
-              final effectiveChatWidth =
-                  _chatPanelWidth.clamp(minChatWidth, maxChatWidth);
-              
-              // ✅ FIX: Verificar que el ancho total no exceda la pantalla
-              final totalWidth = _sidebarWidth + 
-                  dividerWidth + 
-                  (_emulatorVisible ? effectiveEmulatorWidth : 0.0) + 
-                  dividerWidth + 
-                  effectiveChatWidth;
-              
-              // Ajustar el ancho del chat si excede
-              double finalChatWidth = effectiveChatWidth;
-              if (totalWidth > screenWidth) {
-                final overflow = totalWidth - screenWidth;
-                finalChatWidth = (effectiveChatWidth - overflow).clamp(minChatWidth, maxChatWidth);
-              }
+              final sidebarWidth = _sidebarWidth.clamp(
+                150.0,
+                screenWidth * 0.45,
+              );
+              // Centro (Preview/Code) es Expanded: solo fijamos sidebar + chat.
+              final fixedWidth = sidebarWidth + dividerWidth + dividerWidth;
+              final remaining =
+                  (screenWidth - fixedWidth).clamp(0.0, screenWidth);
+              final maxChat =
+                  (remaining - softMinCenter).clamp(0.0, remaining);
+              final minChat = maxChat >= softMinChat ? softMinChat : 0.0;
+              final finalChatWidth =
+                  _chatPanelWidth.clamp(minChat, maxChat);
 
               return Row(
-                mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar que el Row exceda el ancho
-        children: [
+                children: [
+                  // Usar el sidebar ya clampeado al ancho disponible
+                  // (evita que un drag previo deje un ancho imposible)
           // Panel lateral izquierdo (Explorador)
           Container(
-            width: _sidebarWidth,
+            width: sidebarWidth,
             decoration: BoxDecoration(
               color: CursorTheme.explorerBackground,
               border: Border(
@@ -1276,99 +1896,115 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                 children: [
                   // Barra de herramientas (foto 2)
                   ExplorerToolbar(
-                          selectedIndex: _isSearchMode ? 0 : -1, // ✅ FIX: Mostrar seleccionado solo en modo búsqueda
-                  onItemSelected: (index) {
-                    setState(() {
-                      _selectedToolbarIndex = index;
-                    });
-                  },
-                  onAction: (action) {
-                    _handleToolbarAction(action);
-                  },
-                ),
-                // Listado de carpetas o búsqueda (ProjectExplorer - foto 1)
-                if (_currentProjectPath != null)
-                  Expanded(
-                    child: ProjectExplorer(
-                              key: ValueKey(
-                                '${_currentProjectPath}_${_selectedToolbarIndex}',
-                              ),
-                              mode: _isSearchMode ? 'search' : 'explorer',
-                      onFileSelected: (path) {
-                        print('📁 Archivo seleccionado: $path');
-                      },
-                      onFileDoubleClick: (path) {
-                        print('📁 Doble clic en: $path');
-                        _handleFileViewCode(path);
-                      },
-                      onFileDelete: (path) {
-                        print('📁 Eliminar: $path');
-                      },
-                      onFileViewCode: _handleFileViewCode,
-                      onFileViewScreen: (path) {
-                        print('📁 Ver pantalla: $path');
-                      },
-                      onFileCopy: (path) {
-                        print('📁 Copiar: $path');
-                      },
-                    ),
-                  )
-                else
-                  Expanded(
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.folder_outlined,
-                            size: 48,
-                            color: CursorTheme.textSecondary,
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No hay proyecto seleccionado',
-                            style: TextStyle(
+                    selectedIndex: _sidebarView == 'git'
+                        ? 1
+                        : (_sidebarView == 'search' || _isSearchMode
+                            ? 0
+                            : _selectedToolbarIndex),
+                    onItemSelected: (index) {
+                      setState(() {
+                        _selectedToolbarIndex = index;
+                      });
+                    },
+                    onAction: (action) {
+                      _handleToolbarAction(action);
+                    },
+                  ),
+                  // Source Control (Git) | Search in Files | Explorador
+                  if (_sidebarView == 'git')
+                    Expanded(
+                      child: GitScmPanel(
+                        key: ValueKey('git_scm_$_currentProjectPath'),
+                        projectPath: _currentProjectPath,
+                        onOpenFile: (path) => _handleFileViewCode(path),
+                        onOpenSettings: _showGitDialog,
+                        onGenerateCommitMessage:
+                            OpenAIService.suggestCommitMessage,
+                      ),
+                    )
+                  else if (_sidebarView == 'search' || _isSearchMode)
+                    Expanded(
+                      child: GlobalSearchPanel(
+                        key: ValueKey('global_search_$_currentProjectPath'),
+                        projectPath: _currentProjectPath,
+                        onSelectResult: _handleGlobalSearchResult,
+                      ),
+                    )
+                  else if (_currentProjectPath != null)
+                    Expanded(
+                      child: ProjectExplorer(
+                        key: ValueKey(
+                          '${_currentProjectPath}_${_selectedToolbarIndex}',
+                        ),
+                        mode: 'explorer',
+                        agentActivePath: _agentActivePath,
+                        onFileSelected: (path) {
+                          print('📁 Archivo seleccionado: $path');
+                        },
+                        onFileDoubleClick: (path) {
+                          print('📁 Doble clic en: $path');
+                          _handleFileViewCode(path);
+                        },
+                        onFileDelete: (path) {
+                          // CRUD real lo hace ProjectExplorer; sync UI si el archivo abierto se borró.
+                          if (_selectedFilePath == path) {
+                            setState(() {
+                              _selectedFilePath = null;
+                              _selectedFileContent = null;
+                            });
+                          }
+                        },
+                        onFileViewCode: _handleFileViewCode,
+                        onFileCopy: (_) {},
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.folder_outlined,
+                              size: 48,
                               color: CursorTheme.textSecondary,
-                              fontSize: 14,
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 16),
+                            const Text(
+                              'No hay proyecto seleccionado',
+                              style: TextStyle(
+                                color: CursorTheme.textSecondary,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
               ],
               ),
             ),
           ),
           // Divisor redimensionable entre explorador y contenido principal
-          GestureDetector(
-            onHorizontalDragUpdate: (details) {
+          _buildVerticalResizeHandle(
+            onDrag: (dx) {
               setState(() {
-                // Redimensionar sidebar
-                _sidebarWidth += details.delta.dx;
+                _sidebarWidth += dx;
+                final screenWidth = MediaQuery.of(context).size.width;
+                const minForRest = 200.0 + 6.0 + 6.0;
+                final maxSidebar =
+                    (screenWidth - minForRest).clamp(150.0, 480.0);
                 if (_sidebarWidth < 150) _sidebarWidth = 150;
-                if (_sidebarWidth > 400) _sidebarWidth = 400;
+                if (_sidebarWidth > maxSidebar) {
+                  _sidebarWidth = maxSidebar;
+                }
               });
             },
-            child: MouseRegion(
-              cursor: SystemMouseCursors.resizeColumn,
-              child: Container(
-                width: 4,
-                color: CursorTheme.border,
-                child: Center(
-                  child: Container(
-                    width: 1,
-                    color: CursorTheme.textDisabled,
-                  ),
-                ),
-              ),
-            ),
           ),
-                  // Panel del medio (columna vertical) - Emulador y Debug Console
-                  // El emulador SIEMPRE debe estar visible por defecto
+                  // Panel del medio: Preview/Code — Expanded para crecer al
+                  // arrastrar la barra del chat (sin hueco muerto).
           if (_emulatorVisible)
-                    SizedBox(
-                      width: effectiveEmulatorWidth,
+                    Expanded(
                 child: Container(
               decoration: BoxDecoration(
                 color: CursorTheme.surface,
@@ -1445,30 +2081,16 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                               if (canUseWebInspector)
                                                 Tooltip(
                                                   message: _inspectorMode
-                                                      ? 'Desactivar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)'
-                                                      : 'Activar Inspector\n(Funciona mejor con HTML/CSS. Apps Flutter Web tienen limitaciones)',
+                                                      ? 'Desactivar Inspector\nClic normal = usar la app · Alt/⌘+clic = seleccionar'
+                                                      : 'Activar Inspector\nClic normal = usar la app · Alt/⌘+clic = seleccionar',
                                                   child: GestureDetector(
                                   onTap: () {
                                     setState(() {
-                                                        _inspectorMode =
-                                                            !_inspectorMode;
-                                                      });
-                                                      if (_inspectorMode) {
-                                                        ScaffoldMessenger.of(
-                                                          context,
-                                                        ).showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              '🔍 Inspector activado. Nota: Funciona mejor con apps web HTML/CSS. Apps Flutter Web usan Canvas y tienen limitaciones.',
-                                                            ),
-                                                            duration: Duration(
-                                                              seconds: 4,
-                                                            ),
-                                                            backgroundColor:
-                                                                Colors.orange,
-                                                          ),
-                                                        );
-                                                      }
+                                      _inspectorMode = !_inspectorMode;
+                                      if (!_inspectorMode) {
+                                        _selectedElement = null;
+                                      }
+                                    });
                                   },
                                   child: Container(
                                     width: 44,
@@ -1693,9 +2315,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                               ),
                                               onPressed: () {
                                                 setState(() {
-                                                  if (_emulatorScale > 0.5) {
-                                                    _emulatorScale -= 0.1;
-                                                  }
+                                                  final next =
+                                                      ((_emulatorScale - 0.1) *
+                                                              10)
+                                                          .round() /
+                                                      10;
+                                                  _emulatorScale =
+                                                      next.clamp(0.5, 2.0);
                                                 });
                                               },
                                               tooltip: 'Reducir tamaño',
@@ -1707,7 +2333,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                     horizontal: 6,
                                                   ),
                                               child: Text(
-                                                '${(_emulatorScale * 100).toInt()}%',
+                                                '${(_emulatorScale * 100).round()}%',
                                     style: TextStyle(
                                                   color:
                                                       CursorTheme.textPrimary,
@@ -1730,9 +2356,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                               ),
                                               onPressed: () {
                                                 setState(() {
-                                                  if (_emulatorScale < 2.0) {
-                                                    _emulatorScale += 0.1;
-                                                  }
+                                                  final next =
+                                                      ((_emulatorScale + 0.1) *
+                                                              10)
+                                                          .round() /
+                                                      10;
+                                                  _emulatorScale =
+                                                      next.clamp(0.5, 2.0);
                                                 });
                                               },
                                               tooltip: 'Aumentar tamaño',
@@ -1744,6 +2374,60 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       ),
                     ),
                   ),
+                  // Banner global: siempre visible (Preview o Code) mientras el
+                  // agente trabaja — archivo, línea, o "Compilando…".
+                  if (_agentActivity.isBusy)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      color: const Color(0xFF1A3A5C),
+                      child: Row(
+                        children: [
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: CursorTheme.primary,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _agentActivity.bannerText,
+                              style: const TextStyle(
+                                color: CursorTheme.textPrimary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (_agentActivity.hasFileTarget && _selectedTab != 1)
+                            TextButton(
+                              onPressed: () {
+                                setState(() => _selectedTab = 1);
+                              },
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                foregroundColor: CursorTheme.primary,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text(
+                                'Ver en Code',
+                                style: TextStyle(fontSize: 11),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   // Contenido según la pestaña seleccionada
                   Expanded(
                               child: ClipRect(
@@ -1755,7 +2439,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               ),
             ),
                     ),
-                  // Panel central vacío - mostrar logo cuando el emulador no está visible
+                  // Logo central cuando Preview/Code está oculto
                   if (!_emulatorVisible)
                     Expanded(
                       child: Container(
@@ -1764,42 +2448,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evita altura infinita
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Logo de chevrones azules (igual que en welcome_screen)
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.chevron_left,
-                                    size: 64,
-                                    color: CursorTheme.primary,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Icon(
-                                    Icons.chevron_right,
-                                    size: 64,
-                                    color: CursorTheme.primary,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 20),
-                              const Text(
-                                'LOPEZ CODE',
-                                style: TextStyle(
-                                  color: CursorTheme.textPrimary,
-                                  fontSize: 32,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 3,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              const Text(
-                                'Pro · Settings',
-                                style: TextStyle(
-                                  color: CursorTheme.textSecondary,
-                                  fontSize: 14,
-                                ),
+                              const VoryxelBrandLogo(
+                                iconSize: 96,
+                                fontSize: 32,
                               ),
                               const SizedBox(height: 40),
                               Text(
@@ -1815,61 +2468,33 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                           ),
                         ),
                       ),
-                    )
-                  else
-                    // Spacer para mantener el chat anclado a la derecha cuando el emulador está visible
-                    const Expanded(child: SizedBox.shrink()),
-                  // Divisor redimensionable entre contenido (o espacio vacío) y chat
-          GestureDetector(
-            onHorizontalDragUpdate: (details) {
+                    ),
+                  // Divisor: arrastrar ←→ ajusta el ancho del chat (Code/Preview
+                  // crece automáticamente al ser Expanded).
+          _buildVerticalResizeHandle(
+            onDrag: (dx) {
               setState(() {
-                        // Mismo comportamiento que el divisor del explorador
-                        // El chat está anclado a la derecha:
-                        // Arrastrar hacia la derecha reduce el chat
-                        // Arrastrar hacia la izquierda aumenta el chat
-                        _chatPanelWidth -= details.delta.dx;
-
-                        // Limitar el ancho del chat con el espacio disponible
-                        final screenWidth = MediaQuery.of(context).size.width;
-                        final dividerWidth = 4.0;
-                        final minChatWidth = 250.0;
-                        final fixedWidth =
-                            _sidebarWidth + dividerWidth + dividerWidth;
-                        final safetyMargin = 40.0;
-                        final availableForEmulator =
-                            screenWidth - fixedWidth - minChatWidth - safetyMargin;
-                        final maxEmulatorWidth =
-                            availableForEmulator.clamp(300.0, 800.0);
-                        final effectiveEmulatorWidth = _emulatorVisible
-                            ? _emulatorPanelWidth.clamp(300.0, maxEmulatorWidth)
-                            : 0.0;
-                        final maxChatWidth = (screenWidth -
-                                fixedWidth -
-                                effectiveEmulatorWidth -
-                                safetyMargin)
-                            .clamp(minChatWidth, screenWidth);
-
-                        if (_chatPanelWidth < minChatWidth) {
-                          _chatPanelWidth = minChatWidth;
-                        }
-                        if (_chatPanelWidth > maxChatWidth) {
-                          _chatPanelWidth = maxChatWidth;
+                _chatPanelWidth -= dx;
+                final screenWidth = MediaQuery.of(context).size.width;
+                const dividerWidth = 6.0;
+                const softMinChat = 220.0;
+                const softMinCenter = 280.0;
+                final fixedWidth =
+                    _sidebarWidth + dividerWidth + dividerWidth;
+                final remaining =
+                    (screenWidth - fixedWidth).clamp(0.0, screenWidth);
+                final maxChat =
+                    (remaining - softMinCenter).clamp(0.0, remaining);
+                final minChat =
+                    maxChat >= softMinChat ? softMinChat : 0.0;
+                if (_chatPanelWidth < minChat) {
+                  _chatPanelWidth = minChat;
+                }
+                if (_chatPanelWidth > maxChat) {
+                  _chatPanelWidth = maxChat;
                 }
               });
             },
-            child: MouseRegion(
-              cursor: SystemMouseCursors.resizeColumn,
-              child: Container(
-                width: 4,
-                color: CursorTheme.border,
-                child: Center(
-                  child: Container(
-                    width: 1,
-                    color: CursorTheme.textDisabled,
-                  ),
-                ),
-              ),
-            ),
           ),
                   // Panel de chat con pestañas - ancho fijo y movible
                   // ✅ FIX: Usar SizedBox con ancho calculado para permitir resize
@@ -2088,6 +2713,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                     ),
                     chatId: _activeChatId!,
                     projectPath: _currentProjectPath,
+                    activeFilePath: _selectedFilePath,
+                    activeFileContent: _selectedFileContent,
+                    onViewCode: _openCodeEditorFromErrorDialog,
+                    onAgentOpenFile: _openFileFromAgentLive,
                   )
                 : Center(
                     child: Column(
@@ -2153,6 +2782,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           onDebug: _handleDebug,
           onStop: _handleStop,
           onRestart: _handleRestart,
+          onHotReload: _handleHotReload,
+          onHotRestart: _handleHotRestart,
           onPlatformChanged: (platform) {
           print(
             '🔧 Plataforma seleccionada desde MultiChatScreen: $platform',
@@ -2174,19 +2805,20 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               }
             }
             
-            // Actualizar plataforma en el servicio
+            // Actualizar plataforma en el servicio (única forma desde la UI)
             _platformService.setPlatform(platform);
-            
-            // Limpiar URL si no es web
-            if (platform.toLowerCase() != 'web') {
-              _debugService.setAppUrl(null);
-            }
+
+            // Limpiar Preview al cambiar de target (Android/iOS Preview
+            // también usan URL de web-server; se regenera en el próximo Run).
+            _debugService.setAppUrl(null);
           },
           selectedPlatform: _getSelectedPlatform(),
           isRunning: _getIsRunning(),
           isDebugging: _getIsDebugging(),
         ),
       ],
+        ),
+      ),
     );
   }
 }

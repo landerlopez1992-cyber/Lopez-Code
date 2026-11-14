@@ -2,13 +2,20 @@ import 'package:flutter/material.dart';
 import 'cursor_theme.dart';
 import '../services/debug_console_service.dart';
 
-/// Diálogo modal de confirmación para errores
-/// Reemplaza los SnackBar con una ventana modal más profesional
+/// Diálogo modal de confirmación para errores.
+/// Preferir [showFixWithAIButton] para devolver el diagnóstico al chat.
+/// [showViewCodeButton] abre el editor Code para trabajar sin IA.
 class ErrorConfirmationDialog extends StatelessWidget {
   final String title;
   final String message;
   final bool showViewErrorsButton;
   final VoidCallback? onViewErrors;
+  final bool showFixWithAIButton;
+  final VoidCallback? onFixWithAI;
+  final bool showViewCodeButton;
+  final VoidCallback? onViewCode;
+  final bool showRunOnWebButton;
+  final VoidCallback? onRunOnWeb;
 
   const ErrorConfirmationDialog({
     super.key,
@@ -16,6 +23,12 @@ class ErrorConfirmationDialog extends StatelessWidget {
     required this.message,
     this.showViewErrorsButton = false,
     this.onViewErrors,
+    this.showFixWithAIButton = false,
+    this.onFixWithAI,
+    this.showViewCodeButton = false,
+    this.onViewCode,
+    this.showRunOnWebButton = false,
+    this.onRunOnWeb,
   });
 
   static Future<void> show({
@@ -24,15 +37,27 @@ class ErrorConfirmationDialog extends StatelessWidget {
     required String message,
     bool showViewErrorsButton = false,
     VoidCallback? onViewErrors,
+    bool showFixWithAIButton = false,
+    VoidCallback? onFixWithAI,
+    bool showViewCodeButton = false,
+    VoidCallback? onViewCode,
+    bool showRunOnWebButton = false,
+    VoidCallback? onRunOnWeb,
   }) {
     return showDialog(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) => ErrorConfirmationDialog(
         title: title,
         message: message,
         showViewErrorsButton: showViewErrorsButton,
         onViewErrors: onViewErrors,
+        showFixWithAIButton: showFixWithAIButton,
+        onFixWithAI: onFixWithAI,
+        showViewCodeButton: showViewCodeButton,
+        onViewCode: onViewCode,
+        showRunOnWebButton: showRunOnWebButton,
+        onRunOnWeb: onRunOnWeb,
       ),
     );
   }
@@ -47,7 +72,7 @@ class ErrorConfirmationDialog extends StatelessWidget {
       ),
       title: Row(
         children: [
-          Icon(
+          const Icon(
             Icons.error_outline,
             color: Colors.red,
             size: 24,
@@ -56,24 +81,88 @@ class ErrorConfirmationDialog extends StatelessWidget {
           Expanded(
             child: Text(
               title,
-              style: TextStyle(
+              style: const TextStyle(
                 color: CursorTheme.textPrimary,
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
+          IconButton(
+            tooltip: 'Cerrar',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(
+              Icons.close,
+              size: 18,
+              color: CursorTheme.textSecondary,
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
         ],
       ),
-      content: Text(
-        message,
-        style: TextStyle(
-          color: CursorTheme.textSecondary,
-          fontSize: 14,
-          height: 1.5,
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 280, maxWidth: 480),
+        child: SingleChildScrollView(
+          child: Text(
+            message,
+            style: const TextStyle(
+              color: CursorTheme.textSecondary,
+              fontSize: 14,
+              height: 1.5,
+            ),
+          ),
         ),
       ),
       actions: [
+        if (showRunOnWebButton)
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onRunOnWeb?.call();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2EA043),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            icon: const Icon(Icons.play_arrow, size: 16),
+            label: const Text('Ejecutar en Web Preview'),
+          ),
+        if (showFixWithAIButton)
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onFixWithAI?.call();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CursorTheme.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            icon: const Icon(Icons.auto_fix_high, size: 16),
+            label: const Text('Arreglar con IA'),
+          ),
+        if (showViewCodeButton)
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onViewCode?.call();
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: CursorTheme.textPrimary,
+              side: const BorderSide(color: CursorTheme.border),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            icon: const Icon(Icons.code, size: 16),
+            label: const Text('Ver código'),
+          ),
         if (showViewErrorsButton)
           TextButton(
             onPressed: () {
@@ -81,7 +170,6 @@ class ErrorConfirmationDialog extends StatelessWidget {
               if (onViewErrors != null) {
                 onViewErrors!();
               } else {
-                // Abrir Debug Console por defecto
                 DebugConsoleService().openPanel();
               }
             },
@@ -90,18 +178,14 @@ class ErrorConfirmationDialog extends StatelessWidget {
             ),
             child: const Text('Ver errores'),
           ),
-        ElevatedButton(
+        TextButton(
           onPressed: () {
             Navigator.of(context).pop();
           },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: CursorTheme.primary,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(6),
-            ),
+          style: TextButton.styleFrom(
+            foregroundColor: CursorTheme.textSecondary,
           ),
-          child: const Text('Aceptar'),
+          child: const Text('Cerrar'),
         ),
       ],
     );

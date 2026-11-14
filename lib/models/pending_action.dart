@@ -96,7 +96,8 @@ class PendingAction {
     }
 
     // Operaciones de medio riesgo
-    if (functionName == 'edit_file' || 
+    if (functionName == 'edit_file' ||
+        functionName == 'write_file' ||
         functionName == 'compile_project' ||
         functionName == 'download_file') {
       return 'MEDIUM';
@@ -151,12 +152,20 @@ class PendingAction {
       case 'edit_file':
         final filePath = arguments['file_path'] as String? ?? 'archivo';
         return 'Editar archivo: $filePath';
+      case 'write_file':
+        final filePath = arguments['file_path'] as String? ?? 'archivo';
+        return 'Reescribir archivo completo: $filePath';
       case 'create_file':
         final filePath = arguments['file_path'] as String? ?? 'nuevo archivo';
         return 'Crear archivo: $filePath';
       case 'read_file':
         final filePath = arguments['file_path'] as String? ?? 'archivo';
         return 'Leer archivo: $filePath';
+      case 'grep_search':
+        final query = arguments['query'] as String? ?? 'consulta';
+        return 'Buscar en el proyecto: $query';
+      case 'list_files':
+        return 'Listar estructura del proyecto';
       case 'compile_project':
         final platform = arguments['platform'] as String? ?? 'macos';
         final mode = arguments['mode'] as String? ?? 'debug';
@@ -180,10 +189,16 @@ class PendingAction {
     switch (functionName) {
       case 'edit_file':
         return Icons.edit;
+      case 'write_file':
+        return Icons.edit_document;
       case 'create_file':
         return Icons.add_circle_outline;
       case 'read_file':
         return Icons.visibility;
+      case 'grep_search':
+        return Icons.search;
+      case 'list_files':
+        return Icons.folder_open;
       case 'compile_project':
         return Icons.build;
       case 'execute_command':
@@ -202,6 +217,8 @@ class PendingAction {
     switch (functionName) {
       case 'edit_file':
         return Colors.orange;
+      case 'write_file':
+        return Colors.deepOrange;
       case 'create_file':
         return Colors.green;
       case 'read_file':

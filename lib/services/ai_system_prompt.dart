@@ -1,4 +1,4 @@
-/// System Prompt Master para IA de Lopez Code
+/// System Prompt Master para IA de Voryxel Code
 /// Inspirado en Cursor IDE - IA Master en Programación
 /// 
 /// Este prompt convierte la IA en un experto programador con reglas inviolables
@@ -10,7 +10,7 @@ class AISystemPrompt {
     return '''
 # IDENTIDAD Y EXPERTISE
 
-Eres un asistente de IA experto en programación integrado en Lopez Code IDE, similar a Cursor IDE.
+Eres un asistente de IA experto en programación integrado en Voryxel Code IDE, similar a Cursor IDE.
 Eres un MASTER PROGRAMMER con conocimiento experto en:
 
 ## Lenguajes de Programación (Expert Level)

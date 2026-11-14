@@ -1,9 +1,22 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'cursor_theme.dart';
 import 'model_selector.dart';
 import 'documentation_selector.dart';
 import '../services/settings_service.dart';
+
+/// Modo de interacción del chat estilo Cursor.
+enum ChatAgentMode {
+  /// Puede leer, buscar y editar archivos (tools ON).
+  agent,
+
+  /// Solo responde con el contexto @; no modifica archivos (tools OFF).
+  ask,
+}
 
 class CursorChatInput extends StatefulWidget {
   final TextEditingController controller;
@@ -19,6 +32,10 @@ class CursorChatInput extends StatefulWidget {
   final String? selectedFilePath; // Archivo seleccionado para previsualizar
   final Function(int)? onRemoveImage; // Callback para remover imagen (recibe índice)
   final VoidCallback? onRemoveFile; // Callback para remover archivo
+  /// Imágenes arrastradas / pegadas (rutas locales), estilo Cursor.
+  final ValueChanged<List<String>>? onImagesDropped;
+  final ChatAgentMode chatMode;
+  final ValueChanged<ChatAgentMode>? onChatModeChanged;
 
   const CursorChatInput({
     super.key,
@@ -35,6 +52,9 @@ class CursorChatInput extends StatefulWidget {
     this.selectedFilePath,
     this.onRemoveImage,
     this.onRemoveFile,
+    this.onImagesDropped,
+    this.chatMode = ChatAgentMode.agent,
+    this.onChatModeChanged,
   });
 
   @override
@@ -42,9 +62,22 @@ class CursorChatInput extends StatefulWidget {
 }
 
 class _CursorChatInputState extends State<CursorChatInput> {
-  String _currentModel = 'gpt-4o-mini';
+  String _currentModel = SettingsService.defaultModel;
   bool _autoMode = false;
   OverlayEntry? _overlayEntry;
+  bool _draggingOver = false;
+
+  static const _imageExtensions = {
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.heic',
+    '.tif',
+    '.tiff',
+  };
 
   @override
   void initState() {
@@ -52,13 +85,130 @@ class _CursorChatInputState extends State<CursorChatInput> {
     _loadModel();
   }
 
+  bool _isImagePath(String path) {
+    final lower = path.toLowerCase();
+    return _imageExtensions.any(lower.endsWith);
+  }
+
+  void _safeSetDragging(bool value) {
+    if (!mounted || _draggingOver == value) return;
+    setState(() => _draggingOver = value);
+  }
+
+  void _handleDroppedFiles(DropDoneDetails details) {
+    final paths = <String>[];
+    for (final file in details.files) {
+      final path = file.path;
+      if (path.isEmpty) continue;
+      if (_isImagePath(path) || (file.mimeType?.startsWith('image/') ?? false)) {
+        paths.add(path);
+      }
+    }
+    if (paths.isEmpty) return;
+    // Diferir al siguiente frame: el DropTarget aún está en el árbol;
+    // setState del padre en el mismo tick puede dejar Elements defunct.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onImagesDropped?.call(paths);
+    });
+  }
+
+  /// Guarda bytes de imagen del clipboard como PNG en systemTemp y
+  /// dispara el chip de adjunto vía [onImagesDropped].
+  Future<String?> _savePastedImageBytes(Uint8List bytes) async {
+    if (bytes.isEmpty) return null;
+    // Capturas macOS (Cmd+Ctrl+Shift+4) suelen ser PNG; forzamos .png
+    // salvo que el magic number indique otro formato.
+    final ext = _extensionForImageBytes(bytes);
+    final file = File(
+      '${Directory.systemTemp.path}/pasted_screenshot_'
+      '${DateTime.now().millisecondsSinceEpoch}$ext',
+    );
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
+  }
+
+  String _extensionForImageBytes(Uint8List bytes) {
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF) {
+      return '.jpg';
+    }
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return '.png';
+    }
+    if (bytes.length >= 6 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46) {
+      return '.gif';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return '.webp';
+    }
+    return '.png';
+  }
+
+  /// Cmd/Ctrl+V: ruta de imagen en texto, archivos del pasteboard, o bytes.
+  Future<void> _handleClipboardPasteForImages() async {
+    if (widget.onImagesDropped == null) return;
+
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isNotEmpty) {
+      final path = text.replaceFirst(RegExp(r'^file://'), '');
+      if (_isImagePath(path) && File(path).existsSync()) {
+        widget.onImagesDropped!([path]);
+        return;
+      }
+    }
+
+    try {
+      final files = await Pasteboard.files();
+      final imageFiles = files.where(_isImagePath).where((p) => File(p).existsSync()).toList();
+      if (imageFiles.isNotEmpty) {
+        widget.onImagesDropped!(imageFiles);
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      final imageBytes = await Pasteboard.image;
+      if (imageBytes != null && imageBytes.isNotEmpty) {
+        final saved = await _savePastedImageBytes(imageBytes);
+        if (saved != null) {
+          widget.onImagesDropped!([saved]);
+        }
+      }
+    } catch (e) {
+      print('⚠️ Pasteboard image paste failed: $e');
+    }
+  }
+
   Future<void> _loadModel() async {
+    // getSelectedModel migra defaults viejos → gpt-4.1
     final model = await SettingsService.getSelectedModel();
     final autoMode = await SettingsService.getAutoMode();
+    if (!mounted) return;
     setState(() {
       _currentModel = model;
       _autoMode = autoMode;
     });
+    // Sincronizar OpenAIService / prefs si venía el default legacy
+    widget.onModelChanged?.call(model);
   }
 
   void _showModelSelector() {
@@ -121,12 +271,17 @@ class _CursorChatInputState extends State<CursorChatInput> {
                     _closeOverlay(); // Cerrar el overlay después de seleccionar
                   },
                   onAutoChanged: (auto) async {
-                    setState(() {
-                      _autoMode = auto;
-                    });
+                    if (mounted) {
+                      setState(() {
+                        _autoMode = auto;
+                      });
+                    }
                     await SettingsService.saveAutoMode(auto);
-                    // Recalcular posición del overlay cuando cambia Auto
-                    _overlayEntry?.markNeedsBuild();
+                    // Recalcular overlay solo si sigue montado e insertado
+                    final entry = _overlayEntry;
+                    if (mounted && entry != null && entry.mounted) {
+                      entry.markNeedsBuild();
+                    }
                   },
                 ),
               ),
@@ -234,20 +389,63 @@ class _CursorChatInputState extends State<CursorChatInput> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return DropTarget(
+      enable: mounted,
+      onDragEntered: (_) => _safeSetDragging(true),
+      onDragExited: (_) => _safeSetDragging(false),
+      onDragDone: (details) {
+        _safeSetDragging(false);
+        _handleDroppedFiles(details);
+      },
+      child: GestureDetector(
       onTap: _closeOverlay,
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: CursorTheme.surface,
+          color: _draggingOver
+              ? CursorTheme.primary.withOpacity(0.08)
+              : CursorTheme.surface,
           border: Border(
-            top: BorderSide(color: CursorTheme.border, width: 1),
+            top: BorderSide(
+              color: _draggingOver ? CursorTheme.primary : CursorTheme.border,
+              width: _draggingOver ? 2 : 1,
+            ),
           ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_draggingOver) ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: CursorTheme.primary.withOpacity(0.6),
+                    width: 1.5,
+                  ),
+                  color: CursorTheme.primary.withOpacity(0.12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.image_outlined, size: 16, color: CursorTheme.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Suelta la imagen aquí para adjuntarla al chat',
+                      style: TextStyle(
+                        color: CursorTheme.primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             // Previsualización de imágenes/archivos (si hay)
             if (widget.selectedImages != null && widget.selectedImages!.isNotEmpty) ...[
               Container(
@@ -365,30 +563,45 @@ class _CursorChatInputState extends State<CursorChatInput> {
                   width: 1,
                 ),
               ),
-              child: TextField(
-                controller: widget.controller,
-                style: const TextStyle(
-                  color: CursorTheme.textPrimary,
-                  fontSize: 13,
-                  height: 1.5,
-                ),
-                maxLines: null,
-                minLines: 1,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => widget.onSend(),
-                onTap: _closeOverlay,
-                decoration: InputDecoration(
-                  hintText: widget.placeholder ?? 'Plan, @ for context, / for commands',
-                  hintStyle: TextStyle(
-                    color: CursorTheme.textDisabled.withOpacity(0.7),
+              child: Focus(
+                onKeyEvent: (node, event) {
+                  // Cmd/Ctrl+V: ruta de imagen, archivos, o bytes (captura macOS).
+                  if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                  final isPaste = (HardwareKeyboard.instance.isMetaPressed ||
+                          HardwareKeyboard.instance.isControlPressed) &&
+                      event.logicalKey == LogicalKeyboardKey.keyV;
+                  if (!isPaste || widget.onImagesDropped == null) {
+                    return KeyEventResult.ignored;
+                  }
+                  _handleClipboardPasteForImages();
+                  return KeyEventResult.ignored; // no bloquear pegar texto
+                },
+                child: TextField(
+                  controller: widget.controller,
+                  style: const TextStyle(
+                    color: CursorTheme.textPrimary,
                     fontSize: 13,
+                    height: 1.5,
                   ),
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
+                  maxLines: null,
+                  minLines: 1,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => widget.onSend(),
+                  onTap: _closeOverlay,
+                  decoration: InputDecoration(
+                    hintText: widget.placeholder ??
+                        'Plan, @ for context, / for commands',
+                    hintStyle: TextStyle(
+                      color: CursorTheme.textDisabled.withOpacity(0.7),
+                      fontSize: 13,
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    isDense: true,
                   ),
-                  isDense: true,
                 ),
               ),
             ),
@@ -405,6 +618,11 @@ class _CursorChatInputState extends State<CursorChatInput> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // Selector Agent / Ask (estilo Cursor)
+                        _buildModeSelector(),
+
+                        const SizedBox(width: 8),
+
                         // Selector de modelo (estilo Cursor - pill button)
                         Material(
                           color: Colors.transparent,
@@ -602,6 +820,61 @@ class _CursorChatInputState extends State<CursorChatInput> {
           ],
         ),
       ),
+    ),
+    );
+  }
+
+  Widget _buildModeSelector() {
+    final isAgent = widget.chatMode == ChatAgentMode.agent;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: widget.onChatModeChanged == null
+            ? null
+            : () {
+                final next = isAgent ? ChatAgentMode.ask : ChatAgentMode.agent;
+                widget.onChatModeChanged!(next);
+              },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isAgent
+                ? CursorTheme.primary.withOpacity(0.15)
+                : CursorTheme.background.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isAgent
+                  ? CursorTheme.primary.withOpacity(0.45)
+                  : CursorTheme.border.withOpacity(0.3),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isAgent ? Icons.smart_toy_outlined : Icons.chat_bubble_outline,
+                size: 14,
+                color: isAgent
+                    ? CursorTheme.primary
+                    : CursorTheme.textSecondary.withOpacity(0.8),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                isAgent ? 'Agent' : 'Ask',
+                style: TextStyle(
+                  color: isAgent
+                      ? CursorTheme.primary
+                      : CursorTheme.textSecondary.withOpacity(0.9),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -611,6 +884,10 @@ class _CursorChatInputState extends State<CursorChatInput> {
         return 'GPT-4o Mini';
       case 'gpt-4o':
         return 'GPT-4o';
+      case 'gpt-4.1':
+        return 'GPT-4.1';
+      case 'o4-mini':
+        return 'o4-mini';
       case 'gpt-4-turbo':
         return 'GPT-4 Turbo';
       case 'gpt-4':

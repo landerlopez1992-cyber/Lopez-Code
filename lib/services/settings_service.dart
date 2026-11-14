@@ -51,9 +51,29 @@ class SettingsService {
     await prefs.setString(_selectedModelKey, model);
   }
 
+  /// Modelo por defecto del agente: GPT-4.1 (mejor razonamiento + tool-calling).
+  static const String defaultModel = 'gpt-4.1';
+
+  /// Defaults antiguos que migran a [defaultModel] al cargar.
+  static const Set<String> _legacyWeakModels = {
+    'gpt-4o-mini',
+    'gpt-3.5-turbo',
+    'gpt-4o', // default previo → 4.1
+  };
+
   static Future<String> getSelectedModel() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_selectedModelKey) ?? 'gpt-4o-mini'; // Por defecto el más económico
+    final saved = prefs.getString(_selectedModelKey);
+    if (saved == null || saved.isEmpty) {
+      await prefs.setString(_selectedModelKey, defaultModel);
+      return defaultModel;
+    }
+    // Migración one-shot hacia gpt-4.1
+    if (_legacyWeakModels.contains(saved)) {
+      await prefs.setString(_selectedModelKey, defaultModel);
+      return defaultModel;
+    }
+    return saved;
   }
 
   // Modo Auto

@@ -106,7 +106,7 @@ class PermissionService {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Lopez Code necesita acceso a tus archivos para poder:',
+                'Voryxel Code necesita acceso a tus archivos para poder:',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -161,7 +161,7 @@ class PermissionService {
                       style: TextStyle(color: Colors.white70, fontSize: 12),
                     ),
                     Text(
-                      '2. Busca "Lopez Code" en la lista',
+                      '2. Busca "Voryxel Code" en la lista',
                       style: TextStyle(color: Colors.white70, fontSize: 12),
                     ),
                     Text(

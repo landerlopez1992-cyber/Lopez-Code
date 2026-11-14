@@ -20,13 +20,13 @@ class ExplorerToolbar extends StatelessWidget {
     final items = [
       {
         'icon': Icons.search_outlined,
-        'tooltip': 'Buscar archivos',
+        'tooltip': 'Search in Files (⌘⇧F / Ctrl+Shift+F)',
         'selectedIcon': Icons.search,
         'action': 'search',
       },
       {
         'icon': Icons.source_outlined,
-        'tooltip': 'Git (Commit & Push)',
+        'tooltip': 'Source Control (Git)',
         'selectedIcon': Icons.source,
         'action': 'git',
       },

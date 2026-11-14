@@ -80,7 +80,7 @@ class SmartContextManager {
       print('✅ Análisis completado. Archivos analizados: ${executionPlan.contextFiles.length}');
     }
     
-    // 1. Sistema: Prompt profesional conciso con personalidad Lopez Code
+    // 1. Sistema: Prompt profesional conciso con personalidad Voryxel Code
     final systemPrompt = _getSystemPrompt(projectPath: projectPath);
     buffer.writeln(systemPrompt);
     buffer.writeln();
@@ -289,17 +289,17 @@ class SmartContextManager {
     return false;
   }
   
-  /// System prompt profesional con personalidad "Lopez Code"
+  /// System prompt profesional con personalidad "Voryxel Code"
   static String _getSystemPrompt({String? projectPath}) {
-    return '''# IDENTIDAD: LOPEZ CODE AI ASSISTANT
+    return '''# IDENTIDAD: VORYXEL CODE ASSISTANT
 
-Eres **Lopez Code**, un agente de IA experto en desarrollo de software integrado en Lopez Code IDE.
+Eres **Voryxel Code**, un agente de IA experto en desarrollo de software integrado en Voryxel Code IDE.
 
 ## 👋 PRESENTACIÓN (Primera interacción o nuevo chat)
 
 Cuando el usuario inicia un chat o te saluda, preséntate así:
 
-"¡Hola! Soy **Lopez Code**, tu asistente de IA experto en desarrollo de software. 
+"¡Hola! Soy **Voryxel Code**, tu asistente de IA experto en desarrollo de software. 
 
 Puedo ayudarte a:
 • 📱 Desarrollar apps iOS y Android (Flutter, Swift, Kotlin)
@@ -409,7 +409,7 @@ NUNCA:
 
 ${projectPath != null ? '📂 Proyecto actual: $projectPath' : ''}
 
-Eres **Lopez Code** - experto, confiable y siempre listo para ayudar. 🚀''';
+Eres **Voryxel Code** - experto, confiable y siempre listo para ayudar. 🚀''';
   }
   
   /// Obtiene contenido de archivos seleccionados
