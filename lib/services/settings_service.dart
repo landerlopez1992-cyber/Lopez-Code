@@ -114,7 +114,15 @@ class SettingsService {
     await prefs.setString(_apiKeyKey, apiKey);
   }
 
+  /// API Key interna (NO se muestra al usuario final).
+  /// Prioridad: `--dart-define=OPENAI_API_KEY=...` → prefs del desarrollador.
   static Future<String?> getApiKey() async {
+    const fromDefine = String.fromEnvironment('OPENAI_API_KEY');
+    if (fromDefine.isNotEmpty) return fromDefine;
+
+    final env = Platform.environment['OPENAI_API_KEY'];
+    if (env != null && env.isNotEmpty) return env;
+
     await migrateLegacyMacPrefsIfNeeded();
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_apiKeyKey);

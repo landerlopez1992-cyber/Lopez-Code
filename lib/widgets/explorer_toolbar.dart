@@ -19,6 +19,12 @@ class ExplorerToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = [
       {
+        'icon': Icons.widgets_outlined,
+        'tooltip': 'UI Builder — arrastrar al Preview',
+        'selectedIcon': Icons.widgets,
+        'action': 'ui_builder',
+      },
+      {
         'icon': Icons.search_outlined,
         'tooltip': 'Search in Files (⌘⇧F / Ctrl+Shift+F)',
         'selectedIcon': Icons.search,

@@ -22,6 +22,7 @@ import 'agent_diff_review_service.dart';
 import 'inspector_selection_service.dart';
 import 'project_platform_support.dart';
 import 'env_connections_service.dart';
+import 'model_pricing.dart';
 
 typedef AgentStepProgressCallback = void Function(
   String statusText, {
@@ -84,8 +85,8 @@ class OpenAIService {
   // Callback para acciones pendientes que requieren confirmación
   Function(List<Map<String, dynamic>> pendingActions)? onPendingActions;
 
-  // ✅ NUEVO: Callback para tokens usados
-  Function(int)? onTokensUsed;
+  // Callback de usage real (prompt/completion/total + modelo efectivo).
+  void Function(TokenUsage usage)? onTokensUsed;
 
   /// Progreso de pasos del Agent Loop (timeline + tarjetas tipo Cursor).
   AgentStepProgressCallback? onStepProgress;
@@ -1665,11 +1666,10 @@ Sugerencias:
           );
         }
         final usage = chunk['usage'];
-        final totalTokens = usage is Map
-            ? (usage['total_tokens'] as num?)?.toInt()
-            : null;
-        if (totalTokens != null) {
-          onTokensUsed?.call(totalTokens);
+        if (usage is Map) {
+          onTokensUsed?.call(
+            TokenUsage.fromApiUsage(usage, model: model),
+          );
         }
 
         final choices = chunk['choices'] as List<dynamic>?;
@@ -2304,8 +2304,8 @@ Sugerencias:
       if (response.statusCode != 200) return fallback;
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map;
       final usage = data['usage'];
-      if (usage is Map && usage['total_tokens'] is num) {
-        onTokensUsed?.call((usage['total_tokens'] as num).toInt());
+      if (usage is Map) {
+        onTokensUsed?.call(TokenUsage.fromApiUsage(usage, model: model));
       }
       final text = ((data['choices'] as List?)?.firstOrNull as Map?)?['message']
           ?['content'] as String?;
@@ -2732,7 +2732,7 @@ Sugerencias:
     onFileOperation, // Callback para operaciones de archivos
     Function(List<Map<String, dynamic>> pendingActions)?
     onPendingActions, // Callback para acciones pendientes
-    Function(int)? onTokensUsed, // ✅ NUEVO: Callback para tokens usados
+    void Function(TokenUsage usage)? onTokensUsed,
     Function(String partialText)? onStreamChunk,
     AgentStepProgressCallback? onStepProgress,
     Future<String> Function(
@@ -3197,15 +3197,17 @@ Sugerencias:
         final data = jsonDecode(utf8.decode(response.bodyBytes));
         final message = data['choices'][0]['message'];
 
-        // ✅ NUEVO: Obtener tokens usados para sistema de créditos
-        int? totalTokens;
-        if (data['usage'] != null) {
-          totalTokens = data['usage']['total_tokens'] as int?;
-          print('📊 Tokens usados: $totalTokens');
-          // Notificar tokens usados
-          if (totalTokens != null && onTokensUsed != null) {
-            onTokensUsed(totalTokens);
-          }
+        if (data['usage'] is Map) {
+          final usage = TokenUsage.fromApiUsage(
+            data['usage'] as Map,
+            model: model,
+          );
+          print(
+            '📊 Tokens: prompt=${usage.promptTokens} '
+            'completion=${usage.completionTokens} '
+            'total=${usage.totalTokens} model=${usage.model}',
+          );
+          onTokensUsed?.call(usage);
         }
 
         // Verificar si la IA quiere llamar a una función

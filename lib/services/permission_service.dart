@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import '../widgets/app_toast.dart';
 
 class PermissionService {
   static const String _permissionRequestedKey = 'file_permission_requested';
@@ -232,23 +233,11 @@ class PermissionService {
                 await markPermissionGranted();
                 if (context.mounted) {
                   Navigator.of(context).pop(true);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('✅ Permisos otorgados correctamente'),
-                      backgroundColor: Colors.green,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
+                  AppToast.success(context, '✅ Permisos otorgados correctamente');
                 }
               } else {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('⚠️ Aún no se han otorgado permisos. Por favor, activa los permisos en Configuración.'),
-                      backgroundColor: Colors.orange,
-                      duration: Duration(seconds: 3),
-                    ),
-                  );
+                  AppToast.warning(context, '⚠️ Aún no se han otorgado permisos. Por favor, activa los permisos en Configuración.');
                 }
               }
             },

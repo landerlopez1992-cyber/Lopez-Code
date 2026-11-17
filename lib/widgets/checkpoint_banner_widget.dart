@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/chat_checkpoint.dart';
 import '../services/checkpoint_service.dart';
 import 'cursor_theme.dart';
+import 'app_toast.dart';
 
 /// Banner compacto estilo Cursor para restaurar un checkpoint con 1 clic.
 ///
@@ -333,25 +334,11 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
         _restoring = false;
       });
       widget.onRestored?.call();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Checkpoint restaurado ($_fileCount archivo(s))',
-          ),
-          backgroundColor: CursorTheme.surface,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.info(context, 'Checkpoint restaurado ($_fileCount archivo(s))');
     } catch (e) {
       if (!mounted) return;
       setState(() => _restoring = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al restaurar: $e'),
-          backgroundColor: Colors.red.shade800,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Error al restaurar: $e');
     }
   }
 }

@@ -53,12 +53,29 @@ class _MessageBubbleState extends State<MessageBubble> {
   bool _hovered = false;
   bool _expandedLong = false;
   static const int _collapseAfterChars = 2800;
+  /// Burbuja azul del usuario: corta agresivo para no comerse el chat.
+  static const int _userCollapseAfterChars = 140;
 
   Message get message => widget.message;
+
+  bool _userMessageIsCollapsible(String body) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) return false;
+    return trimmed.length > _userCollapseAfterChars ||
+        trimmed.contains('\n');
+  }
+
+  String _userCollapsedPreview(String body) {
+    final firstLine = body.trim().split('\n').first.trim();
+    if (firstLine.length <= _userCollapseAfterChars) return firstLine;
+    return '${firstLine.substring(0, _userCollapseAfterChars).trimRight()}…';
+  }
 
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == 'user';
+    final userCollapsible =
+        isUser && _userMessageIsCollapsible(message.content);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -79,23 +96,52 @@ class _MessageBubbleState extends State<MessageBubble> {
                 children: [
                   Stack(
                     children: [
-                      Container(
-                        width: isUser ? null : double.infinity,
-                        constraints: const BoxConstraints(maxWidth: 900),
-                        padding: EdgeInsets.fromLTRB(
-                          isUser ? 14 : 4,
-                          isUser ? 10 : 2,
-                          isUser ? 36 : 28,
-                          isUser ? 10 : 2,
-                        ),
-                        decoration: isUser
-                            ? BoxDecoration(
-                                color: CursorTheme.userMessageBg,
-                                borderRadius: BorderRadius.circular(8),
-                              )
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: userCollapsible
+                            ? () => setState(
+                                  () => _expandedLong = !_expandedLong,
+                                )
                             : null,
-                        child: _buildMessageContent(context, isUser),
+                        child: AnimatedSize(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          alignment: Alignment.topLeft,
+                          child: Container(
+                            width: isUser ? null : double.infinity,
+                            constraints: const BoxConstraints(maxWidth: 900),
+                            padding: EdgeInsets.fromLTRB(
+                              isUser ? 14 : 4,
+                              isUser ? 10 : 2,
+                              isUser
+                                  ? (userCollapsible ? 44 : 36)
+                                  : 28,
+                              isUser ? 10 : 2,
+                            ),
+                            decoration: isUser
+                                ? BoxDecoration(
+                                    color: CursorTheme.userMessageBg,
+                                    borderRadius: BorderRadius.circular(8),
+                                  )
+                                : null,
+                            child: _buildMessageContent(context, isUser),
+                          ),
+                        ),
                       ),
+                      if (userCollapsible)
+                        Positioned(
+                          top: 6,
+                          right: 28,
+                          child: IgnorePointer(
+                            child: Icon(
+                              _expandedLong
+                                  ? Icons.expand_less
+                                  : Icons.expand_more,
+                              size: 18,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
                       Positioned(
                         top: isUser ? 6 : 0,
                         right: isUser ? 6 : 0,
@@ -288,10 +334,20 @@ class _MessageBubbleState extends State<MessageBubble> {
                 ? _splitTimelineAndBody(raw)
                 : (steps: const <String>[], body: raw);
             final bodyRaw = split.body;
-            final isLong = bodyRaw.length > _collapseAfterChars;
-            final shown = (!isLong || _expandedLong)
-                ? bodyRaw
-                : '${bodyRaw.substring(0, _collapseAfterChars)}\n\n…';
+            final userCollapsible =
+                isUser && _userMessageIsCollapsible(bodyRaw);
+            final assistantLong = !isUser &&
+                bodyRaw.length > _collapseAfterChars;
+            final isCollapsible = userCollapsible || assistantLong;
+            final String shown;
+            if (!isCollapsible || _expandedLong) {
+              shown = bodyRaw;
+            } else if (userCollapsible) {
+              shown = _userCollapsedPreview(bodyRaw);
+            } else {
+              shown =
+                  '${bodyRaw.substring(0, _collapseAfterChars)}\n\n…';
+            }
             final live = message.liveSteps;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -321,7 +377,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                   ),
                 if (shown.isNotEmpty)
                   ..._buildBodySegments(context, shown, isUser),
-                if (isLong)
+                if (assistantLong)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: GestureDetector(
@@ -331,13 +387,23 @@ class _MessageBubbleState extends State<MessageBubble> {
                         _expandedLong
                             ? 'Mostrar menos'
                             : 'Mostrar más (${bodyRaw.length} chars)',
-                        style: TextStyle(
-                          color: isUser
-                              ? Colors.white70
-                              : CursorTheme.primary,
+                        style: const TextStyle(
+                          color: CursorTheme.primary,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
+                      ),
+                    ),
+                  ),
+                if (userCollapsible && !_expandedLong)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Clic para expandir',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),
@@ -1364,11 +1430,36 @@ class _CursorLiveStepCard extends StatefulWidget {
 }
 
 class _CursorLiveStepCardState extends State<_CursorLiveStepCard> {
-  bool _expanded = true;
+  /// Recogida por defecto: el lápiz / header abre el diff (ahorra espacio).
+  late bool _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    // Mientras corre, se ve el progreso; al terminar queda recogida.
+    _expanded = widget.step.running;
+  }
+
+  @override
+  void didUpdateWidget(covariant _CursorLiveStepCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Al pasar de running → listo: recoger (el usuario abre con clic).
+    if (oldWidget.step.running && !widget.step.running && _expanded) {
+      _expanded = false;
+    }
+    // Si sigue corriendo y llega el preview, mantener abierta.
+    if (widget.step.running && !_expanded) {
+      _expanded = true;
+    }
+  }
 
   bool get _hasBody =>
       widget.step.previewLines.isNotEmpty ||
       (widget.step.output != null && widget.step.output!.trim().isNotEmpty);
+
+  bool get _isFileEdit =>
+      widget.step.kind == AgentLiveStepKind.edit ||
+      widget.step.kind == AgentLiveStepKind.create;
 
   IconData get _headerIcon {
     switch (widget.step.kind) {
@@ -1390,12 +1481,34 @@ class _CursorLiveStepCardState extends State<_CursorLiveStepCard> {
     }
   }
 
+  void _onHeaderTap() {
+    final step = widget.step;
+    final path = step.filePath;
+
+    if (_hasBody) {
+      final willExpand = !_expanded;
+      setState(() => _expanded = willExpand);
+      // Al abrir un edit: también abre el archivo en Code (el diff del chat).
+      if (willExpand &&
+          _isFileEdit &&
+          path != null &&
+          path.isNotEmpty &&
+          widget.onOpenFile != null) {
+        widget.onOpenFile!(path);
+      }
+      return;
+    }
+
+    if (path != null && path.isNotEmpty && widget.onOpenFile != null) {
+      widget.onOpenFile!(path);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final step = widget.step;
     final stats = step.statsLabel;
-    final showDiff = step.kind == AgentLiveStepKind.edit ||
-        step.kind == AgentLiveStepKind.create;
+    final showDiff = _isFileEdit;
 
     return Container(
       decoration: BoxDecoration(
@@ -1410,11 +1523,10 @@ class _CursorLiveStepCardState extends State<_CursorLiveStepCard> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InkWell(
-            onTap: _hasBody
-                ? () => setState(() => _expanded = !_expanded)
-                : (step.filePath != null && widget.onOpenFile != null
-                    ? () => widget.onOpenFile!(step.filePath!)
-                    : null),
+            onTap: (_hasBody ||
+                    (step.filePath != null && widget.onOpenFile != null))
+                ? _onHeaderTap
+                : null,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Row(

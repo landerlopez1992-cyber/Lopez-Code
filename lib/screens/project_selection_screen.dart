@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import '../services/project_service.dart';
+import '../widgets/app_toast.dart';
 
 class ProjectSelectionScreen extends StatelessWidget {
   const ProjectSelectionScreen({super.key});
@@ -21,12 +22,7 @@ class ProjectSelectionScreen extends StatelessWidget {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al seleccionar proyecto: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al seleccionar proyecto: $e');
       }
     }
   }

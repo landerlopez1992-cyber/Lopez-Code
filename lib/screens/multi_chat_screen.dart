@@ -12,12 +12,15 @@ import '../widgets/explorer_toolbar.dart';
 import '../widgets/project_explorer.dart';
 import '../widgets/global_search_panel.dart';
 import '../widgets/git_scm_panel.dart';
+import '../widgets/ui_builder_panel.dart';
+import '../widgets/ui_builder_properties_panel.dart';
 import 'git_settings_screen.dart';
 import '../widgets/debug_console_panel.dart';
 import '../widgets/phone_emulator.dart';
 import '../widgets/code_editor_panel.dart';
 import '../models/inspector_element.dart';
 import '../models/problem_item.dart';
+import '../models/ui_builder_component.dart';
 import '../services/project_service.dart';
 import '../services/file_service.dart';
 import '../services/chat_storage_service.dart';
@@ -25,11 +28,14 @@ import '../services/debug_console_service.dart';
 import '../services/advanced_debugging_service.dart';
 import '../services/platform_service.dart';
 import '../services/devtools_service.dart';
+import '../services/auth_service.dart';
 import '../services/credit_service.dart';
 import '../services/openai_service.dart';
 import '../services/backend_project_inspector.dart';
 import '../services/agent_activity_service.dart';
 import '../services/inspector_selection_service.dart';
+import '../services/ui_builder_insert_service.dart';
+import '../services/ui_builder_edit_service.dart';
 import '../widgets/run_debug_toolbar.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/inspector_monitor_panel.dart';
@@ -50,11 +56,14 @@ class _CreditBalanceWidget extends StatefulWidget {
 class _CreditBalanceWidgetState extends State<_CreditBalanceWidget> {
   double _balance = 0.0;
   bool _hover = false;
+  bool _signedIn = false;
   Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
+    _signedIn = AuthService.instance.isSignedIn;
+    AuthService.instance.addListener(_onAuthChanged);
     _loadBalance();
     _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted) _loadBalance();
@@ -63,8 +72,15 @@ class _CreditBalanceWidgetState extends State<_CreditBalanceWidget> {
 
   @override
   void dispose() {
+    AuthService.instance.removeListener(_onAuthChanged);
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (!mounted) return;
+    setState(() => _signedIn = AuthService.instance.isSignedIn);
+    _loadBalance();
   }
 
   Future<void> _loadBalance() async {
@@ -92,7 +108,9 @@ class _CreditBalanceWidgetState extends State<_CreditBalanceWidget> {
     return Padding(
       padding: const EdgeInsets.only(right: 4),
       child: Tooltip(
-        message: 'Abrir billetera',
+        message: _signedIn
+            ? 'Billetera de tu cuenta'
+            : 'Anónimo · sin saldo de cuenta. Inicia sesión para recargar',
         waitDuration: const Duration(milliseconds: 400),
         child: MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
@@ -134,6 +152,17 @@ class _CreditBalanceWidgetState extends State<_CreditBalanceWidget> {
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
+                  if (!_signedIn) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      'anon',
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary.withValues(alpha: 0.9),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 2),
                   const Icon(
                     Icons.chevron_right,
@@ -219,7 +248,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   double _chatPanelWidth = 400.0; // Ancho inicial del panel de chat
   int _selectedToolbarIndex = -1; // -1 = ninguna acción del toolbar activa
   bool _isSearchMode = false; // Modo búsqueda activo
-  /// Vista del sidebar: explorer | git | search (Search in Files)
+  /// Vista del sidebar: explorer | git | search | ui_builder
   String _sidebarView = 'explorer';
   bool _emulatorVisible = true; // Emulador visible por defecto
   double _emulatorScale =
@@ -233,6 +262,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   int? _selectedFileColumn;
   /// Archivo que el agente está tocando ahora (resalte intermitente en explorer).
   String? _agentActivePath;
+  /// Highlight del Preview mientras se arrastra un componente UI Builder.
+  bool _uiBuilderDropHover = false;
+  /// Última posición global del puntero durante un drag del UI Builder.
+  Offset? _uiBuilderPointerGlobal;
+  final GlobalKey<PhoneEmulatorState> _previewKey =
+      GlobalKey<PhoneEmulatorState>();
 
   String? _lastProjectPath; // Para detectar cambios
   final DebugConsoleService _debugService = DebugConsoleService();
@@ -255,6 +290,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     _previewProgress = _debugService.compilationProgress;
     _previewStatus = _debugService.compilationStatus;
     _previewNonce = _debugService.previewReloadNonce;
+    _previewReloadHard = _debugService.previewReloadHard;
     // Escuchar cambios en el servicio de debug console
     _debugService.addListener(_onDebugServiceChanged);
     _platformService.addListener(_onPlatformChanged);
@@ -312,6 +348,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   double _previewProgress = 0.0;
   String _previewStatus = '';
   int _previewNonce = 0;
+  bool _previewReloadHard = true;
 
   void _onDebugServiceChanged() {
     if (!mounted) return;
@@ -321,6 +358,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     final progress = _debugService.compilationProgress;
     final status = _debugService.compilationStatus;
     final nonce = _debugService.previewReloadNonce;
+    final reloadHard = _debugService.previewReloadHard;
     final visible = _debugService.isVisible;
 
     if (url == null || url.isEmpty) {
@@ -336,7 +374,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         running != _previewRunning ||
         progress != _previewProgress ||
         status != _previewStatus ||
-        nonce != _previewNonce;
+        nonce != _previewNonce ||
+        reloadHard != _previewReloadHard;
     final panelChanged = (visible && _debugPanelWidth == 0) ||
         (!visible && _debugPanelWidth > 0);
     final hasWebView = url != null && url.isNotEmpty;
@@ -353,6 +392,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       _previewProgress = progress;
       _previewStatus = status;
       _previewNonce = nonce;
+      _previewReloadHard = reloadHard;
       if (visible && _debugPanelWidth == 0) {
         _debugPanelWidth = 350.0;
       } else if (!visible && _debugPanelWidth > 0) {
@@ -420,15 +460,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       
       // Mostrar mensaje al usuario
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No hay proyecto seleccionado. Por favor, selecciona un proyecto.',
-            ),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
-          ),
-        );
+        AppToast.warning(context, 'No hay proyecto seleccionado. Por favor, selecciona un proyecto.');
       }
       
       // No crear chat si no hay proyecto
@@ -697,7 +729,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       required double height,
                     }) {
                       return PhoneEmulator(
-                        key: const ValueKey('voryxel_preview_webview'),
+                        key: _previewKey,
                         width: width,
                         height: height,
                         platform: _platformService.selectedPlatform,
@@ -706,9 +738,22 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         compilationProgress: _previewProgress,
                         compilationStatus: _previewStatus,
                         previewReloadNonce: _previewNonce,
+                        previewReloadHard: _previewReloadHard,
                         inspectorMode: _inspectorMode,
                         onElementSelected: (element) {
                           setState(() => _selectedElement = element);
+                          final id = _voryxelBlockIdOf(element);
+                          if (id != null) {
+                            unawaited(
+                              _previewKey.currentState?.bindUiBuilderMove(id),
+                            );
+                          }
+                        },
+                        onUiBuilderMoved: (id, left, top) {
+                          unawaited(_syncUiBuilderPosition(id, left, top));
+                        },
+                        onUiBuilderTextEdited: (id, text) {
+                          unawaited(_syncUiBuilderText(id, text));
                         },
                         child: null,
                       );
@@ -749,12 +794,90 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       );
                     }
 
-                    if (!showMonitor) return previewBody;
+                    // Zona de drop del UI Builder (arrastrar componentes → HTML).
+                    final dropPreview = Listener(
+                      onPointerMove: (e) {
+                        if (_uiBuilderDropHover) {
+                          _uiBuilderPointerGlobal = e.position;
+                        }
+                      },
+                      child: DragTarget<UiBuilderComponent>(
+                      onWillAcceptWithDetails: (details) {
+                        if (!_uiBuilderDropHover) {
+                          setState(() => _uiBuilderDropHover = true);
+                        }
+                        return true;
+                      },
+                      onMove: (details) {
+                        _uiBuilderPointerGlobal = details.offset;
+                      },
+                      onLeave: (_) {
+                        if (_uiBuilderDropHover) {
+                          setState(() => _uiBuilderDropHover = false);
+                        }
+                      },
+                      onAcceptWithDetails: (details) {
+                        final dropAt =
+                            _uiBuilderPointerGlobal ?? details.offset;
+                        setState(() {
+                          _uiBuilderDropHover = false;
+                          _uiBuilderPointerGlobal = null;
+                        });
+                        unawaited(
+                          _handleUiBuilderDrop(
+                            details.data,
+                            globalOffset: dropAt,
+                          ),
+                        );
+                      },
+                      builder: (context, candidate, rejected) {
+                        final hovering =
+                            candidate.isNotEmpty || _uiBuilderDropHover;
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            previewBody,
+                            if (hovering)
+                              IgnorePointer(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: CursorTheme.primary
+                                        .withValues(alpha: 0.12),
+                                    border: Border.all(
+                                      color: CursorTheme.primary,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: const Center(
+                                    child: Text(
+                                      'Suelta aquí para añadir al HTML',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        shadows: [
+                                          Shadow(
+                                            blurRadius: 8,
+                                            color: Colors.black54,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                    );
+
+                    if (!showMonitor) return dropPreview;
 
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(child: previewBody),
+                        Expanded(child: dropPreview),
                         const InspectorMonitorPanel(width: monitorW),
                       ],
                     );
@@ -1005,6 +1128,19 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   /// Maneja las acciones del toolbar del explorador
   void _handleToolbarAction(String action) {
     switch (action) {
+      case 'ui_builder':
+        setState(() {
+          final opening = _sidebarView != 'ui_builder';
+          _sidebarView = opening ? 'ui_builder' : 'explorer';
+          _isSearchMode = false;
+          _selectedToolbarIndex = opening ? 0 : -1;
+          if (opening) {
+            _selectedTab = 0; // Preview al construir
+            _inspectorMode = true; // clic = seleccionar para propiedades
+            InspectorSelectionService().setActive(true);
+          }
+        });
+        break;
       case 'search':
         _toggleGlobalSearch();
         break;
@@ -1013,7 +1149,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           final openingGit = _sidebarView != 'git';
           _sidebarView = openingGit ? 'git' : 'explorer';
           _isSearchMode = false;
-          _selectedToolbarIndex = openingGit ? 1 : -1;
+          _selectedToolbarIndex = openingGit ? 2 : -1;
         });
         break;
       case 'supabase':
@@ -1022,6 +1158,333 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       case 'firebase':
         _showFirebaseDialog();
         break;
+    }
+  }
+
+  /// Drop de UI Builder → inserta HTML donde se soltó y recarga Preview.
+  Future<void> _handleUiBuilderDrop(
+    UiBuilderComponent component, {
+    Offset? globalOffset,
+  }) async {
+    final projectPath = _currentProjectPath;
+    if (projectPath == null || projectPath.isEmpty) {
+      if (mounted) {
+        AppToast.warning(context, 'Abre un proyecto web primero');
+      }
+      return;
+    }
+
+    try {
+      final target = await UiBuilderInsertService.resolveTargetHtmlPath(
+        projectPath: projectPath,
+        selectedFilePath: _selectedFilePath,
+      );
+      if (target == null) {
+        if (mounted) {
+          AppToast.warning(
+            context,
+            'No hay archivo .html en el proyecto (crea index.html)',
+          );
+        }
+        return;
+      }
+
+      String? parentId;
+      String? beforeId;
+      String? afterId;
+
+      // Preferir ancla real del punto de soltado en el WebView.
+      final previewState = _previewKey.currentState;
+      if (previewState != null && globalOffset != null) {
+        final box = previewState.context.findRenderObject() as RenderBox?;
+        if (box != null && box.hasSize) {
+          final local = box.globalToLocal(globalOffset);
+          final nx = (local.dx / box.size.width).clamp(0.0, 1.0);
+          final ny = (local.dy / box.size.height).clamp(0.0, 1.0);
+          final anchor = await previewState.resolveUiBuilderDrop(
+            nx: nx,
+            ny: ny,
+          );
+          if (anchor != null) {
+            parentId = anchor['parentId']?.toString();
+            beforeId = anchor['beforeId']?.toString();
+            afterId = anchor['afterId']?.toString();
+            if (parentId != null && parentId.isEmpty) parentId = null;
+            if (beforeId != null && beforeId.isEmpty) beforeId = null;
+            if (afterId != null && afterId.isEmpty) afterId = null;
+          }
+        }
+      }
+
+      // Fallback: contenedor seleccionado.
+      if (parentId == null &&
+          _voryxelBlockIdOf(_selectedElement) != null &&
+          _isUiBuilderContainer(_selectedElement)) {
+        parentId = _voryxelBlockIdOf(_selectedElement);
+      }
+
+      final result = await UiBuilderInsertService.insertAtAnchor(
+        filePath: target,
+        snippet: component.htmlSnippet,
+        parentId: parentId,
+        beforeId: beforeId,
+        afterId: afterId,
+      );
+      final html = result.html;
+      final blockId = result.blockId;
+
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = html;
+        _selectedTab = 0;
+        _uiBuilderDropHover = false;
+        _inspectorMode = true;
+      });
+      InspectorSelectionService().setActive(true);
+
+      final previewLive = _debugService.isRunning &&
+          (_debugService.appUrl?.isNotEmpty ?? false);
+      final where = parentId != null
+          ? 'dentro de contenedor'
+          : (beforeId != null
+              ? 'antes de $beforeId'
+              : (afterId != null ? 'después de $afterId' : target.split('/').last));
+
+      if (!previewLive) {
+        _debugService.addOutput(
+          '🧩 UI Builder: ${component.label} → $where '
+          '($blockId) · arrancando Preview…',
+        );
+        AppToast.info(
+          context,
+          '${component.label} guardado · arrancando Preview…',
+        );
+        _handleRun();
+      } else {
+        _debugService.bumpPreviewReload(force: true, hard: false);
+        _debugService.addOutput(
+          '🧩 UI Builder: ${component.label} → $where ($blockId)',
+        );
+        AppToast.success(
+          context,
+          '${component.label} añadido donde soltaste · clic para editar',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo insertar: $e');
+      }
+    }
+  }
+
+  Future<void> _syncUiBuilderPosition(
+    String blockId,
+    double left,
+    double top,
+  ) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) return;
+      final next = await UiBuilderEditService.updateBlock(
+        filePath: target,
+        blockId: blockId,
+        absolute: true,
+        left: '${left.round()}px',
+        top: '${top.round()}px',
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = next;
+      });
+    } catch (e) {
+      print('⚠️ sync position: $e');
+    }
+  }
+
+  Future<void> _syncUiBuilderText(String blockId, String text) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) return;
+      final next = await UiBuilderEditService.updateBlock(
+        filePath: target,
+        blockId: blockId,
+        text: text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = next;
+      });
+    } catch (e) {
+      print('⚠️ sync text: $e');
+    }
+  }
+
+  String? _voryxelBlockIdOf(InspectorElement? el) {
+    if (el == null) return null;
+    final id = el.attributes['data-voryxel-id']?.trim();
+    if (id != null && id.isNotEmpty) return id;
+    return null;
+  }
+
+  Future<String?> _resolveHtmlFileForEdit() async {
+    final projectPath = _currentProjectPath;
+    if (projectPath == null) return null;
+    return UiBuilderInsertService.resolveTargetHtmlPath(
+      projectPath: projectPath,
+      selectedFilePath: _selectedFilePath,
+    );
+  }
+
+  Future<void> _applyUiBuilderProps({
+    required String blockId,
+    String? text,
+    String? color,
+    String? backgroundColor,
+    String? padding,
+    String? margin,
+    String? width,
+    String? height,
+    String? fontSize,
+    String? borderRadius,
+    String? border,
+    String? textAlign,
+    String? href,
+    String? src,
+    String? placeholder,
+  }) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) {
+        if (mounted) {
+          AppToast.warning(context, 'No hay HTML destino');
+        }
+        return;
+      }
+      final next = await UiBuilderEditService.updateBlock(
+        filePath: target,
+        blockId: blockId,
+        text: text,
+        color: color,
+        backgroundColor: backgroundColor,
+        padding: padding,
+        margin: margin,
+        width: width,
+        height: height,
+        fontSize: fontSize,
+        borderRadius: borderRadius,
+        border: border,
+        textAlign: textAlign,
+        href: href,
+        src: src,
+        placeholder: placeholder,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = next;
+      });
+      _debugService.bumpPreviewReload(force: true, hard: false);
+      AppToast.success(context, 'Propiedades aplicadas');
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo aplicar: $e');
+      }
+    }
+  }
+
+  Future<void> _duplicateUiBuilderBlock(String blockId) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) {
+        if (mounted) {
+          AppToast.warning(context, 'No hay HTML destino');
+        }
+        return;
+      }
+      final result = await UiBuilderEditService.duplicateBlock(
+        filePath: target,
+        blockId: blockId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = result.html;
+      });
+      _debugService.bumpPreviewReload(force: true, hard: false);
+      AppToast.success(context, 'Elemento duplicado');
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo duplicar: $e');
+      }
+    }
+  }
+
+  bool _isUiBuilderContainer(InspectorElement? el) {
+    if (el == null) return false;
+    final kind = el.attributes['data-voryxel']?.toLowerCase() ?? '';
+    return kind == 'container' || kind == 'card' || kind == 'hero';
+  }
+
+  Future<void> _moveUiBuilderBlock(String blockId, int direction) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) {
+        if (mounted) {
+          AppToast.warning(context, 'No hay HTML destino');
+        }
+        return;
+      }
+      final next = await UiBuilderEditService.moveBlock(
+        filePath: target,
+        blockId: blockId,
+        direction: direction,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = next;
+      });
+      _debugService.bumpPreviewReload(force: true, hard: false);
+      AppToast.info(
+        context,
+        direction < 0 ? 'Movido arriba' : 'Movido abajo',
+      );
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo mover: $e');
+      }
+    }
+  }
+
+  Future<void> _deleteUiBuilderBlock(String blockId) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) {
+        if (mounted) {
+          AppToast.warning(context, 'No hay HTML destino');
+        }
+        return;
+      }
+      final next = await UiBuilderEditService.deleteBlock(
+        filePath: target,
+        blockId: blockId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = next;
+        _selectedElement = null;
+      });
+      InspectorSelectionService().clearSelection();
+      _debugService.bumpPreviewReload(force: true, hard: false);
+      AppToast.success(context, 'Elemento eliminado');
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo eliminar: $e');
+      }
     }
   }
 
@@ -1035,7 +1498,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       } else {
         _sidebarView = 'search';
         _isSearchMode = true;
-        _selectedToolbarIndex = 0;
+        _selectedToolbarIndex = 1;
       }
     });
   }
@@ -1045,7 +1508,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     setState(() {
       _sidebarView = 'search';
       _isSearchMode = true;
-      _selectedToolbarIndex = 0;
+      _selectedToolbarIndex = 1;
     });
   }
 
@@ -1057,37 +1520,35 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     );
   }
   
-  /// Maneja la visualización de código de un archivo
-  Future<void> _handleFileViewCode(String path, {int? line, int? column}) async {
-    print('📁 Ver código: $path${line != null ? ':$line' : ''}');
+  /// Carga un archivo en la pestaña Code.
+  /// [switchToCodeTab]=false → lo deja listo en segundo plano (Preview sigue).
+  Future<void> _handleFileViewCode(
+    String path, {
+    int? line,
+    int? column,
+    bool switchToCodeTab = true,
+  }) async {
+    print(
+      '📁 Ver código: $path${line != null ? ':$line' : ''}'
+      '${switchToCodeTab ? '' : ' (2º plano)'}',
+    );
     try {
-      // Leer el contenido del archivo
       final content = await FileService.readFile(path);
+      if (!mounted) return;
       setState(() {
         _selectedFilePath = path;
         _selectedFileContent = content;
         _selectedFileLine = line;
         _selectedFileColumn = column;
-        _selectedTab = 1; // Cambiar a pestaña Code
+        if (switchToCodeTab) {
+          _selectedTab = 1;
+        }
       });
     } catch (e) {
       print('❌ Error al leer archivo: $e');
       if (mounted) {
         final errorMessage = e.toString().replaceAll('Exception: ', '');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage, style: const TextStyle(fontSize: 12)),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-            action: SnackBarAction(
-              label: 'Cerrar',
-              textColor: Colors.white,
-              onPressed: () {
-                ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              },
-            ),
-          ),
-        );
+        AppToast.error(context, errorMessage);
       }
     }
   }
@@ -1147,9 +1608,14 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     return null;
   }
 
-  /// El agente está editando/leyendo: abrir Code, saltar a la línea y
-  /// remarcar el archivo en el explorador (efecto intermitente).
-  Future<void> _openFileFromAgentLive(String rawPath, {int? line}) async {
+  /// El agente edita/lee: carga el archivo en Code en 2º plano.
+  /// Preview se mantiene; el usuario puede pulsar «Ver en Code».
+  /// [reveal]=true solo si el usuario pidió ver el archivo (clic en chat).
+  Future<void> _openFileFromAgentLive(
+    String rawPath, {
+    int? line,
+    bool reveal = false,
+  }) async {
     final trimmed = rawPath.trim();
     // path vacío = el agente terminó → quitar pulso del explorador
     if (trimmed.isEmpty) {
@@ -1163,7 +1629,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     if (mounted) {
       setState(() {
         _agentActivePath = highlightPath;
-        _selectedTab = 1; // Code
+        // No forzar Code: el Preview sigue visible mientras trabaja.
       });
     }
 
@@ -1172,7 +1638,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       return;
     }
 
-    await _handleFileViewCode(resolved, line: line);
+    await _handleFileViewCode(
+      resolved,
+      line: line,
+      switchToCodeTab: reveal,
+    );
   }
 
   /// Desde "Compilación fallida" → Ver código: abre el editor sin IA.
@@ -1248,9 +1718,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         _currentProjectPath ?? await ProjectService.getProjectPath();
     if (projectPath == null || projectPath.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay proyecto cargado')),
-      );
+      AppToast.info(context, 'No hay proyecto cargado');
       return;
     }
     final result =
@@ -1261,7 +1729,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       builder: (ctx) => SupabaseConnectorDialog(
         projectPath: projectPath,
         inspection: result,
-        onAskAgent: _sendMessageToActiveChat,
+        onAskAgent: _askAgentNow,
       ),
     );
   }
@@ -1271,9 +1739,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         _currentProjectPath ?? await ProjectService.getProjectPath();
     if (projectPath == null || projectPath.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay proyecto cargado')),
-      );
+      AppToast.info(context, 'No hay proyecto cargado');
       return;
     }
     final result =
@@ -1284,7 +1750,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       builder: (ctx) => FirebaseConnectorDialog(
         projectPath: projectPath,
         inspection: result,
-        onAskAgent: _sendMessageToActiveChat,
+        onAskAgent: _askAgentNow,
         onDeploy: () => _runFirebaseDeploy(projectPath),
       ),
     );
@@ -1325,12 +1791,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         '💡 Instala Firebase CLI (`npm i -g firebase-tools`) y asegúrate de estar logueado.',
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('firebase deploy falló: $e'),
-            backgroundColor: Colors.red.shade800,
-          ),
-        );
+        AppToast.error(context, 'firebase deploy falló: $e');
       }
     }
   }
@@ -1391,7 +1852,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  /// Hot Reload (⚡) — Flutter stdin `r` o refresh Preview (HTML).
+  /// ⚡ Hot Reload — aplica código en caliente (sin reiniciar estado).
   void _handleHotReload() {
     if (!mounted) return;
     final isHtmlPreview = _debugService.isRunning &&
@@ -1401,8 +1862,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     AppToast.show(
       context,
       message: isHtmlPreview
-          ? 'Refrescando Preview…'
-          : 'Flutter: Hot reloading…',
+          ? '⚡ Hot Reload — refrescando Preview…'
+          : '⚡ Hot Reload — aplicando código…',
       icon: Icons.bolt,
       loading: true,
       duration: const Duration(milliseconds: 1200),
@@ -1421,15 +1882,21 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  /// Hot Restart (🔄) — delega al ChatScreen activo
+  /// 🔄 Hot Restart — reinicia la app / Preview desde cero.
   void _handleHotRestart() {
     if (!mounted) return;
+    final isHtmlPreview = _debugService.isRunning &&
+        _debugService.appUrl != null &&
+        _debugService.appUrl!.isNotEmpty &&
+        !AdvancedDebuggingService.supportsHotReload;
     AppToast.show(
       context,
-      message: 'Flutter: Hot restarting…',
+      message: isHtmlPreview
+          ? '🔄 Hot Restart — recarga el Preview (no deshace ediciones)'
+          : '🔄 Hot Restart — reiniciando app…',
       icon: Icons.restart_alt,
       loading: true,
-      duration: const Duration(milliseconds: 1400),
+      duration: const Duration(milliseconds: 1800),
     );
     final state = _getActiveChatScreenState();
     if (state != null) {
@@ -1498,39 +1965,36 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     return 'android';
   }
 
-  /// Envía un mensaje al chat activo
-  void _sendMessageToActiveChat(String message) {
+  /// Mensaje al chat activo. [autoSend] true = dispara el agente (conectores).
+  void _sendMessageToActiveChat(String message, {bool autoSend = false}) {
     if (_activeChatId == null || message.isEmpty) return;
-    
+
     try {
-      // Obtener el GlobalKey del chat activo
       final chatKey = _chatScreenKeys[_activeChatId];
       if (chatKey == null || chatKey.currentState == null) {
         print('⚠️ ChatScreen no está disponible aún');
         return;
       }
-      
-      // Usar un microtask para evitar problemas de estado durante el build
+
       Future.microtask(() {
         if (!mounted) return;
-        
+
         try {
-          // Enviar mensaje al ChatScreen de forma segura
           final state = chatKey.currentState;
           if (state != null) {
-            // Llamar al método usando reflection segura
-            (state as dynamic).sendExternalMessage(message);
+            (state as dynamic).sendExternalMessage(
+              message,
+              autoSend: autoSend,
+            );
           }
         } catch (e) {
           print('❌ Error al enviar mensaje al chat: $e');
-          // Mostrar mensaje de error al usuario
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error al precargar mensaje: $e'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 3),
-              ),
+            AppToast.error(
+              context,
+              autoSend
+                  ? 'Error al disparar el agente: $e'
+                  : 'Error al precargar mensaje: $e',
             );
           }
         }
@@ -1538,6 +2002,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     } catch (e) {
       print('❌ Error en _sendMessageToActiveChat: $e');
     }
+  }
+
+  void _askAgentNow(String message) {
+    _sendMessageToActiveChat(message, autoSend: true);
   }
 
   @override
@@ -1735,11 +2203,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                 children: [
                   // Barra de herramientas (foto 2)
                   ExplorerToolbar(
-                    selectedIndex: _sidebarView == 'git'
-                        ? 1
+                    selectedIndex: _sidebarView == 'ui_builder'
+                        ? 0
                         : (_sidebarView == 'search' || _isSearchMode
-                            ? 0
-                            : _selectedToolbarIndex),
+                            ? 1
+                            : (_sidebarView == 'git'
+                                ? 2
+                                : _selectedToolbarIndex)),
                     onItemSelected: (index) {
                       setState(() {
                         _selectedToolbarIndex = index;
@@ -1749,8 +2219,104 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       _handleToolbarAction(action);
                     },
                   ),
-                  // Source Control (Git) | Search in Files | Explorador
-                  if (_sidebarView == 'git')
+                  // UI Builder | Search | Git | Explorador
+                  if (_sidebarView == 'ui_builder')
+                    Expanded(
+                      child: Column(
+                        children: [
+                          Expanded(
+                            flex: _voryxelBlockIdOf(_selectedElement) != null
+                                ? 3
+                                : 1,
+                            child: UiBuilderPanel(
+                              enabled: _currentProjectPath != null,
+                              hint: _currentProjectPath == null
+                                  ? 'Abre un proyecto web (HTML) primero'
+                                  : (_debugService.isRunning
+                                      ? (_isUiBuilderContainer(_selectedElement)
+                                          ? 'Contenedor seleccionado · suelta dentro'
+                                          : 'Arrastra al Preview · clic para editar')
+                                      : 'Al soltar se inicia el Preview (Run)'),
+                            ),
+                          ),
+                          if (_voryxelBlockIdOf(_selectedElement) != null)
+                            Expanded(
+                              flex: 2,
+                              child: UiBuilderPropertiesPanel(
+                                key: ValueKey(
+                                  _voryxelBlockIdOf(_selectedElement),
+                                ),
+                                element: _selectedElement!,
+                                blockId: _voryxelBlockIdOf(_selectedElement)!,
+                                projectPath: _currentProjectPath,
+                                onApply: ({
+                                  text,
+                                  color,
+                                  backgroundColor,
+                                  padding,
+                                  margin,
+                                  width,
+                                  height,
+                                  fontSize,
+                                  borderRadius,
+                                  border,
+                                  textAlign,
+                                  href,
+                                  src,
+                                  placeholder,
+                                }) {
+                                  return _applyUiBuilderProps(
+                                    blockId:
+                                        _voryxelBlockIdOf(_selectedElement)!,
+                                    text: text,
+                                    color: color,
+                                    backgroundColor: backgroundColor,
+                                    padding: padding,
+                                    margin: margin,
+                                    width: width,
+                                    height: height,
+                                    fontSize: fontSize,
+                                    borderRadius: borderRadius,
+                                    border: border,
+                                    textAlign: textAlign,
+                                    href: href,
+                                    src: src,
+                                    placeholder: placeholder,
+                                  );
+                                },
+                                onDelete: () {
+                                  return _deleteUiBuilderBlock(
+                                    _voryxelBlockIdOf(_selectedElement)!,
+                                  );
+                                },
+                                onDuplicate: () {
+                                  return _duplicateUiBuilderBlock(
+                                    _voryxelBlockIdOf(_selectedElement)!,
+                                  );
+                                },
+                                onMoveUp: () {
+                                  return _moveUiBuilderBlock(
+                                    _voryxelBlockIdOf(_selectedElement)!,
+                                    -1,
+                                  );
+                                },
+                                onMoveDown: () {
+                                  return _moveUiBuilderBlock(
+                                    _voryxelBlockIdOf(_selectedElement)!,
+                                    1,
+                                  );
+                                },
+                                onClearSelection: () {
+                                  setState(() => _selectedElement = null);
+                                  InspectorSelectionService()
+                                      .clearSelection();
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
+                  else if (_sidebarView == 'git')
                     Expanded(
                       child: GitScmPanel(
                         key: ValueKey('git_scm_$_currentProjectPath'),
@@ -2017,16 +2583,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                   child: GestureDetector(
                                                     onTap: () async {
                                                       if (!hasVmService) {
-                                                        ScaffoldMessenger.of(
+                                                        AppToast.warning(
                                                           context,
-                                                        ).showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              'No se detectó VM Service. Ejecuta en modo Debug y espera a que la app inicie.',
-                                                            ),
-                                                            backgroundColor:
-                                                                Colors.orange,
-                                                          ),
+                                                          'No se detectó VM Service. Ejecuta en modo Debug y espera a que la app inicie.',
                                                         );
                                                         return;
                                                       }
@@ -2045,16 +2604,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                                       );
                                                       if (!mounted) return;
                                                       if (url == null) {
-                                                        ScaffoldMessenger.of(
+                                                        AppToast.error(
                                                           context,
-                                                        ).showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              'No se pudo abrir DevTools. Revisa el Debug Console.',
-                                                            ),
-                                                            backgroundColor:
-                                                                Colors.red,
-                                                          ),
+                                                          'No se pudo abrir DevTools. Revisa el Debug Console.',
                                                         );
                                                       }
                                                     },
@@ -2318,7 +2870,19 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                           if (_agentActivity.hasFileTarget && _selectedTab != 1)
                             TextButton(
                               onPressed: () {
-                                setState(() => _selectedTab = 1);
+                                final path = _agentActivity.activePath ??
+                                    _selectedFilePath;
+                                if (path != null && path.isNotEmpty) {
+                                  unawaited(
+                                    _openFileFromAgentLive(
+                                      path,
+                                      line: _agentActivity.focusLine,
+                                      reveal: true,
+                                    ),
+                                  );
+                                } else {
+                                  setState(() => _selectedTab = 1);
+                                }
                               },
                               style: TextButton.styleFrom(
                                 visualDensity: VisualDensity.compact,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'cursor_theme.dart';
 import '../services/documentation_service.dart';
+import 'app_toast.dart';
 
 /// Widget para seleccionar y gestionar documentación (similar a Cursor)
 class DocumentationSelector extends StatefulWidget {
@@ -68,26 +69,14 @@ class _DocumentationSelectorState extends State<DocumentationSelector> {
         await _loadDocumentation();
         
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ Documentación agregada correctamente'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
+          AppToast.success(context, '✅ Documentación agregada correctamente');
         }
       }
     } catch (e, stackTrace) {
       print('❌ Error al agregar documentación: $e');
       print('Stack trace: $stackTrace');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error: ${e.toString()}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        AppToast.error(context, '❌ Error: ${e.toString()}');
       }
     }
   }
@@ -528,13 +517,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
     // Validación
     if (name.isEmpty || url.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('⚠️ Nombre y URL son requeridos'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
+        AppToast.warning(context, '⚠️ Nombre y URL son requeridos');
       }
       return;
     }
@@ -542,13 +525,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
     // Validar URL básica
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('⚠️ La URL debe comenzar con http:// o https://'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
+        AppToast.warning(context, '⚠️ La URL debe comenzar con http:// o https://');
       }
       return;
     }
@@ -581,13 +558,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
           _isSaving = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('⚠️ Esta documentación ya existe'),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 2),
-            ),
-          );
+          AppToast.warning(context, '⚠️ Esta documentación ya existe');
         }
       }
     } catch (e) {
@@ -596,13 +567,7 @@ class _AddDocumentationDialogState extends State<_AddDocumentationDialog> {
         setState(() {
           _isSaving = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error al guardar: ${e.toString()}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        AppToast.error(context, '❌ Error al guardar: ${e.toString()}');
       }
     }
   }

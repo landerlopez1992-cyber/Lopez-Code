@@ -11,6 +11,7 @@ import '../services/run_debug_service.dart';
 import '../widgets/cursor_theme.dart';
 import '../widgets/voryxel_brand_logo.dart';
 import 'multi_chat_screen.dart';
+import '../widgets/app_toast.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -188,13 +189,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         if (savedPath == null || savedPath.isEmpty) {
           print('❌ ERROR: El proyecto no se guardó correctamente');
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Error: No se pudo guardar el proyecto'),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 3),
-              ),
-            );
+            AppToast.error(context, 'Error: No se pudo guardar el proyecto');
           }
           return;
         }
@@ -210,13 +205,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         }
       } else if (mounted) {
         // Usuario canceló o no seleccionó nada
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se seleccionó ningún proyecto'),
-            duration: Duration(seconds: 2),
-            backgroundColor: CursorTheme.textSecondary,
-          ),
-        );
+        AppToast.info(context, 'No se seleccionó ningún proyecto');
       }
     } catch (e) {
       // Cerrar indicador de carga si está abierto
@@ -438,12 +427,7 @@ Error original: $e''';
 
     final parentPath = parentController.text.trim();
     if (parentPath.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Indica una carpeta destino'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      AppToast.warning(context, 'Indica una carpeta destino');
       return;
     }
 
@@ -452,12 +436,7 @@ Error original: $e''';
         : _sanitizeFolderName(nameController.text);
     final projectPath = '$parentPath/$folderName';
     if (Directory(projectPath).existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Ya existe: $projectPath'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      AppToast.warning(context, 'Ya existe: $projectPath');
       return;
     }
 
@@ -568,12 +547,7 @@ Error original: $e''';
     } catch (e) {
       if (mounted) {
         Navigator.of(context).pop(); // loading
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al crear proyecto: $e'),
-            backgroundColor: Colors.red.shade800,
-          ),
-        );
+        AppToast.error(context, 'Error al crear proyecto: $e');
       }
     }
   }
@@ -689,11 +663,9 @@ Error original: $e''';
             await ProjectService.saveProjectPath(targetPath);
             await _saveRecentProject(targetPath);
 
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('✅ ${cloneResult['message']}'),
-                backgroundColor: Colors.green,
-              ),
+            AppToast.success(
+              context,
+              '${cloneResult['message']}',
             );
 
             if (mounted) {
@@ -704,20 +676,16 @@ Error original: $e''';
               );
             }
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('❌ Error: ${cloneResult['error']}'),
-                backgroundColor: Colors.red,
-              ),
+            AppToast.error(
+              context,
+              'Error: ${cloneResult['error']}',
             );
           }
         }
       } catch (e) {
         if (mounted) {
           Navigator.of(context).pop(); // Cerrar indicador de carga
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
-          );
+          AppToast.error(context, '❌ Error: $e');
         }
       }
     }
@@ -742,13 +710,7 @@ Error original: $e''';
     // Verificar que el directorio existe
     if (!Directory(normalizedPath).existsSync()) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('El proyecto "$projectPath" no existe'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        AppToast.error(context, 'El proyecto "$projectPath" no existe');
         // Eliminar del historial
         setState(() {
           _recentProjects.remove(projectPath);
@@ -994,15 +956,7 @@ Error original: $e''';
                                     _recentProjects,
                                   );
                                   if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          'Proyecto "$projectName" eliminado del historial',
-                                        ),
-                                        duration: const Duration(seconds: 2),
-                                        backgroundColor: CursorTheme.primary,
-                                      ),
-                                    );
+                                    AppToast.info(context, 'Proyecto "$projectName" eliminado del historial');
                                   }
                                 },
                               ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/problem_item.dart';
 import '../services/debug_console_service.dart';
+import 'app_toast.dart';
 import 'cursor_theme.dart';
 import 'integrated_terminal_panel.dart';
 import 'light_ray_progress_bar.dart';
@@ -548,16 +549,9 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
     if (lines.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: lines.join('\n')));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Copiado (${lines.length} líneas). Pégalo en el Chat del agente.',
-          style: const TextStyle(fontSize: 13),
-        ),
-        duration: const Duration(seconds: 2),
-        backgroundColor: CursorTheme.surface,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppToast.success(
+      context,
+      'Copiado (${lines.length} líneas). Pégalo en el Chat del agente.',
     );
   }
 

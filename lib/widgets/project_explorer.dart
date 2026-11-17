@@ -6,6 +6,7 @@ import '../services/project_service.dart';
 import '../services/file_service.dart';
 import '../services/agent_activity_service.dart';
 import 'cursor_theme.dart';
+import 'app_toast.dart';
 
 class ProjectExplorer extends StatefulWidget {
   final Function(String)? onFileSelected;
@@ -832,12 +833,7 @@ class _ProjectExplorerState extends State<ProjectExplorer>
           await Clipboard.setData(ClipboardData(text: filePath));
           widget.onFileCopy?.call(filePath);
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Ruta copiada al portapapeles'),
-                duration: Duration(seconds: 2),
-              ),
-            );
+            AppToast.info(context, 'Ruta copiada al portapapeles');
           }
           break;
         case 'delete':
@@ -900,12 +896,7 @@ class _ProjectExplorerState extends State<ProjectExplorer>
     if (result == null || result.isEmpty) return null;
     if (result.contains('/') || result.contains('\\') || result.contains('..')) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Nombre inválido'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Nombre inválido');
       }
       return null;
     }
@@ -932,18 +923,11 @@ class _ProjectExplorerState extends State<ProjectExplorer>
       }
       widget.onFileViewCode?.call(path);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Creado: $name')),
-        );
+        AppToast.info(context, 'Creado: $name');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al crear archivo: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al crear archivo: $e');
       }
     }
   }
@@ -969,18 +953,11 @@ class _ProjectExplorerState extends State<ProjectExplorer>
         });
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Carpeta creada: $name')),
-        );
+        AppToast.info(context, 'Carpeta creada: $name');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al crear carpeta: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al crear carpeta: $e');
       }
     }
   }
@@ -1009,18 +986,11 @@ class _ProjectExplorerState extends State<ProjectExplorer>
         widget.onFileViewCode?.call(newPath);
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Renombrado a $name')),
-        );
+        AppToast.info(context, 'Renombrado a $name');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al renombrar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al renombrar: $e');
       }
     }
   }
@@ -1046,18 +1016,14 @@ class _ProjectExplorerState extends State<ProjectExplorer>
       await _loadProject();
       widget.onFileViewCode?.call(candidate);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Duplicado: ${candidate.split('/').last}')),
+        AppToast.success(
+          context,
+          'Duplicado: ${candidate.split('/').last}',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al duplicar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al duplicar: $e');
       }
     }
   }
@@ -1107,18 +1073,11 @@ class _ProjectExplorerState extends State<ProjectExplorer>
       widget.onFileDelete?.call(filePath);
       await _loadProject();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Eliminado: $fileName')),
-        );
+        AppToast.info(context, 'Eliminado: $fileName');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al eliminar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al eliminar: $e');
       }
     }
   }

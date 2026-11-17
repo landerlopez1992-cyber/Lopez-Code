@@ -3,84 +3,164 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/credit_transaction.dart';
+import 'auth_service.dart';
+import 'model_pricing.dart';
+import 'wallet_cloud_service.dart';
 
-/// Servicio para gestionar créditos/tokens del usuario
-/// Similar a cómo Cursor maneja los créditos de API
+/// Créditos por cuenta: anónimo ≠ usuario logueado.
+/// Cerrar sesión ya no deja ver el saldo de la cuenta.
 class CreditService {
-  static const String _balanceKey = 'user_balance';
-  static const String _transactionsKey = 'credit_transactions_v1';
-  static const double _initialBalance = 20.0; // $20 iniciales
-  static const double _marginMultiplier =
-      1.2; // 20% de margen (ejemplo: OpenAI cobra $5, nosotros $6)
+  static const String _legacyBalanceKey = 'user_balance';
+  static const String _legacyTxKey = 'credit_transactions_v1';
+  static const String _legacyMigratedKey = 'credit_migrated_to_uid_v1';
+  static const double _initialBalance = 0.0;
   static const int _maxStoredTransactions = 250;
 
-  /// Obtiene el saldo actual del usuario
+  static String get _ownerId {
+    final uid = AuthService.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return 'anon';
+    return uid;
+  }
+
+  static String get _balanceKey => 'user_balance_v2_$_ownerId';
+  static String get _transactionsKey => 'credit_tx_v2_$_ownerId';
+
+  /// Saldo usable por el agente (> 0).
+  static Future<bool> hasPositiveBalance() async {
+    return (await getBalance()) > 0;
+  }
+
+  /// Saldo de la sesión actual (anon local; cuenta → cache + Firebase).
   static Future<double> getBalance() async {
     final prefs = await SharedPreferences.getInstance();
-    final balance = prefs.getDouble(_balanceKey);
+    await _migrateLegacyIfNeeded(prefs);
 
-    // Si no existe, inicializar con saldo inicial
+    final balance = prefs.getDouble(_balanceKey);
     if (balance == null) {
-      await setBalance(_initialBalance);
+      await prefs.setDouble(_balanceKey, _initialBalance);
       return _initialBalance;
     }
-
     return balance;
   }
 
-  /// Establece el saldo del usuario
   static Future<void> setBalance(double balance) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_balanceKey, balance);
+    // Espejo en Firebase para que viaje con el user.
+    if (WalletCloudService.isAvailable) {
+      await WalletCloudService.pushBalance(
+        balance,
+        email: AuthService.instance.currentUser?.email,
+      );
+    }
   }
 
-  /// Calcula el costo de una solicitud basado en tokens usados
-  ///
-  /// Parámetros:
-  /// - tokensUsed: Número de tokens usados en la solicitud
-  /// - costPerToken: Costo por token de la API (ejemplo: 0.00001 para GPT-4o-mini)
-  ///
-  /// Retorna: Costo total con margen aplicado
+  /// Tras login Firebase: trae saldo de la nube (u otros Macs) al cache local.
+  static Future<void> syncFromCloudAfterLogin() async {
+    if (!WalletCloudService.isAvailable) return;
+    final prefs = await SharedPreferences.getInstance();
+    await _migrateLegacyIfNeeded(prefs);
+    final local = prefs.getDouble(_balanceKey) ?? _initialBalance;
+    final resolved = await WalletCloudService.reconcileWithLocal(local);
+    if (resolved != null) {
+      await prefs.setDouble(_balanceKey, resolved);
+    }
+    // Cachear historial remoto si viene.
+    final remoteTx = await WalletCloudService.fetchTransactions(limit: 80);
+    if (remoteTx.isNotEmpty) {
+      final encoded = remoteTx.map((t) => jsonEncode(t.toJson())).toList();
+      await prefs.setStringList(_transactionsKey, encoded);
+    }
+  }
+
+  /// Si había saldo global viejo y ahora hay sesión, se lo asigna UNA vez a esa cuenta.
+  static Future<void> _migrateLegacyIfNeeded(SharedPreferences prefs) async {
+    if (!AuthService.instance.isSignedIn) return;
+    if (prefs.getBool(_legacyMigratedKey) == true) return;
+
+    final legacy = prefs.getDouble(_legacyBalanceKey);
+    final hasNew = prefs.containsKey(_balanceKey);
+    if (legacy != null && !hasNew) {
+      await prefs.setDouble(_balanceKey, legacy);
+      final legacyTx = prefs.getStringList(_legacyTxKey);
+      if (legacyTx != null && legacyTx.isNotEmpty) {
+        await prefs.setStringList(_transactionsKey, legacyTx);
+      }
+    }
+    await prefs.setBool(_legacyMigratedKey, true);
+    // El legado ya no debe verse en anónimo.
+    await prefs.remove(_legacyBalanceKey);
+  }
+
+  static double calculateClientCost(TokenUsage usage) {
+    return ModelPricing.clientCost(usage);
+  }
+
+  /// @deprecated Usa [calculateClientCost] / [deductUsage].
   static double calculateCost(int tokensUsed, double costPerToken) {
-    final baseCost = tokensUsed * costPerToken;
-    final costWithMargin = baseCost * _marginMultiplier;
-    return costWithMargin;
+    return tokensUsed * costPerToken * ModelPricing.marginMultiplier;
   }
 
-  /// Descuenta créditos de una solicitud y registra la transacción.
-  ///
-  /// Retorna: true si se pudo descontar, false si no hay suficiente saldo
+  static Future<bool> deductUsage(
+    TokenUsage usage, {
+    String? note,
+  }) async {
+    final currentBalance = await getBalance();
+    final cost = calculateClientCost(usage);
+    final tokensUsed = usage.totalTokens > 0
+        ? usage.totalTokens
+        : (usage.promptTokens + usage.completionTokens);
+
+    if (cost <= 0 || tokensUsed <= 0) return true;
+    if (currentBalance < cost) return false;
+
+    final newBalance = currentBalance - cost;
+    await setBalance(newBalance);
+    final openai = ModelPricing.openaiCost(usage);
+    await _appendTransaction(
+      CreditTransaction(
+        id: _newId(),
+        date: DateTime.now().toUtc(),
+        type: CreditTransactionType.usage,
+        model: usage.model,
+        tokens: tokensUsed,
+        cost: cost,
+        balanceAfter: newBalance,
+        note: note ??
+            'OpenAI \$${openai.toStringAsFixed(5)} → '
+                'cliente \$${cost.toStringAsFixed(5)} '
+                '(+${((ModelPricing.marginMultiplier - 1) * 100).round()}%)',
+      ),
+    );
+    return true;
+  }
+
+  /// @deprecated Usa [deductUsage].
   static Future<bool> deductCredits(
     int tokensUsed,
     double costPerToken, {
     String model = 'unknown',
     String? note,
   }) async {
-    final currentBalance = await getBalance();
-    final cost = calculateCost(tokensUsed, costPerToken);
-
-    if (currentBalance < cost) {
-      return false; // Saldo insuficiente
-    }
-
-    final newBalance = currentBalance - cost;
-    await setBalance(newBalance);
-    await _appendTransaction(
-      CreditTransaction(
-        id: _newId(),
-        date: DateTime.now().toUtc(),
-        type: CreditTransactionType.usage,
-        model: model,
-        tokens: tokensUsed,
-        cost: cost,
-        balanceAfter: newBalance,
-        note: note ?? 'Llamada al agente',
-      ),
+    return deductUsage(
+      TokenUsage.totalOnly(tokensUsed, model: model),
+      note: note,
     );
-    return true;
   }
 
-  /// Verifica si hay suficiente saldo para una solicitud
+  static Future<bool> hasEnoughBalanceForModel({
+    required String model,
+    required int estimatedTokens,
+  }) async {
+    final currentBalance = await getBalance();
+    final estimatedCost = ModelPricing.estimateClientCost(
+      model: model,
+      estimatedTokens: estimatedTokens,
+    );
+    return currentBalance >= estimatedCost;
+  }
+
+  /// @deprecated Usa [hasEnoughBalanceForModel].
   static Future<bool> hasEnoughBalance(
     int estimatedTokens,
     double costPerToken,
@@ -90,21 +170,39 @@ class CreditService {
     return currentBalance >= estimatedCost;
   }
 
-  /// Obtiene el costo estimado de una solicitud sin descontar
+  static double getEstimatedCostForModel({
+    required String model,
+    required int estimatedTokens,
+  }) {
+    return ModelPricing.estimateClientCost(
+      model: model,
+      estimatedTokens: estimatedTokens,
+    );
+  }
+
+  /// @deprecated Usa [getEstimatedCostForModel].
   static double getEstimatedCost(int tokens, double costPerToken) {
     return calculateCost(tokens, costPerToken);
   }
 
-  /// Reinicia el saldo al valor inicial (útil para testing)
   static Future<void> resetBalance() async {
     await setBalance(_initialBalance);
   }
 
-  /// Agrega créditos al saldo (útil para recargas) y registra la transacción.
+  /// Recarga: solo con sesión. Va al saldo de ESA cuenta.
   static Future<void> addCredits(double amount, {String? note}) async {
+    if (!AuthService.instance.isSignedIn) {
+      throw AuthException(
+        'Inicia sesión para agregar saldo a la billetera',
+      );
+    }
+    if (amount <= 0) {
+      throw AuthException('El monto de recarga debe ser mayor a 0');
+    }
     final currentBalance = await getBalance();
     final newBalance = currentBalance + amount;
     await setBalance(newBalance);
+    final email = AuthService.instance.currentUser?.email ?? 'cuenta';
     await _appendTransaction(
       CreditTransaction(
         id: _newId(),
@@ -114,16 +212,16 @@ class CreditService {
         tokens: 0,
         cost: amount,
         balanceAfter: newBalance,
-        note: note ?? 'Recarga manual',
+        note: note ?? 'Recarga ($email)',
       ),
     );
   }
 
-  /// Historial reciente (más nuevo primero).
   static Future<List<CreditTransaction>> getTransactions({
     int limit = 100,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    await _migrateLegacyIfNeeded(prefs);
     final raw = prefs.getStringList(_transactionsKey) ?? const <String>[];
     final items = <CreditTransaction>[];
     for (final line in raw) {
@@ -141,7 +239,6 @@ class CreditService {
     return items.take(limit).toList();
   }
 
-  /// Tokens usados por día (UTC) en los últimos [days] días.
   static Future<Map<DateTime, int>> tokensByDay({int days = 7}) async {
     final txs = await getTransactions(limit: _maxStoredTransactions);
     final now = DateTime.now().toUtc();
@@ -160,16 +257,13 @@ class CreditService {
     return map;
   }
 
-  /// Borra el historial (no toca el saldo).
   static Future<void> clearTransactions() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_transactionsKey);
   }
 
-  /// Obtiene el multiplicador de margen actual
-  static double getMarginMultiplier() => _marginMultiplier;
+  static double getMarginMultiplier() => ModelPricing.marginMultiplier;
 
-  /// Obtiene el saldo inicial
   static double getInitialBalance() => _initialBalance;
 
   static Future<void> _appendTransaction(CreditTransaction tx) async {
@@ -182,6 +276,9 @@ class CreditService {
       raw.removeRange(_maxStoredTransactions, raw.length);
     }
     await prefs.setStringList(_transactionsKey, raw);
+    if (WalletCloudService.isAvailable) {
+      await WalletCloudService.appendTransaction(tx);
+    }
   }
 
   static String _newId() =>

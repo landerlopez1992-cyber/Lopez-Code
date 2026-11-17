@@ -786,12 +786,9 @@ class _CodeEditorPanelState extends State<CodeEditorPanel>
       widget.onSave?.call(_currentFilePath!);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Archivo guardado: ${_currentFilePath!.split('/').last}'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
+        AppToast.success(
+          context,
+          'Archivo guardado: ${_currentFilePath!.split('/').last}',
         );
       }
     } catch (e) {
@@ -800,12 +797,7 @@ class _CodeEditorPanelState extends State<CodeEditorPanel>
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al guardar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al guardar: $e');
       }
     }
   }

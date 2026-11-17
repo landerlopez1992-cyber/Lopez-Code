@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -22,6 +23,12 @@ class PhoneEmulator extends StatefulWidget {
   final Function(InspectorElement?)? onElementHovered;
   /// Cuando cambia (Hot Reload/Restart), recarga el WebView con [appUrl].
   final int previewReloadNonce;
+  /// `false` = ⚡ soft reload; `true` = 🔄 hard reload (cache-bust + URL raíz).
+  final bool previewReloadHard;
+  /// UI Builder: al soltar/mover un bloque con el mouse.
+  final void Function(String blockId, double left, double top)? onUiBuilderMoved;
+  /// UI Builder: texto editado inline (doble clic).
+  final void Function(String blockId, String text)? onUiBuilderTextEdited;
 
   const PhoneEmulator({
     super.key,
@@ -37,13 +44,16 @@ class PhoneEmulator extends StatefulWidget {
     this.onElementSelected,
     this.onElementHovered,
     this.previewReloadNonce = 0,
+    this.previewReloadHard = true,
+    this.onUiBuilderMoved,
+    this.onUiBuilderTextEdited,
   });
 
   @override
-  State<PhoneEmulator> createState() => _PhoneEmulatorState();
+  State<PhoneEmulator> createState() => PhoneEmulatorState();
 }
 
-class _PhoneEmulatorState extends State<PhoneEmulator> {
+class PhoneEmulatorState extends State<PhoneEmulator> {
   late WebViewController _webViewController;
   bool _webViewInitialized = false;
   bool _inspectorMode = false;
@@ -53,6 +63,8 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
   DateTime? _lastLoadAt;
   bool _loadInFlight = false;
   bool _initialLoadScheduled = false;
+  /// Flash visible en Hot Restart (sin esto el HTML idéntico “parece” no recargar).
+  bool _restartFlash = false;
 
   @override
   void initState() {
@@ -92,6 +104,12 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           _handleInspectorMessage(message.message);
         },
       )
+      ..addJavaScriptChannel(
+        'UiBuilderChannel',
+        onMessageReceived: (JavaScriptMessage message) {
+          _handleUiBuilderMessage(message.message);
+        },
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (String url) {
@@ -112,6 +130,9 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
               if (!_webViewInitialized) {
                 setState(() => _webViewInitialized = true);
               }
+              Future.delayed(const Duration(milliseconds: 400), () {
+                if (mounted) _injectUiBuilderHelpers();
+              });
               // Inyectar script de inspector si está activo (con delay para asegurar que el canal JS esté listo)
               if (_inspectorMode) {
                 // Esperar más tiempo para asegurar que todo esté listo
@@ -128,6 +149,237 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           },
         ),
       );
+  }
+
+  void _handleUiBuilderMessage(String raw) {
+    try {
+      final data = jsonDecode(raw);
+      if (data is! Map) return;
+      final type = data['type']?.toString();
+      if (type == 'moved') {
+        final id = data['id']?.toString();
+        final left = (data['left'] as num?)?.toDouble();
+        final top = (data['top'] as num?)?.toDouble();
+        if (id == null || left == null || top == null) return;
+        widget.onUiBuilderMoved?.call(id, left, top);
+        return;
+      }
+      if (type == 'textEdited') {
+        final id = data['id']?.toString();
+        final text = data['text']?.toString();
+        if (id == null || text == null) return;
+        widget.onUiBuilderTextEdited?.call(id, text);
+      }
+    } catch (e) {
+      print('⚠️ UiBuilderChannel: $e');
+    }
+  }
+
+  /// Helpers JS: drop ancla + arrastrar para reposicionar.
+  Future<void> _injectUiBuilderHelpers() async {
+    const script = r'''
+      (function() {
+        if (!document.body) return;
+        if (!document.getElementById('__voryxel_body_pos')) {
+          var s = document.createElement('style');
+          s.id = '__voryxel_body_pos';
+          s.textContent = 'body{position:relative;min-height:100vh;} [data-voryxel-id].__voryxel-dragging{opacity:0.85;outline:2px dashed #3B82F6;}';
+          document.documentElement.appendChild(s);
+        }
+
+        window.__voryxelResolveDrop = function(nx, ny) {
+          var x = Math.max(0, Math.min(1, nx)) * (window.innerWidth || 1);
+          var y = Math.max(0, Math.min(1, ny)) * (window.innerHeight || 1);
+          function isTopLevel(n) {
+            var p = n.parentElement;
+            while (p && p !== document.body) {
+              if (p.getAttribute && p.getAttribute('data-voryxel-id')) return false;
+              p = p.parentElement;
+            }
+            return true;
+          }
+          var nodes = Array.prototype.slice.call(document.querySelectorAll('[data-voryxel-id]'));
+          var top = nodes.filter(isTopLevel);
+          var parentId = null, beforeId = null, afterId = null;
+          var el = null;
+          try { el = document.elementFromPoint(x, y); } catch (e) {}
+          var cur = el;
+          while (cur && cur !== document.body && cur !== document.documentElement) {
+            try {
+              var kind = cur.getAttribute && cur.getAttribute('data-voryxel');
+              if (kind === 'container' || kind === 'card' || kind === 'hero') {
+                parentId = cur.getAttribute('data-voryxel-id');
+                break;
+              }
+            } catch (e2) {}
+            cur = cur.parentElement;
+          }
+          if (!parentId) {
+            for (var i = 0; i < top.length; i++) {
+              var r = top[i].getBoundingClientRect();
+              var mid = r.top + r.height / 2;
+              if (y < mid) { beforeId = top[i].getAttribute('data-voryxel-id'); break; }
+              afterId = top[i].getAttribute('data-voryxel-id');
+            }
+          }
+          return JSON.stringify({
+            parentId: parentId, beforeId: beforeId, afterId: afterId,
+            x: Math.round(x), y: Math.round(y)
+          });
+        };
+
+        window.__voryxelBindMove = function(id) {
+          var el = document.querySelector('[data-voryxel-id="' + id + '"]');
+          if (!el) return;
+          if (el.__voryxelMoveBound) return;
+          el.__voryxelMoveBound = true;
+          var dragging = false, primed = false, sx = 0, sy = 0, ol = 0, ot = 0;
+          el.style.cursor = 'move';
+          el.addEventListener('mousedown', function(e) {
+            if (!window.__inspectorActive) return;
+            if (e.button !== 0) return;
+            primed = true;
+            sx = e.clientX; sy = e.clientY;
+          }, true);
+          window.addEventListener('mousemove', function(e) {
+            if (!primed && !dragging) return;
+            var dx = e.clientX - sx, dy = e.clientY - sy;
+            if (!dragging) {
+              if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+              dragging = true;
+              primed = false;
+              el.classList.add('__voryxel-dragging');
+              var cs = window.getComputedStyle(el);
+              if (cs.position !== 'absolute') {
+                var rect = el.getBoundingClientRect();
+                el.style.position = 'absolute';
+                el.style.left = (rect.left + window.scrollX) + 'px';
+                el.style.top = (rect.top + window.scrollY) + 'px';
+                el.style.margin = '0';
+                el.style.zIndex = '40';
+                el.style.width = rect.width + 'px';
+              }
+              ol = parseFloat(el.style.left) || 0;
+              ot = parseFloat(el.style.top) || 0;
+              sx = e.clientX; sy = e.clientY;
+              try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
+            }
+            el.style.left = (ol + e.clientX - sx) + 'px';
+            el.style.top = (ot + e.clientY - sy) + 'px';
+          }, true);
+          window.addEventListener('mouseup', function() {
+            primed = false;
+            if (!dragging) return;
+            dragging = false;
+            el.classList.remove('__voryxel-dragging');
+            try {
+              if (typeof UiBuilderChannel !== 'undefined') {
+                UiBuilderChannel.postMessage(JSON.stringify({
+                  type: 'moved',
+                  id: id,
+                  left: parseFloat(el.style.left) || 0,
+                  top: parseFloat(el.style.top) || 0
+                }));
+              }
+            } catch (e3) {}
+          }, true);
+
+          // Doble clic → editar texto inline.
+          if (!el.__voryxelTextBound) {
+            el.__voryxelTextBound = true;
+            el.addEventListener('dblclick', function(e) {
+              if (!window.__inspectorActive) return;
+              var target = e.target;
+              if (!target) return;
+              var tag = (target.tagName || '').toLowerCase();
+              var editable = {h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,p:1,span:1,a:1,button:1,li:1,strong:1,label:1};
+              if (!editable[tag]) {
+                target = el.querySelector('h1,h2,h3,h4,h5,h6,p,a,button,span,li,strong,label');
+              }
+              if (!target) return;
+              e.preventDefault(); e.stopPropagation();
+              target.setAttribute('contenteditable', 'true');
+              target.focus();
+              try {
+                var range = document.createRange();
+                range.selectNodeContents(target);
+                var sel = window.getSelection();
+                sel.removeAllRanges(); sel.addRange(range);
+              } catch (e4) {}
+              function finish() {
+                target.removeAttribute('contenteditable');
+                target.removeEventListener('blur', finish);
+                target.removeEventListener('keydown', onKey);
+                var text = (target.innerText || target.textContent || '').trim();
+                try {
+                  if (typeof UiBuilderChannel !== 'undefined') {
+                    UiBuilderChannel.postMessage(JSON.stringify({
+                      type: 'textEdited', id: id, text: text
+                    }));
+                  }
+                } catch (e5) {}
+              }
+              function onKey(ev) {
+                if (ev.key === 'Enter' && !ev.shiftKey) {
+                  ev.preventDefault();
+                  target.blur();
+                }
+                if (ev.key === 'Escape') {
+                  target.blur();
+                }
+              }
+              target.addEventListener('blur', finish);
+              target.addEventListener('keydown', onKey);
+            }, true);
+          }
+        };
+      })();
+    ''';
+    try {
+      await _webViewController.runJavaScript(script);
+    } catch (e) {
+      print('⚠️ UiBuilder helpers: $e');
+    }
+  }
+
+  /// Resuelve dónde insertar según coords normalizadas (0..1) del Preview.
+  Future<Map<String, dynamic>?> resolveUiBuilderDrop({
+    required double nx,
+    required double ny,
+  }) async {
+    if (!_webViewInitialized) return null;
+    try {
+      await _injectUiBuilderHelpers();
+      final raw = await _webViewController.runJavaScriptReturningResult(
+        'window.__voryxelResolveDrop(${nx.toStringAsFixed(4)}, ${ny.toStringAsFixed(4)})',
+      );
+      final text = raw?.toString() ?? '';
+      // WKWebView a veces envuelve el string entre comillas.
+      var cleaned = text.trim();
+      if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+        cleaned = cleaned.substring(1, cleaned.length - 1)
+            .replaceAll(r'\"', '"');
+      }
+      final decoded = jsonDecode(cleaned);
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v));
+      }
+    } catch (e) {
+      print('⚠️ resolveUiBuilderDrop: $e');
+    }
+    return null;
+  }
+
+  Future<void> bindUiBuilderMove(String blockId) async {
+    if (!_webViewInitialized || blockId.isEmpty) return;
+    try {
+      await _injectUiBuilderHelpers();
+      await _webViewController.runJavaScript(
+        'window.__voryxelBindMove(${jsonEncode(blockId)});',
+      );
+    } catch (e) {
+      print('⚠️ bindUiBuilderMove: $e');
+    }
   }
 
   /// Inyecta el script JavaScript para el inspector de elementos
@@ -269,6 +521,11 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'textarea') score += 8;
           if (role === 'button' || role === 'textbox' || role === 'link') score += 8;
           if (label) score += 6;
+          // UI Builder: preferir nodos con data-voryxel-id.
+          try {
+            if (el.getAttribute && el.getAttribute('data-voryxel-id')) score += 25;
+            else if (el.getAttribute && el.getAttribute('data-voryxel')) score += 12;
+          } catch (e3) {}
           // Texto corto tipo "2", "+", "C" → muy probable control.
           if (text && text.length > 0 && text.length <= 3) score += 12;
           else if (text && text.length > 0 && text.length < 24) score += 5;
@@ -500,8 +757,20 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
           }
         }
 
+        function nearestVoryxel(el) {
+          var cur = el;
+          while (cur && cur !== document.body && cur !== document.documentElement) {
+            try {
+              if (cur.getAttribute && cur.getAttribute('data-voryxel-id')) return cur;
+            } catch (e4) {}
+            cur = cur.parentElement;
+          }
+          return el;
+        }
+
         function selectElement(element, x, y) {
           if (!element || element === document.body || element === document.documentElement) return;
+          element = nearestVoryxel(element);
           currentSelectedElement = element;
           currentHoveredElement = element;
           var rect = updateBox(element, selectedDiv);
@@ -697,6 +966,10 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
         _selectedElement = element;
         InspectorSelectionService().setSelected(element, layers: layers);
         widget.onElementSelected?.call(element);
+        final vid = element.attributes['data-voryxel-id'];
+        if (vid != null && vid.isNotEmpty) {
+          unawaited(bindUiBuilderMove(vid));
+        }
       }
     } catch (e) {
       print('❌ Error al procesar mensaje del inspector: $e');
@@ -744,17 +1017,25 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
       });
     }
 
-    // Hot Reload / Hot Restart → recargar Preview con la URL de la app.
+    // ⚡ soft vs 🔄 hard — botones distintos.
     if (widget.previewReloadNonce != oldWidget.previewReloadNonce &&
         widget.previewReloadNonce > 0 &&
         widget.isRunning &&
         widget.appUrl != null &&
         widget.appUrl!.isNotEmpty) {
-      print(
-        '🔄 PhoneEmulator: previewReloadNonce '
-        '${oldWidget.previewReloadNonce} → ${widget.previewReloadNonce}',
-      );
-      _loadAppUrl(forceReload: true);
+      if (widget.previewReloadHard) {
+        print(
+          '🔄 PhoneEmulator: Hot Restart / hard reload '
+          '(${oldWidget.previewReloadNonce} → ${widget.previewReloadNonce})',
+        );
+        _flashAndHardReload();
+      } else {
+        print(
+          '⚡ PhoneEmulator: Hot Reload / soft reload '
+          '(${oldWidget.previewReloadNonce} → ${widget.previewReloadNonce})',
+        );
+        _softReloadPreview();
+      }
     }
     
     // Cargar URL solo si cambió de verdad o acabó de quedar lista.
@@ -784,6 +1065,40 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     }
   }
 
+  /// Muestra un flash breve y luego hard-reload (cache-bust).
+  /// Así el usuario ve que el Preview se reinició aunque el HTML no cambie.
+  void _flashAndHardReload() {
+    if (!mounted) return;
+    setState(() => _restartFlash = true);
+    Future<void>.delayed(const Duration(milliseconds: 280), () {
+      if (!mounted) return;
+      _loadAppUrl(forceReload: true);
+      Future<void>.delayed(const Duration(milliseconds: 420), () {
+        if (mounted) setState(() => _restartFlash = false);
+      });
+    });
+  }
+
+  /// ⚡ Soft: recarga la página actual sin cache-bust (estado de scroll/ruta
+  /// del documento se refresca, pero sin forzar URL raíz nueva).
+  void _softReloadPreview() {
+    if (!_webViewInitialized) {
+      _loadAppUrl(forceReload: false);
+      return;
+    }
+    final now = DateTime.now();
+    _lastLoadAt = now;
+    _loadInFlight = true;
+    print('⚡ PhoneEmulator: WebView.reload() (Hot Reload)');
+    try {
+      _webViewController.reload();
+    } catch (e) {
+      _loadInFlight = false;
+      print('❌ Soft reload falló, hard fallback: $e');
+      _loadAppUrl(forceReload: true);
+    }
+  }
+
   void _loadAppUrl({bool forceReload = false}) {
     final raw = widget.appUrl;
     if (raw == null || raw.isEmpty) {
@@ -806,7 +1121,7 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
     // Cache-bust solo en forceReload (Hot Restart / edit del agente).
     final base = raw.split('#').first.split('?').first;
     final url = forceReload
-        ? '$base?_lopez_preview=${now.millisecondsSinceEpoch}'
+        ? '$base?_voryxel_preview=${now.millisecondsSinceEpoch}'
         : base;
     if (!forceReload && _lastLoadedUrl == url) {
       return;
@@ -1580,6 +1895,39 @@ class _PhoneEmulatorState extends State<PhoneEmulator> {
   /// WebView del preview. El detalle del inspector NO va encima del teléfono
   /// (eso tapaba la app); vive en InspectorMonitorPanel al lado.
   Widget _buildWebViewWithInspector() {
-    return WebViewWidget(controller: _webViewController);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        WebViewWidget(controller: _webViewController),
+        if (_restartFlash)
+          ColoredBox(
+            color: const Color(0xE6080A0E),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: CursorTheme.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Reiniciando Preview…',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.9),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }

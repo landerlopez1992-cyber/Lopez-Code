@@ -3,6 +3,7 @@ import '../services/advanced_debugging_service.dart';
 import '../services/debug_console_service.dart';
 import '../services/platform_service.dart';
 import '../services/project_platform_support.dart';
+import 'app_toast.dart';
 import 'cursor_theme.dart';
 
 /// Barra de herramientas de Run and Debug
@@ -185,9 +186,9 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                         tooltip: reloading
                             ? 'Hot Reloading…'
                             : (flutterHot
-                                ? 'Hot Reload'
+                                ? '⚡ Hot Reload — aplica código sin reiniciar'
                                 : (previewHot
-                                    ? 'Refresh Preview (HTML)'
+                                    ? '⚡ Hot Reload — refresca el Preview'
                                     : 'Hot Reload (espera compile debug…)')),
                         loading: reloading,
                         onPressed: (hotReady && !hotBusy)
@@ -203,9 +204,9 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                         tooltip: restarting
                             ? 'Hot Restarting…'
                             : (flutterHot
-                                ? 'Hot Restart'
+                                ? '🔄 Hot Restart — reinicia la app desde cero'
                                 : (previewHot
-                                    ? 'Reload Preview (HTML)'
+                                    ? '🔄 Hot Restart — recarga Preview limpio'
                                     : 'Hot Restart (o reinicio completo)')),
                         loading: restarting,
                         onPressed: (!hotBusy)
@@ -851,13 +852,7 @@ class _PlatformSelector extends StatelessWidget {
             value,
             supportedPlatforms,
           );
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(hint),
-              backgroundColor: Colors.orange.shade800,
-              duration: const Duration(seconds: 4),
-            ),
-          );
+          AppToast.warning(context, hint);
           final preferred = ProjectPlatformSupport.preferPlatform(
             supportedPlatforms,
           );

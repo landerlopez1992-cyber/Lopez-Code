@@ -4,6 +4,7 @@ import '../services/platform_service.dart';
 import '../services/project_platform_support.dart';
 import '../services/project_service.dart';
 import '../services/run_debug_service.dart';
+import 'app_toast.dart';
 import 'cursor_theme.dart';
 
 class RunDebugPanel extends StatefulWidget {
@@ -279,15 +280,11 @@ class _RunDebugPanelState extends State<RunDebugPanel> {
                                     value,
                                     _supportedPlatforms,
                                   );
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    preferred == null
-                                        ? hint
-                                        : '$hint\n→ Usando ${ProjectPlatformSupport.humanLabel(preferred)}.',
-                                  ),
-                                  backgroundColor: Colors.orange.shade800,
-                                ),
+                              AppToast.warning(
+                                context,
+                                preferred == null
+                                    ? hint
+                                    : '$hint → Usando ${ProjectPlatformSupport.humanLabel(preferred)}.',
                               );
                               if (preferred != null) {
                                 setState(() => _selectedPlatform = preferred);

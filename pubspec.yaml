@@ -76,6 +76,11 @@ dependencies:
   xterm: ^4.0.0
   flutter_pty: ^0.4.2
 
+  # Auth de usuarios (cuenta crear / login / eliminar)
+  firebase_core: ^3.8.1
+  firebase_auth: ^5.3.4
+  cloud_firestore: ^5.6.12
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/credit_transaction.dart';
+import '../services/auth_service.dart';
 import '../services/credit_service.dart';
 import '../widgets/cursor_theme.dart';
+import '../widgets/app_toast.dart';
+import 'auth/login_screen.dart';
 
 /// Página de billetera / créditos de API (estilo Cursor IDE).
 class WalletScreen extends StatefulWidget {
@@ -51,18 +54,50 @@ class _WalletScreenState extends State<WalletScreen> {
     });
   }
 
-  Future<void> _addCredits(double amount) async {
-    await CreditService.addCredits(amount);
-    await _load();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content:
-            Text('Se agregaron \$${amount.toStringAsFixed(2)} a tu billetera'),
-        backgroundColor: CursorTheme.surface,
-        behavior: SnackBarBehavior.floating,
+  Future<void> _ensureLoggedInForTopUp() async {
+    if (AuthService.instance.isSignedIn) return;
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => const LoginScreen(
+          popOnSuccess: true,
+          successMessage: 'Sesión iniciada. Ya puedes recargar.',
+        ),
       ),
     );
+    if (!mounted) return;
+    if (ok == true || AuthService.instance.isSignedIn) {
+      AppToast.success(context, 'Sesión iniciada. Ya puedes recargar.');
+      await _load();
+    }
+  }
+
+  Future<void> _addCredits(double amount) async {
+    if (!AuthService.instance.isSignedIn) {
+      await _ensureLoggedInForTopUp();
+      if (!AuthService.instance.isSignedIn) {
+        if (!mounted) return;
+        AppToast.warning(
+          context,
+          'Debes iniciar sesión para agregar saldo',
+        );
+        return;
+      }
+    }
+    try {
+      await CreditService.addCredits(amount);
+      await _load();
+      if (!mounted) return;
+      AppToast.info(
+        context,
+        'Se agregaron \$${amount.toStringAsFixed(2)} a tu billetera',
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      AppToast.warning(context, e.message);
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo recargar: $e');
+    }
   }
 
   Future<void> _exportCsv() async {
@@ -77,13 +112,7 @@ class _WalletScreenState extends State<WalletScreen> {
     }
     await Clipboard.setData(ClipboardData(text: buf.toString()));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('CSV copiado al portapapeles'),
-        backgroundColor: CursorTheme.surface,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    AppToast.info(context, 'CSV copiado al portapapeles');
   }
 
   String _csv(String v) {
@@ -140,30 +169,65 @@ class _WalletScreenState extends State<WalletScreen> {
                     const SizedBox(height: 24),
                     _SectionLabel('Recargar'),
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _TopUpButton(
-                            label: '+ \$5',
-                            onTap: () => _addCredits(5),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _TopUpButton(
-                            label: '+ \$10',
-                            onTap: () => _addCredits(10),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _TopUpButton(
-                            label: '+ \$25',
-                            onTap: () => _addCredits(25),
-                            emphasized: true,
-                          ),
-                        ),
-                      ],
+                    AnimatedBuilder(
+                      animation: AuthService.instance,
+                      builder: (context, _) {
+                        final signedIn = AuthService.instance.isSignedIn;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (!signedIn) ...[
+                              Text(
+                                'Inicia sesión para agregar saldo. '
+                                'Sin saldo el agente no funciona.',
+                                style: TextStyle(
+                                  color: CursorTheme.textSecondary
+                                      .withValues(alpha: 0.95),
+                                  fontSize: 12,
+                                  height: 1.35,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              TextButton.icon(
+                                onPressed: _ensureLoggedInForTopUp,
+                                icon: const Icon(Icons.login, size: 15),
+                                label: const Text('Iniciar sesión'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                  backgroundColor: CursorTheme.primary,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _TopUpButton(
+                                  label: '+ \$5',
+                                  onTap: () => _addCredits(5),
+                                ),
+                                _TopUpButton(
+                                  label: '+ \$10',
+                                  onTap: () => _addCredits(10),
+                                ),
+                                _TopUpButton(
+                                  label: '+ \$25',
+                                  onTap: () => _addCredits(25),
+                                  emphasized: true,
+                                ),
+                              ],
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 28),
                     _SectionLabel('Uso (7 días)'),
@@ -210,10 +274,13 @@ class _WalletScreenState extends State<WalletScreen> {
                         ),
                         SizedBox(height: 14),
                         _InfoRow(
-                          icon: Icons.lock_outline,
-                          title: 'Saldo local',
+                          icon: Icons.cloud_outlined,
+                          title: 'Saldo en la nube',
                           body:
-                              'El saldo y el historial se guardan en este dispositivo.',
+                              'Con Firebase, el saldo va con tu cuenta: '
+                              'inicias sesión en otro Mac y lo recuperas. '
+                              'Recargar requiere sesión. Sin saldo el agente '
+                              'no responde.',
                         ),
                       ],
                     ),
@@ -718,7 +785,8 @@ class _TopUpButtonState extends State<_TopUpButton> {
           onTap: widget.onTap,
           borderRadius: BorderRadius.circular(6),
           child: Container(
-            height: 36,
+            height: 32,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
             alignment: Alignment.center,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(6),

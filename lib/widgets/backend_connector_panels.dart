@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/backend_project_inspector.dart';
 import '../services/env_connections_service.dart';
 import '../services/project_type_detector.dart';
+import 'app_toast.dart';
 import 'cursor_theme.dart';
 
 Future<void> openExternalUrl(String url) async {
@@ -366,8 +367,42 @@ class FirebaseConnectorDialog extends StatefulWidget {
 
 class _FirebaseConnectorDialogState extends State<FirebaseConnectorDialog> {
   final _configCtrl = TextEditingController();
-  bool _runningCli = false;
-  String? _cliMessage;
+  String? _hintMessage;
+  bool _hintOk = true;
+  bool _showAdvancedCli = false;
+  bool _isFlutterProject = false;
+  bool _saving = false;
+  bool _savedInProject = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _detectFlutter();
+    _loadSavedConfig();
+  }
+
+  Future<void> _detectFlutter() async {
+    final pubspec = File('${widget.projectPath}/pubspec.yaml');
+    final isFlutter = await pubspec.exists();
+    if (mounted) setState(() => _isFlutterProject = isFlutter);
+  }
+
+  Future<void> _loadSavedConfig() async {
+    final snippet =
+        await EnvConnectionsService.loadSavedFirebaseWebConfigSnippet(
+      widget.projectPath,
+    );
+    if (!mounted || snippet == null || snippet.isEmpty) return;
+    if (_configCtrl.text.trim().isNotEmpty) return;
+    setState(() {
+      _configCtrl.text = snippet;
+      _savedInProject = true;
+      _hintOk = true;
+      _hintMessage =
+          'Config ya guardada en el proyecto (.env + .voryxel/). '
+          'El agente la verá cuando la necesite.';
+    });
+  }
 
   @override
   void dispose() {
@@ -375,74 +410,164 @@ class _FirebaseConnectorDialogState extends State<FirebaseConnectorDialog> {
     super.dispose();
   }
 
-  Future<void> _runInProject(String command) async {
+  Future<void> _runInMacTerminal(String shellCommand) async {
+    // Importante: usar comillas dobles de Dart para interpolar la ruta.
+    final path = widget.projectPath.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+    final cmd = shellCommand.replaceAll('"', r'\"');
+    final script =
+        'tell application "Terminal"\n'
+        'activate\n'
+        'do script "cd \\"$path\\" && $cmd"\n'
+        'end tell';
+    await Process.start('osascript', ['-e', script]);
+  }
+
+  Future<void> _openConsoleAndGuide() async {
+    await openExternalUrl('https://console.firebase.google.com');
+    if (!mounted) return;
     setState(() {
-      _runningCli = true;
-      _cliMessage = 'Ejecutando: $command';
+      _hintOk = true;
+      _hintMessage =
+          '1) Crea/elige el proyecto en Firebase\n'
+          '2) ⚙ Project settings → Your apps → Web </>\n'
+          '3) Copia firebaseConfig { apiKey, projectId, … }\n'
+          '4) Pégalo abajo → Guardar en el proyecto → Integrar';
     });
+  }
+
+  Future<void> _openInteractiveFirebaseLogin() async {
     try {
-      final parts = command.split(' ');
-      final result = await Process.run(
-        parts.first,
-        parts.skip(1).toList(),
-        workingDirectory: widget.projectPath,
-        runInShell: true,
-      );
+      await _runInMacTerminal('firebase login --reauth');
       if (!mounted) return;
-      final out =
-          '${result.stdout}\n${result.stderr}'.trim().replaceAll('\r', '');
-      final snippet = out.length > 400 ? '${out.substring(0, 400)}…' : out;
       setState(() {
-        _runningCli = false;
-        _cliMessage = result.exitCode == 0
-            ? '✅ OK (exit 0)\n$snippet'
-            : '❌ exit ${result.exitCode}\n$snippet';
+        _hintOk = true;
+        _hintMessage =
+            'Terminal debería ejecutar `firebase login` (login en el navegador).\n'
+            'Eso solo autentica la CLI para deploy.\n'
+            'Para conectar tu web HTML: pega firebaseConfig abajo.';
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _runningCli = false;
-        _cliMessage =
-            '❌ No se pudo ejecutar. ¿Firebase CLI instalado?\n$e';
+        _hintOk = false;
+        _hintMessage = 'No se pudo abrir Terminal: $e';
       });
     }
   }
 
-  void _integrateWithAgent() {
+  Future<void> _openFlutterFireInTerminal() async {
+    try {
+      await _runInMacTerminal('flutterfire configure');
+      if (!mounted) return;
+      setState(() {
+        _hintOk = true;
+        _hintMessage =
+            'Terminal: `flutterfire configure` (solo Flutter).';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _hintOk = false;
+        _hintMessage = 'No se pudo abrir Terminal: $e';
+      });
+    }
+  }
+
+  Future<bool> _saveToProject({bool closeOnSuccess = true}) async {
     final paste = _configCtrl.text.trim();
+    if (paste.isEmpty) {
+      setState(() {
+        _hintOk = false;
+        _hintMessage =
+            'Pega el firebaseConfig completo de la Consola '
+            '(apiKey, projectId, …).';
+      });
+      AppToast.warning(context, 'Nada que guardar: pega la config primero');
+      return false;
+    }
+
+    setState(() => _saving = true);
+    final result = await EnvConnectionsService.saveFirebaseWebConfig(
+      widget.projectPath,
+      paste,
+    );
+    if (!mounted) return false;
+    setState(() {
+      _saving = false;
+      _hintOk = result.ok;
+      _hintMessage = result.message;
+      _savedInProject = result.ok;
+    });
+    if (result.ok) {
+      AppToast.success(
+        context,
+        'Firebase guardado en el proyecto '
+        '(${result.projectId ?? "ok"})',
+      );
+      if (closeOnSuccess && mounted) {
+        Navigator.of(context).pop();
+      }
+    } else {
+      AppToast.warning(context, result.message);
+    }
+    return result.ok;
+  }
+
+  Future<void> _integrateWithAgent() async {
+    final paste = _configCtrl.text.trim();
+    if (paste.isEmpty) {
+      setState(() {
+        _hintOk = false;
+        _hintMessage =
+            'Primero pega el firebaseConfig de la Consola.\n'
+            'Sin eso el agente no tiene credenciales reales que integrar.';
+      });
+      AppToast.warning(
+        context,
+        'Pega firebaseConfig antes de integrar',
+      );
+      return;
+    }
+
+    // Persistir sin cerrar; cerramos nosotros al disparar el agente.
+    final saved = await _saveToProject(closeOnSuccess: false);
+    if (!saved || !mounted) return;
+
     final insp = widget.inspection;
     final buf = StringBuffer()
       ..writeln(
-        'Configura Firebase de verdad en este proyecto '
-        '(firebase_core / FlutterFire o config Web según el stack).',
+        'Verifica e integra Firebase AHORA.',
       )
-      ..writeln('Estado: ${insp.statusLabel}.')
-      ..writeln('Project ID detectado: ${insp.projectId ?? "(ninguno)"}.')
+      ..writeln('Estado previo: ${insp.statusLabel}.')
+      ..writeln()
       ..writeln(
-        'Evidencia: ${insp.evidence.isEmpty ? "(ninguna)" : insp.evidence.join(", ")}.',
+        '1) VERIFICA que se guardó bien lo esperado:',
       )
       ..writeln(
-        'Falta: ${insp.missingHints.isEmpty ? "(nada crítico)" : insp.missingHints.join(", ")}.',
-      );
-    if (paste.isNotEmpty) {
-      buf.writeln();
-      buf.writeln(
-        'El usuario pegó esta configuración (úsalá; no inventes otras keys):',
-      );
-      buf.writeln('```');
-      buf.writeln(paste);
-      buf.writeln('```');
-    } else {
-      buf.writeln();
-      buf.writeln(
-        'Si faltan credenciales o login, usa open_external_url '
-        '(https://console.firebase.google.com) y/o execute_command '
-        '(`firebase login`, `flutterfire configure`) y guíame paso a paso.',
-      );
-    }
-    buf.writeln(
-      'Escribe el código real de inicialización. Nunca datos simulados/hardcoded falsos.',
-    );
+        '   - Lee `.env` (FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, '
+        'FIREBASE_PROJECT_ID, FIREBASE_STORAGE_BUCKET, '
+        'FIREBASE_MESSAGING_SENDER_ID, FIREBASE_APP_ID) '
+        'y `.voryxel/firebase_web_config.json`.',
+      )
+      ..writeln(
+        '   - Confirma que coinciden con la config pegada '
+        '(no inventes valores).',
+      )
+      ..writeln(
+        '   - Si falta algo o no coincide, dilo claro y no sigas '
+        'con datos inventados.',
+      )
+      ..writeln()
+      ..writeln(
+        '2) Si la verificación OK: conecta el SDK en el código '
+        '(HTML: index.html / js; Flutter: firebase_core). '
+        'Usa solo lo leído de esos archivos.',
+      )
+      ..writeln()
+      ..writeln('Copia de referencia (la que el usuario pegó):')
+      ..writeln('```')
+      ..writeln(paste)
+      ..writeln('```');
     Navigator.of(context).pop();
     widget.onAskAgent(buf.toString());
   }
@@ -463,57 +588,79 @@ class _FirebaseConnectorDialogState extends State<FirebaseConnectorDialog> {
             size: 20,
           ),
           SizedBox(width: 8),
-          Text(
-            'Firebase Connector',
-            style: TextStyle(
-              color: CursorTheme.textPrimary,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+          Expanded(
+            child: Text(
+              'Conectar Firebase al proyecto',
+              style: TextStyle(
+                color: CursorTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
       ),
       content: SizedBox(
-        width: 480,
+        width: 500,
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
               _StatusChip(ok: insp.configured, label: insp.statusLabel),
-              if (insp.projectId != null) ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Project ID: ${insp.projectId}',
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: CursorTheme.background,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: CursorTheme.primary.withValues(alpha: 0.45)),
+                ),
+                child: Text(
+                  _savedInProject
+                      ? 'Config guardada en este proyecto.\n'
+                          'Queda en `.env` (FIREBASE_*) y '
+                          '`.voryxel/firebase_web_config.json` para que el '
+                          'agente la use cuando haga falta.\n\n'
+                          'Puedes volver a pegar para actualizarla, o integrar '
+                          'en el código con el botón azul.'
+                      : '1) Pega el firebaseConfig de la Consola\n'
+                          '2) «Guardar en el proyecto» → queda disponible '
+                          'siempre para el agente\n'
+                          '3) «Integrar en el código» → el agente lo cablea '
+                          'en index.html / SDK\n\n'
+                          'No es login mágico del IDE. Login CLI solo para deploy.',
                   style: const TextStyle(
-                    color: CursorTheme.textSecondary,
-                    fontSize: 12,
+                    color: CursorTheme.textPrimary,
+                    fontSize: 12.5,
+                    height: 1.4,
                   ),
                 ),
-              ],
-              if (insp.evidence.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Detectado: ${insp.evidence.join(', ')}',
-                  style: const TextStyle(
-                    color: CursorTheme.textSecondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+              ),
               const SizedBox(height: 14),
+              OutlinedButton.icon(
+                onPressed: _openConsoleAndGuide,
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: const Text('1. Abrir Consola Firebase (copiar config)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: CursorTheme.textPrimary,
+                  side: const BorderSide(color: CursorTheme.border),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+              const SizedBox(height: 12),
               const Text(
-                'Pegar configuración Web / Flutter (opcional)',
+                '2. Pega aquí el firebaseConfig',
                 style: TextStyle(
                   color: CursorTheme.textSecondary,
                   fontSize: 12,
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(height: 6),
               TextField(
                 controller: _configCtrl,
-                maxLines: 6,
+                maxLines: 8,
                 style: const TextStyle(
                   color: CursorTheme.textPrimary,
                   fontSize: 12,
@@ -521,8 +668,12 @@ class _FirebaseConnectorDialogState extends State<FirebaseConnectorDialog> {
                 ),
                 decoration: InputDecoration(
                   hintText:
-                      'firebaseConfig = { apiKey: "...", projectId: "..." }\n'
-                      'o options de FlutterFire',
+                      'const firebaseConfig = {\n'
+                      '  apiKey: "...",\n'
+                      '  authDomain: "...",\n'
+                      '  projectId: "...",\n'
+                      '  ...\n'
+                      '};',
                   hintStyle: TextStyle(
                     color: CursorTheme.textDisabled.withValues(alpha: 0.8),
                     fontSize: 11,
@@ -539,74 +690,92 @@ class _FirebaseConnectorDialogState extends State<FirebaseConnectorDialog> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: () => openExternalUrl(
-                      'https://console.firebase.google.com',
+              const SizedBox(height: 8),
+              InkWell(
+                onTap: () =>
+                    setState(() => _showAdvancedCli = !_showAdvancedCli),
+                child: Row(
+                  children: [
+                    Icon(
+                      _showAdvancedCli
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      size: 18,
+                      color: CursorTheme.textSecondary,
                     ),
-                    icon: const Icon(Icons.open_in_new, size: 16),
-                    label: const Text('Abrir Consola Firebase'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: CursorTheme.textPrimary,
-                      side: const BorderSide(color: CursorTheme.border),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'Avanzado: CLI / deploy (opcional)',
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _runningCli
-                        ? null
-                        : () => _runInProject('firebase login'),
-                    icon: const Icon(Icons.login, size: 16),
-                    label: const Text('firebase login'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: CursorTheme.textPrimary,
-                      side: const BorderSide(color: CursorTheme.border),
-                    ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _runningCli
-                        ? null
-                        : () => _runInProject('flutterfire configure'),
-                    icon: const Icon(Icons.settings_suggest, size: 16),
-                    label: const Text('flutterfire configure'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: CursorTheme.textPrimary,
-                      side: const BorderSide(color: CursorTheme.border),
-                    ),
-                  ),
-                  if (hasFirebaseJson && widget.onDeploy != null)
+                  ],
+                ),
+              ),
+              if (_showAdvancedCli) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
                     OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        widget.onDeploy!();
-                      },
-                      icon: const Icon(Icons.cloud_upload_outlined, size: 16),
-                      label: const Text('firebase deploy'),
+                      onPressed: _openInteractiveFirebaseLogin,
+                      icon: const Icon(Icons.login, size: 16),
+                      label: const Text('Login CLI (Terminal)'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: CursorTheme.textPrimary,
                         side: const BorderSide(color: CursorTheme.border),
                       ),
                     ),
-                ],
-              ),
-              if (_cliMessage != null) ...[
+                    if (_isFlutterProject)
+                      OutlinedButton.icon(
+                        onPressed: _openFlutterFireInTerminal,
+                        icon: const Icon(Icons.settings_suggest, size: 16),
+                        label: const Text('flutterfire configure'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: CursorTheme.textPrimary,
+                          side: const BorderSide(color: CursorTheme.border),
+                        ),
+                      ),
+                    if (hasFirebaseJson && widget.onDeploy != null)
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          widget.onDeploy!();
+                        },
+                        icon: const Icon(Icons.cloud_upload_outlined, size: 16),
+                        label: const Text('firebase deploy'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: CursorTheme.textPrimary,
+                          side: const BorderSide(color: CursorTheme.border),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+              if (_hintMessage != null) ...[
                 const SizedBox(height: 10),
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
                     color: CursorTheme.background,
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: CursorTheme.border),
+                    border: Border.all(
+                      color: _hintOk
+                          ? CursorTheme.border
+                          : const Color(0xFFE57373),
+                    ),
                   ),
                   child: SelectableText(
-                    _cliMessage!,
-                    style: const TextStyle(
-                      color: CursorTheme.textSecondary,
-                      fontSize: 11,
-                      fontFamily: 'Menlo',
+                    _hintMessage!,
+                    style: TextStyle(
+                      color: _hintOk
+                          ? CursorTheme.textSecondary
+                          : const Color(0xFFEF9A9A),
+                      fontSize: 11.5,
+                      height: 1.4,
                     ),
                   ),
                 ),
@@ -617,20 +786,40 @@ class _FirebaseConnectorDialogState extends State<FirebaseConnectorDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
           child: const Text(
             'Cerrar',
             style: TextStyle(color: CursorTheme.textSecondary),
           ),
         ),
+        OutlinedButton.icon(
+          onPressed: _saving ? null : _saveToProject,
+          icon: _saving
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  _savedInProject ? Icons.check : Icons.save_outlined,
+                  size: 16,
+                ),
+          label: Text(
+            _savedInProject ? 'Guardado' : 'Guardar en el proyecto',
+          ),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: CursorTheme.textPrimary,
+            side: const BorderSide(color: CursorTheme.border),
+          ),
+        ),
         ElevatedButton.icon(
-          onPressed: _integrateWithAgent,
+          onPressed: _saving ? null : _integrateWithAgent,
           style: ElevatedButton.styleFrom(
             backgroundColor: CursorTheme.primary,
             foregroundColor: Colors.white,
           ),
           icon: const Icon(Icons.auto_fix_high, size: 16),
-          label: const Text('Integrar con Agente AI'),
+          label: const Text('Integrar en el código'),
         ),
       ],
     );

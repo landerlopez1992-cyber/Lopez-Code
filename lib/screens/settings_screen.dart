@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import '../services/auth_service.dart';
 import '../services/settings_service.dart';
 import '../services/code_indexing_service.dart';
 import '../services/vector_database_service.dart';
 import '../services/project_service.dart';
+import 'auth/login_screen.dart';
 import 'git_settings_screen.dart';
+import '../widgets/app_toast.dart';
+import '../widgets/cursor_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,12 +17,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final TextEditingController _apiKeyController = TextEditingController();
   final TextEditingController _rulesController = TextEditingController();
   final TextEditingController _behaviorController = TextEditingController();
   bool _isSaving = false;
-  bool _apiKeySaved = false;
-  bool _showApiKey = false;
   String _selectedModel = SettingsService.defaultModel;
   
   // Indexación de código
@@ -35,13 +35,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final apiKey = await SettingsService.getApiKey();
     final rules = await SettingsService.getSystemRules();
     final behavior = await SettingsService.getSystemBehavior();
     final model = await SettingsService.getSelectedModel();
 
     setState(() {
-      _apiKeyController.text = apiKey ?? '';
       _rulesController.text = rules;
       _behaviorController.text = behavior;
       _selectedModel = model;
@@ -70,12 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       
       if (projectPath == null || projectPath.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('⚠️ No hay proyecto cargado'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+          AppToast.warning(context, '⚠️ No hay proyecto cargado');
         }
         return;
       }
@@ -101,28 +94,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         
         // Mostrar resultado
         if (result.success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '✅ Proyecto indexado:\n'
-                '${result.filesProcessed} archivos procesados\n'
-                '${result.embeddingsCreated} embeddings creados\n'
-                'Tiempo: ${result.duration.inSeconds}s',
-              ),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 5),
-            ),
+          AppToast.success(
+            context,
+            'Proyecto indexado: ${result.filesProcessed} archivos, '
+            '${result.embeddingsCreated} embeddings '
+            '(${result.duration.inSeconds}s)',
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '⚠️ Indexación con errores:\n'
-                '${result.filesProcessed} procesados, ${result.errors} errores',
-              ),
-              backgroundColor: Colors.orange,
-              duration: const Duration(seconds: 5),
-            ),
+          AppToast.warning(
+            context,
+            'Indexación con errores: ${result.filesProcessed} procesados, '
+            '${result.errors} errores',
           );
         }
       }
@@ -133,13 +115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _indexingStatus = 'Error';
         });
         
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error al indexar: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
+        AppToast.error(context, '❌ Error al indexar: $e');
       }
     }
   }
@@ -150,81 +126,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _loadIndexStats();
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Índice limpiado correctamente'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        AppToast.success(context, '✅ Índice limpiado correctamente');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error al limpiar índice: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, '❌ Error al limpiar índice: $e');
       }
-    }
-  }
-
-  Future<void> _saveApiKey() async {
-    if (_apiKeyController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Por favor ingresa una API Key'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      _isSaving = true;
-      _apiKeySaved = false;
-    });
-
-    try {
-      await SettingsService.saveApiKey(_apiKeyController.text.trim());
-      
-      // Verificar que se guardó
-      final saved = await SettingsService.getApiKey();
-      if (saved == _apiKeyController.text.trim()) {
-        setState(() {
-          _apiKeySaved = true;
-          _isSaving = false;
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ API Key guardada correctamente'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
-        );
-
-        // Ocultar el check después de 2 segundos
-        Future.delayed(const Duration(seconds: 2), () {
-    if (mounted) {
-            setState(() {
-              _apiKeySaved = false;
-            });
-          }
-        });
-      } else {
-        throw Exception('No se pudo verificar el guardado');
-      }
-    } catch (e) {
-      setState(() {
-        _isSaving = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al guardar: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
   }
 
@@ -240,22 +147,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isSaving = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ Reglas guardadas correctamente'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, '✅ Reglas guardadas correctamente');
     } catch (e) {
       setState(() {
         _isSaving = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al guardar: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Error al guardar: $e');
     }
   }
 
@@ -271,33 +168,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isSaving = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ Comportamiento guardado correctamente'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, '✅ Comportamiento guardado correctamente');
     } catch (e) {
       setState(() {
         _isSaving = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al guardar: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Error al guardar: $e');
     }
-  }
-
-  void _copyToClipboard(String text) {
-    Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Copiado al portapapeles'),
-        duration: Duration(seconds: 1),
-      ),
-    );
   }
 
   Widget _buildStatRow(String label, String value) {
@@ -326,9 +203,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
   
+  Future<void> _confirmDeleteAccount() async {
+    final passwordController = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2D2D30),
+        title: const Text(
+          'Eliminar cuenta',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Esta acción es permanente. Confirma con tu contraseña.',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Contraseña',
+                labelStyle: TextStyle(color: Colors.white70),
+                border: OutlineInputBorder(),
+                filled: true,
+                fillColor: Color(0xFF3C3C3C),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      passwordController.dispose();
+      return;
+    }
+    try {
+      await AuthService.instance.deleteAccount(
+        password: passwordController.text,
+      );
+      passwordController.dispose();
+      if (!mounted) return;
+      AppToast.success(context, 'Cuenta eliminada');
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (e) {
+      passwordController.dispose();
+      if (mounted) {
+        AppToast.error(context, e.toString().replaceFirst('Exception: ', ''));
+      }
+    }
+  }
+
   @override
   void dispose() {
-    _apiKeyController.dispose();
     _rulesController.dispose();
     _behaviorController.dispose();
     super.dispose();
@@ -353,85 +295,122 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? const Center(
               child: CircularProgressIndicator(),
             )
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                // API Key Section
+          : Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                // Columna centrada — sin estirar de lado a lado en pantallas anchas.
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 24,
+                  ),
+                  children: [
+                // Cuenta del usuario (Firebase / local)
                 Card(
                   color: const Color(0xFF2D2D30),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-                        Row(
+                    child: AnimatedBuilder(
+                      animation: AuthService.instance,
+                      builder: (context, _) {
+                        final user = AuthService.instance.currentUser;
+                        final signedIn = user != null;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Icon(Icons.key, color: Colors.white70),
-                            const SizedBox(width: 8),
-            const Text(
-                              'API Key de OpenAI',
-                              style: TextStyle(
+                            const Row(
+                              children: [
+                                Icon(Icons.person_outline, color: Colors.white70),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Tu cuenta',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              signedIn ? user.email : 'Modo anónimo',
+                              style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
                               ),
                             ),
-                            if (_apiKeySaved) ...[
-                              const SizedBox(width: 8),
-                              const Icon(Icons.check_circle, color: Colors.green),
-                            ],
+                            const SizedBox(height: 4),
+                            Text(
+                              signedIn
+                                  ? (AuthService.instance.usesFirebase
+                                      ? 'Firebase Auth · puedes recargar billetera'
+                                      : 'Cuenta local · puedes recargar billetera')
+                                  : 'Puedes usar la app sin cuenta. '
+                                      'Inicia sesión para agregar saldo. '
+                                      'Sin saldo el agente no funciona.',
+                              style: const TextStyle(
+                                color: Colors.white54,
+                                fontSize: 11,
+                                height: 1.35,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                if (!signedIn)
+                                  TextButton.icon(
+                                    onPressed: () async {
+                                      await Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) => const LoginScreen(
+                                            popOnSuccess: true,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.login, size: 16),
+                                    label: const Text('Iniciar sesión'),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.white,
+                                      backgroundColor: CursorTheme.primary,
+                                    ),
+                                  )
+                                else ...[
+                                  TextButton.icon(
+                                    onPressed: () async {
+                                      await AuthService.instance.signOut();
+                                      if (!context.mounted) return;
+                                      // Sigue en la app como anónimo.
+                                    },
+                                    icon: const Icon(Icons.logout, size: 16),
+                                    label: const Text('Cerrar sesión'),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.white,
+                                      backgroundColor: const Color(0xFF3C3C3C),
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: _confirmDeleteAccount,
+                                    icon: const Icon(
+                                      Icons.delete_forever,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Eliminar cuenta'),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.white,
+                                      backgroundColor: const Color(0xFF8B1E1E),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
                           ],
-                        ),
-                        const SizedBox(height: 16),
-                        TextField(
-                          controller: _apiKeyController,
-                          decoration: InputDecoration(
-                            labelText: 'API Key',
-                            hintText: 'sk-...',
-                            border: const OutlineInputBorder(),
-                            filled: true,
-                            fillColor: const Color(0xFF3C3C3C),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _showApiKey ? Icons.visibility_off : Icons.visibility,
-                                color: Colors.white70,
-                              ),
-                              onPressed: () {
-                                setState(() {
-                                  _showApiKey = !_showApiKey;
-                                });
-                              },
-                              tooltip: _showApiKey ? 'Ocultar' : 'Mostrar',
-                            ),
-                          ),
-                          obscureText: !_showApiKey,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton.icon(
-                          onPressed: _saveApiKey,
-                          icon: const Icon(Icons.save),
-                          label: const Text('Guardar API Key'),
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            backgroundColor: const Color(0xFF007ACC),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton.icon(
-                          onPressed: () {
-                            _copyToClipboard('https://platform.openai.com/api-keys');
-                          },
-                          icon: const Icon(Icons.open_in_new, size: 16),
-                          label: const Text(
-                            'Obtener API Key',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.blue,
-                          ),
-            ),
-                      ],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -499,35 +478,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             color: Colors.white60,
                             fontSize: 12,
                             fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        InkWell(
-                          onTap: () {
-                            // Abrir dashboard de uso de OpenAI
-                            Clipboard.setData(const ClipboardData(text: 'https://platform.openai.com/usage'));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('URL copiada. Ve a platform.openai.com/usage para verificar tu uso y facturación'),
-                                duration: Duration(seconds: 4),
-                              ),
-                            );
-                          },
-                          child: Row(
-                            children: [
-                              const Icon(Icons.info_outline, size: 16, color: Colors.blue),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Verificar uso y facturación: platform.openai.com/usage',
-                                  style: TextStyle(
-                                    color: Colors.blue[300],
-                                    fontSize: 11,
-                                    decoration: TextDecoration.underline,
-                                  ),
-                                ),
-                              ),
-                            ],
                           ),
                         ),
                       ],
@@ -899,13 +849,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           description: 'Para leer y editar archivos de código',
                           onRequest: () {
                             // macOS pedirá permisos automáticamente
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-                                content: Text(
-                                  'Los permisos se solicitarán automáticamente cuando uses la función de archivos',
-                                ),
-          ),
-        );
+        AppToast.info(context, 'Los permisos se solicitarán automáticamente cuando uses la función de archivos');
                           },
                         ),
                         const SizedBox(height: 8),
@@ -914,21 +858,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           title: 'Conexión de Red',
                           description: 'Para comunicarse con la API de OpenAI',
                           onRequest: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Ve a: Configuración del Sistema → Red → Firewall\nY permite conexiones para esta app',
-                                ),
-                                duration: Duration(seconds: 4),
-          ),
-        );
+        AppToast.info(context, 'Ve a: Configuración del Sistema → Red → Firewall\nY permite conexiones para esta app');
                           },
                         ),
                       ],
                     ),
                   ),
                 ),
-              ],
+                  ],
+                ),
+              ),
             ),
     );
   }

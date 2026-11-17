@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'screens/welcome_screen.dart';
+import 'screens/auth/auth_gate.dart';
 import 'widgets/cursor_theme.dart';
+import 'services/auth_service.dart';
 import 'services/permission_service.dart';
 import 'services/settings_service.dart';
 
@@ -8,6 +9,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Lopez → Voryxel: recuperar API Key del plist del bundle anterior.
   await SettingsService.migrateLegacyMacPrefsIfNeeded();
+  await AuthService.instance.initialize();
   runApp(const MyApp());
 }
 
@@ -85,8 +87,7 @@ class _AppInitializerState extends State<AppInitializer> {
       );
     }
 
-    // SIEMPRE mostrar WelcomeScreen al abrir la app
-    // (incluso si no hay permisos, para que el usuario pueda intentar de nuevo)
-    return const WelcomeScreen();
+    // App usable en anónimo; login opcional (recargas).
+    return const AuthGate();
   }
 }

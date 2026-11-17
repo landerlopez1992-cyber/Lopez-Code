@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/git_service.dart';
 import '../services/project_service.dart';
+import '../widgets/app_toast.dart';
 
 class GitSettingsScreen extends StatefulWidget {
   const GitSettingsScreen({super.key});
@@ -56,12 +57,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
     if (_projectPath == null) return;
 
     if (_repoUrlController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Por favor ingresa la URL del repositorio'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Por favor ingresa la URL del repositorio');
       return;
     }
 
@@ -99,12 +95,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
         _isGitRepo = true;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ Configuración de Git guardada'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, '✅ Configuración de Git guardada');
 
       await _loadGitConfig();
     } catch (e) {
@@ -112,12 +103,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
         _isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 
@@ -125,12 +111,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
     if (_projectPath == null) return;
 
     if (_commitMessageController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Por favor ingresa un mensaje de commit'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Por favor ingresa un mensaje de commit');
       return;
     }
 
@@ -149,12 +130,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
         _commitMessageController.clear();
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ $result'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, '✅ $result');
 
       await _loadGitConfig();
     } catch (e) {
@@ -162,12 +138,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
         _isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 
@@ -185,12 +156,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
         _isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ $result'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, '✅ $result');
 
       await _loadGitConfig();
     } catch (e) {
@@ -198,12 +164,7 @@ class _GitSettingsScreenState extends State<GitSettingsScreen> {
         _isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      AppToast.error(context, 'Error: $e');
     }
   }
 

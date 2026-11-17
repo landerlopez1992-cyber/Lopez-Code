@@ -9,7 +9,9 @@ import '../models/agent_live_step.dart';
 import '../models/context_mention.dart';
 import '../models/chat_checkpoint.dart';
 import '../services/openai_service.dart';
+import '../services/auth_service.dart';
 import '../services/credit_service.dart';
+import '../services/model_pricing.dart';
 import '../services/settings_service.dart';
 import '../services/project_service.dart';
 import '../services/chat_storage_service.dart';
@@ -36,6 +38,7 @@ import '../services/task_orchestrator_service.dart';
 import '../services/project_analyzer_service.dart';
 import '../services/auto_execution_service.dart';
 import 'settings_screen.dart';
+import '../widgets/app_toast.dart';
 
 // Custom painter para el icono de código (corchetes angulares <>)
 // Ajustado para tamaño pequeño profesional (20x20) con esquinas redondeadas
@@ -91,9 +94,9 @@ class ChatScreen extends StatefulWidget {
   /// Abre la pestaña Code (y opcionalmente el archivo del error) sin usar IA.
   final VoidCallback? onViewCode;
 
-  /// Cuando el agente toca un archivo: abrir/refrescar el editor en vivo.
-  /// [line] = línea 1-based donde el agente está editando.
-  final void Function(String path, {int? line})? onAgentOpenFile;
+  /// Cuando el agente toca un archivo: cargar en Code (2º plano).
+  /// [reveal]=true → cambiar a la pestaña Code (clic del usuario en el chat).
+  final void Function(String path, {int? line, bool reveal})? onAgentOpenFile;
 
   final Function(GlobalKey<_ChatScreenState>)?
   onScreenCreated; // Callback para registrar el GlobalKey
@@ -323,27 +326,29 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Método público para precargar un mensaje desde fuera (Debug Console)
-  /// Precarga el mensaje en el input, pero NO lo envía automáticamente
-  void sendExternalMessage(String message) {
+  /// Mensaje externo (Debug Console / conectores).
+  /// [autoSend]=false → solo precarga (errores); true → envía al agente ya.
+  void sendExternalMessage(String message, {bool autoSend = false}) {
     if (!mounted || message.isEmpty) return;
 
     try {
-      // Usar un microtask para evitar problemas de estado
-      Future.microtask(() {
+      Future.microtask(() async {
         if (!mounted) return;
 
         setState(() {
           _messageController.text = message;
-          _isErrorReportDraft = true;
-          // NO llamar a _sendMessage() automáticamente
-          // El usuario debe presionar el botón de enviar
+          // Draft de errores: el usuario revisa antes de enviar.
+          // Integrar Firebase/Supabase: dispara el agente de inmediato.
+          _isErrorReportDraft = !autoSend;
         });
 
-        // Hacer scroll al final para que el usuario vea el mensaje precargado
+        if (autoSend) {
+          await _sendMessage();
+          return;
+        }
+
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-
           try {
             if (_scrollController.hasClients) {
               _scrollController.animateTo(
@@ -469,15 +474,7 @@ $compact
     _platformService.setPlatform(preferred);
     if (mounted) {
       setState(() => _selectedPlatform = preferred);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '$hint\n→ Ejecutando en ${ProjectPlatformSupport.humanLabel(preferred)}.',
-          ),
-          backgroundColor: Colors.orange.shade800,
-          duration: const Duration(seconds: 5),
-        ),
-      );
+      AppToast.warning(context, '$hint\n→ Ejecutando en ${ProjectPlatformSupport.humanLabel(preferred)}.');
     }
     return preferred;
   }
@@ -1106,12 +1103,7 @@ $compact
         print('❌ Error al inicializar OpenAI Service: $e');
         releaseSendLock();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('No se pudo iniciar el agente: $e'),
-              backgroundColor: Colors.red.shade800,
-            ),
-          );
+          AppToast.error(context, 'No se pudo iniciar el agente: $e');
         }
         return;
       }
@@ -1122,14 +1114,7 @@ $compact
     if (projectPath == null || projectPath.isEmpty) {
       releaseSendLock();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No hay proyecto cargado. Por favor carga un proyecto primero.',
-            ),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        AppToast.warning(context, 'No hay proyecto cargado. Por favor carga un proyecto primero.');
       }
       return;
     }
@@ -1337,38 +1322,46 @@ $compact
         _scrollToBottom();
       }
 
-      // ✅ NUEVO: Verificar saldo antes de enviar
+      // Sin saldo → el agente no corre (anónimo OK, pero hay que recargar).
       final estimatedTokens = contextBundle.estimatedTokens;
-      // Obtener modelo actual
       final currentModel = _openAIService?.model ?? SettingsService.defaultModel;
-      // Costo aproximado por token (ajustar según modelo)
-      final costPerToken = currentModel.contains('gpt-4o')
-          ? 0.00001
-          : 0.000002; // gpt-4o es más caro
+      final balance = await CreditService.getBalance();
 
-      final hasBalance = await CreditService.hasEnoughBalance(
-        estimatedTokens,
-        costPerToken,
+      if (balance <= 0) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _isSending = false;
+          });
+          AppToast.warning(
+            context,
+            AuthService.instance.isSignedIn
+                ? 'Sin saldo. Recarga en Billetera para usar el agente.'
+                : 'Sin saldo. Inicia sesión y recarga en Billetera '
+                    'para usar el agente.',
+          );
+        }
+        return;
+      }
+
+      final hasBalance = await CreditService.hasEnoughBalanceForModel(
+        model: currentModel,
+        estimatedTokens: estimatedTokens,
       );
       if (!hasBalance) {
-        final balance = await CreditService.getBalance();
-        final estimatedCost = CreditService.getEstimatedCost(
-          estimatedTokens,
-          costPerToken,
+        final estimatedCost = CreditService.getEstimatedCostForModel(
+          model: currentModel,
+          estimatedTokens: estimatedTokens,
         );
         if (mounted) {
           setState(() {
             _isLoading = false;
             _isSending = false;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '💰 Saldo insuficiente. Tienes \$${balance.toStringAsFixed(2)}, necesitas \$${estimatedCost.toStringAsFixed(2)}',
-              ),
-              backgroundColor: Colors.orange,
-              duration: const Duration(seconds: 5),
-            ),
+          AppToast.warning(
+            context,
+            '💰 Saldo insuficiente. Tienes \$${balance.toStringAsFixed(2)}, '
+            'necesitas \$${estimatedCost.toStringAsFixed(2)}',
           );
         }
         return;
@@ -1404,24 +1397,26 @@ $compact
                 : null,
             // Agent+autoApply: PendingActions solo para comandos no seguros.
             apiMessages: _apiMessages,
-            onTokensUsed: (tokens) async {
-              // ✅ Descontar créditos cuando se usan tokens
-              final deducted = await CreditService.deductCredits(
-                tokens,
-                costPerToken,
-                model: currentModel,
+            onTokensUsed: (usage) async {
+              final deducted = await CreditService.deductUsage(
+                usage,
                 note: allowTools ? 'Agent' : 'Ask',
               );
               if (!deducted) {
                 print('⚠️ No se pudieron descontar créditos');
               } else {
                 final newBalance = await CreditService.getBalance();
+                final openai = ModelPricing.openaiCost(usage);
+                final client = ModelPricing.clientCost(usage);
                 print(
-                  '💰 Créditos descontados. Saldo restante: \$${newBalance.toStringAsFixed(2)}',
+                  '💰 Cobrado modelo=${usage.model} '
+                  'in=${usage.promptTokens} out=${usage.completionTokens} '
+                  'OpenAI=\$${openai.toStringAsFixed(5)} '
+                  'cliente=\$${client.toStringAsFixed(5)} '
+                  '(+20%). Saldo=\$${newBalance.toStringAsFixed(2)}',
                 );
-                // Actualizar UI si es necesario
                 if (mounted) {
-                  setState(() {}); // Forzar rebuild para actualizar contador
+                  setState(() {});
                 }
               }
             },
@@ -2035,13 +2030,7 @@ $compact
     _debugService.setCompilationProgress(0.0, 'Detenido');
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ Operación cancelada'),
-          duration: Duration(seconds: 2),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      AppToast.warning(context, '✅ Operación cancelada');
     }
 
     print('✅ Estado limpiado correctamente');
@@ -2253,12 +2242,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
       if (projectPath == null || projectPath.isEmpty) {
         print('❌ ChatScreen._handleRun: NO HAY PROYECTO');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No hay proyecto cargado'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+          AppToast.warning(context, 'No hay proyecto cargado');
         }
         return;
       }
@@ -2268,12 +2252,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
       if (!await projectDir.exists()) {
         print('❌ ChatScreen._handleRun: EL DIRECTORIO NO EXISTE: $projectPath');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('El proyecto no existe: $projectPath'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'El proyecto no existe: $projectPath');
         }
         return;
       }
@@ -2554,15 +2533,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
 
                   // Mostrar mensaje de éxito
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          '✅ Soporte web agregado. Reintentando compilación...',
-                        ),
-                        backgroundColor: Colors.green,
-                        duration: Duration(seconds: 3),
-                      ),
-                    );
+                    AppToast.success(context, '✅ Soporte web agregado. Reintentando compilación...');
                   }
                 } else {
                   _debugService.addOutput('❌ Error al agregar soporte web:\n');
@@ -3408,12 +3379,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
         });
         _debugService.setRunning(false);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al ejecutar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al ejecutar: $e');
       }
     }
   }
@@ -3456,12 +3422,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
       if (projectPath == null || projectPath.isEmpty) {
         print('❌ ChatScreen._handleDebug: NO HAY PROYECTO');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No hay proyecto cargado'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+          AppToast.warning(context, 'No hay proyecto cargado');
         }
         return;
       }
@@ -3473,12 +3434,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
           '❌ ChatScreen._handleDebug: EL DIRECTORIO NO EXISTE: $projectPath',
         );
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('El proyecto no existe: $projectPath'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'El proyecto no existe: $projectPath');
         }
         return;
       }
@@ -4467,12 +4423,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
         });
         _debugService.setRunning(false);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al ejecutar: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error al ejecutar: $e');
       }
     }
   }
@@ -4544,14 +4495,10 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
       }
     }
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Hot Reload no disponible. Espera a que Compile termine '
-            'en debug, o pulsa Stop → Run.',
-          ),
-          duration: Duration(seconds: 3),
-        ),
+      AppToast.warning(
+        context,
+        'Hot Reload no disponible. Espera a que Compile termine '
+        'en debug, o pulsa Stop → Run.',
       );
     }
   }
@@ -4975,7 +4922,8 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                       !_isSending
                   ? () => _continueAgentTask(index)
                   : null,
-              onOpenFile: (path) => widget.onAgentOpenFile?.call(path),
+              onOpenFile: (path) =>
+                  widget.onAgentOpenFile?.call(path, reveal: true),
             ),
             if (msg.role == 'assistant' && msg.checkpoint != null)
               Padding(
@@ -5044,15 +4992,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
                     setState(() => _autocompleteActive = false);
                     final added = await showAddDocumentationDialog(context);
                     if (added && mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Documentación agregada. El agente la usará como referencia.',
-                          ),
-                          backgroundColor: Colors.green,
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
+                      AppToast.success(context, 'Documentación agregada. El agente la usará como referencia.');
                     }
                   },
                   onDismiss: () {

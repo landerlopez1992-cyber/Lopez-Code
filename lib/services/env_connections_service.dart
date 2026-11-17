@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -54,6 +55,15 @@ class EnvConnectionsService {
         buf.writeln('- $k');
       }
       buf.writeln('</env_key_names>');
+      final firebaseKeys =
+          keys.where((k) => k.startsWith('FIREBASE_')).toList();
+      if (firebaseKeys.isNotEmpty) {
+        buf.writeln(
+          'firebase_web_config: saved (.env FIREBASE_* + '
+          '.voryxel/firebase_web_config.json). '
+          'Al integrar Firebase, LEE esos valores — no inventes apiKey.',
+        );
+      }
       return buf.toString();
     } catch (e) {
       return 'env_keys: (error: $e)\n';
@@ -285,6 +295,167 @@ class EnvConnectionsService {
     }
     return map;
   }
+
+  /// Campos típicos del firebaseConfig Web.
+  static const List<String> firebaseWebFields = [
+    'apiKey',
+    'authDomain',
+    'projectId',
+    'storageBucket',
+    'messagingSenderId',
+    'appId',
+    'measurementId',
+  ];
+
+  static String firebaseEnvKey(String field) {
+    // apiKey → FIREBASE_API_KEY
+    final snake = field
+        .replaceAllMapped(
+          RegExp(r'([A-Z])'),
+          (m) => '_${m.group(1)}',
+        )
+        .toUpperCase();
+    return 'FIREBASE_$snake';
+  }
+
+  /// Extrae pares del bloque pegado (JS/JSON).
+  static Map<String, String> parseFirebaseWebConfig(String paste) {
+    final out = <String, String>{};
+    for (final field in firebaseWebFields) {
+      final re = RegExp(
+        '''['"]?$field['"]?\\s*:\\s*['"]([^'"]+)['"]''',
+        caseSensitive: false,
+      );
+      final m = re.firstMatch(paste);
+      final v = m?.group(1)?.trim();
+      if (v != null && v.isNotEmpty && v != '...') {
+        out[field] = v;
+      }
+    }
+    return out;
+  }
+
+  /// Guarda config Web en `.env` + `.voryxel/firebase_web_config.json`
+  /// (gitignore). El agente ve los nombres FIREBASE_* en workspace_state.
+  static Future<FirebaseSaveResult> saveFirebaseWebConfig(
+    String projectPath,
+    String pastedText,
+  ) async {
+    final parsed = parseFirebaseWebConfig(pastedText);
+    if (parsed.isEmpty) {
+      return const FirebaseSaveResult(
+        ok: false,
+        message:
+            'No se detectó firebaseConfig. Pega el objeto completo '
+            '(apiKey, authDomain, projectId, …).',
+        keys: [],
+      );
+    }
+    if (!parsed.containsKey('apiKey') || !parsed.containsKey('projectId')) {
+      return FirebaseSaveResult(
+        ok: false,
+        message:
+            'Faltan campos clave. Pegaste solo un fragmento. '
+            'Copia TODO el bloque (incluye apiKey y projectId). '
+            'Detectado: ${parsed.keys.join(", ")}',
+        keys: parsed.keys.toList(),
+      );
+    }
+
+    final root = projectPath.replaceAll('\\', '/');
+    final envUpdates = <String, String>{};
+    for (final e in parsed.entries) {
+      envUpdates[firebaseEnvKey(e.key)] = e.value;
+    }
+    await upsertEnvKeys(root, envUpdates);
+    await ensureEnvInGitignore(root);
+
+    final voryxelDir = Directory('$root/.voryxel');
+    if (!await voryxelDir.exists()) {
+      await voryxelDir.create(recursive: true);
+    }
+    final jsonFile = File('$root/.voryxel/firebase_web_config.json');
+    await jsonFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert({
+        ...parsed,
+        '_savedAt': DateTime.now().toIso8601String(),
+        '_note':
+            'Credenciales Web Firebase. No subir a git. '
+            'El agente debe leer FIREBASE_* de .env o este archivo.',
+      }),
+    );
+
+    // Asegurar .voryxel/ en gitignore
+    final gi = File('$root/.gitignore');
+    var giContent = await gi.exists() ? await gi.readAsString() : '';
+    if (!giContent.toLowerCase().contains('.voryxel')) {
+      final buf = StringBuffer(giContent.trimRight());
+      if (buf.isNotEmpty) buf.writeln();
+      buf.writeln();
+      buf.writeln('# Voryxel local secrets');
+      buf.writeln('.voryxel/');
+      await gi.writeAsString('$buf\n');
+    }
+
+    return FirebaseSaveResult(
+      ok: true,
+      message:
+          'Guardado en .env (${envUpdates.keys.join(", ")}) '
+          'y .voryxel/firebase_web_config.json. '
+          'El agente verá las claves FIREBASE_* en el contexto.',
+      keys: envUpdates.keys.toList()..sort(),
+      projectId: parsed['projectId'],
+    );
+  }
+
+  /// Carga config guardada (para rellenar el cuadro del conector).
+  static Future<String?> loadSavedFirebaseWebConfigSnippet(
+    String projectPath,
+  ) async {
+    final root = projectPath.replaceAll('\\', '/');
+    final jsonFile = File('$root/.voryxel/firebase_web_config.json');
+    if (await jsonFile.exists()) {
+      try {
+        final map =
+            jsonDecode(await jsonFile.readAsString()) as Map<String, dynamic>;
+        final buf = StringBuffer('const firebaseConfig = {\n');
+        for (final field in firebaseWebFields) {
+          final v = map[field]?.toString();
+          if (v == null || v.isEmpty) continue;
+          buf.writeln('  $field: "$v",');
+        }
+        buf.writeln('};');
+        return buf.toString();
+      } catch (_) {}
+    }
+    // Fallback desde .env
+    final envMap = <String, String>{};
+    for (final field in firebaseWebFields) {
+      final v = await readEnvValue(root, firebaseEnvKey(field));
+      if (v != null && v.isNotEmpty) envMap[field] = v;
+    }
+    if (envMap.isEmpty) return null;
+    final buf = StringBuffer('const firebaseConfig = {\n');
+    for (final e in envMap.entries) {
+      buf.writeln('  ${e.key}: "${e.value}",');
+    }
+    buf.writeln('};');
+    return buf.toString();
+  }
+}
+
+class FirebaseSaveResult {
+  final bool ok;
+  final String message;
+  final List<String> keys;
+  final String? projectId;
+
+  const FirebaseSaveResult({
+    required this.ok,
+    required this.message,
+    required this.keys,
+    this.projectId,
+  });
 }
 
 class SupabaseConnectionTestResult {
