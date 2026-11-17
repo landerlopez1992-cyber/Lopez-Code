@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'debug_console_service.dart';
 import 'project_type_detector.dart';
+import 'run_debug_service.dart';
 
 /// Preview de diseño para proyectos HTML estáticos.
 ///
@@ -144,8 +145,8 @@ class HtmlPreviewService {
 
       final url = _composeUrl(page);
       debug.setDesignPreview(true, url: url);
-      debug.setRunning(false);
       debug.setAppUrl(url);
+      // No tocar isRunning: Run/Stop lo controla el toolbar.
       if (!quiet) {
         debug.addOutput('🌐 Preview de diseño → $url');
       }
@@ -164,7 +165,6 @@ class HtmlPreviewService {
     final debug = DebugConsoleService();
     debug.setDesignPreview(true, url: _baseUrl);
     debug.setAppUrl(_baseUrl);
-    debug.setRunning(false);
   }
 
   Future<void> showPage(String? page) async {
@@ -174,7 +174,6 @@ class HtmlPreviewService {
     final changed = debug.appUrl != url;
     debug.setDesignPreview(true, url: url);
     debug.setAppUrl(url);
-    debug.setRunning(false);
     if (changed) {
       debug.bumpPreviewReload(force: true, hard: true);
     } else {
@@ -266,9 +265,13 @@ class HtmlPreviewService {
       _projectPath = null;
       final debug = DebugConsoleService();
       debug.setDesignPreview(false);
-      debug.setAppUrl(null);
-      debug.setRunning(false);
-      debug.setCompilationProgress(0.0, '');
+      // No borrar URL/running si hay un flutter run activo (cambio HTML→Flutter).
+      final flutterLive = RunDebugService.isRunning();
+      if (!flutterLive) {
+        debug.setAppUrl(null);
+        debug.setRunning(false);
+        debug.setCompilationProgress(0.0, '');
+      }
     }
   }
 }

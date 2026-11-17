@@ -313,8 +313,15 @@ class AuthService extends ChangeNotifier {
             '(Authentication → Sign-in method → Email/Password)';
       case 'requires-recent-login':
         return 'Por seguridad, vuelve a iniciar sesión e inténtalo de nuevo';
+      case 'keychain-error':
+        return 'macOS bloqueó el Keychain de Firebase. Cierra la app, '
+            'vuelve a abrirla e inténtalo otra vez. Si sigue, reinicia el Mac.';
       case 'internal-error':
       case 'unknown':
+        if (rawMsg.contains('KEYCHAIN')) {
+          return 'macOS bloqueó el Keychain de Firebase. Cierra y vuelve a '
+              'abrir la app, luego inténtalo otra vez.';
+        }
         if (registering) {
           return 'No se pudo crear la cuenta. Si ya te registraste antes, '
               'usa «Iniciar sesión» con la misma contraseña';
@@ -328,6 +335,10 @@ class AuthService extends ChangeNotifier {
       case 'deadline-exceeded':
         return 'Firebase no respondió a tiempo. Inténtalo de nuevo';
       default:
+        if (rawMsg.contains('KEYCHAIN') || code.contains('keychain')) {
+          return 'macOS bloqueó el Keychain de Firebase. Cierra y vuelve a '
+              'abrir la app, luego inténtalo otra vez.';
+        }
         final hint = (e.message != null && e.message!.trim().isNotEmpty)
             ? e.message!.trim()
             : code;

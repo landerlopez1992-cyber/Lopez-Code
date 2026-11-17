@@ -4976,7 +4976,7 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
             ),
             if (msg.role == 'assistant' && msg.checkpoint != null)
               Padding(
-                padding: const EdgeInsets.fromLTRB(48, 0, 16, 8),
+                padding: const EdgeInsets.fromLTRB(40, 0, 12, 8),
                 child: CheckpointBannerWidget(
                   checkpoint: msg.checkpoint!,
                   onRestored: () {

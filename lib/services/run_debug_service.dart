@@ -7,6 +7,16 @@ import 'project_platform_support.dart';
 import 'project_service.dart';
 
 class RunDebugService {
+  /// Referencia real del proceso `dart:io` Process de `flutter run`.
+  static Process? _currentProcess;
+  static bool _isRunning = false;
+  static String? _currentOutput;
+  static String? _lastPreviewUrl;
+  static void Function()? _onProcessEnded;
+
+  /// Última URL de Preview web-server (para recuperar si se borró por race).
+  static String? get lastPreviewUrl => _lastPreviewUrl;
+
   static Future<int> _findFreeWebPort({int preferred = 8085}) async {
     Future<bool> isFree(int port) async {
       try {
@@ -30,17 +40,46 @@ class RunDebugService {
     return port;
   }
 
+  /// Mata web-servers huérfanos de Runs anteriores (evita Preview vacío).
+  static Future<void> killOrphanWebServers({
+    int fromPort = 8085,
+    int toPort = 8125,
+  }) async {
+    for (var port = fromPort; port <= toPort; port++) {
+      try {
+        await Process.run('lsof', ['-ti', 'tcp:$port']).then((r) async {
+          final out = (r.stdout.toString()).trim();
+          if (out.isEmpty) return;
+          for (final line in out.split(RegExp(r'\s+'))) {
+            final pid = int.tryParse(line.trim());
+            if (pid == null || pid <= 0) continue;
+            // No matar el proceso actual de este servicio.
+            if (_currentProcess != null && _currentProcess!.pid == pid) {
+              continue;
+            }
+            try {
+              Process.killPid(pid, ProcessSignal.sigterm);
+            } catch (_) {}
+          }
+        });
+      } catch (_) {}
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+  }
+
   static void _notifyWebPreviewUrl(
     String url, {
     bool ready = true,
     String? platform,
   }) {
     try {
+      _lastPreviewUrl = url;
       final debug = DebugConsoleService();
       final p = (platform ?? PlatformService().selectedPlatform).toLowerCase();
       final isWeb = p == 'web';
       final label = ProjectPlatformSupport.humanLabel(p);
       debug.setRunning(true);
+      debug.setDesignPreview(false);
       debug.setAppUrl(url);
       if (ready) {
         debug.setCompilationProgress(
@@ -48,6 +87,8 @@ class RunDebugService {
           isWeb ? 'Aplicación web ejecutándose' : '$label ejecutándose',
         );
         debug.addDebugConsole('🌐 Preview interno listo: $url');
+        // Forzar notify aunque la URL sea la misma (snapshot UI).
+        debug.bumpPreviewReload(force: true, hard: false);
       } else {
         debug.setCompilationProgress(
           0.35,
@@ -58,6 +99,19 @@ class RunDebugService {
     } catch (e) {
       print('⚠️ No se pudo notificar URL de Preview: $e');
     }
+  }
+
+  /// Si el Preview perdió la URL pero el proceso sigue vivo, la restaura.
+  static bool ensurePreviewUrlAlive() {
+    final url = _lastPreviewUrl;
+    if (!_isRunning || url == null || url.isEmpty) return false;
+    final debug = DebugConsoleService();
+    if (debug.appUrl != null && debug.appUrl!.isNotEmpty) return true;
+    debug.setRunning(true);
+    debug.setAppUrl(url);
+    debug.bumpPreviewReload(force: true, hard: false);
+    print('🩹 RunDebugService: restaurada Preview URL $url');
+    return true;
   }
 
   static void _markRunStarted(String platform) {
@@ -74,18 +128,19 @@ class RunDebugService {
       debug.addDebugConsole('🚀 Run iniciado · plataforma=$platform');
     } catch (_) {}
   }
-  /// Referencia real del proceso `dart:io` Process de `flutter run`.
-  static Process? _currentProcess;
-  static bool _isRunning = false;
-  static String? _currentOutput;
-  static void Function()? _onProcessEnded;
 
   /// Callback para notificar a la UI que el proceso realmente terminó.
   static void setOnProcessEnded(void Function()? callback) {
     _onProcessEnded = callback;
   }
 
-  static void _notifyProcessEnded() {
+  static void _notifyProcessEnded({Process? ended}) {
+    // Evita que un proceso viejo borre el Process nuevo (race al re-Run).
+    if (ended != null &&
+        _currentProcess != null &&
+        !identical(_currentProcess, ended)) {
+      return;
+    }
     _isRunning = false;
     _currentProcess = null;
     _onProcessEnded?.call();
@@ -108,12 +163,13 @@ class RunDebugService {
       _onProcessEnded = onProcessEnded;
     }
 
-    // Detener proceso anterior si existe (evita zombies / cuelgues)
+    // Detener proceso anterior + huérfanos (evita Preview vacío / puertos ocupados)
     if (_isRunning && _currentProcess != null) {
       print('⚠️ Deteniendo proceso anterior antes de iniciar uno nuevo...');
       await stop();
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(milliseconds: 400));
     }
+    await killOrphanWebServers();
 
     try {
       _isRunning = true;
@@ -136,6 +192,7 @@ class RunDebugService {
         // Preview interno: web-server → WebView (carcasa Android/iOS o monitor).
         final port = await _findFreeWebPort(preferred: 8085);
         previewUrl = 'http://127.0.0.1:$port';
+        _lastPreviewUrl = previewUrl;
         args.addAll([
           '-d',
           'web-server',
@@ -241,8 +298,21 @@ class RunDebugService {
             lower.contains('serving at http');
 
         if (isAppReady) {
-          if (embeddedPreview && previewUrl != null) {
-            _notifyWebPreviewUrl(previewUrl!, ready: true, platform: plat);
+          if (embeddedPreview) {
+            final url = previewUrl ?? _lastPreviewUrl;
+            if (url != null && url.isNotEmpty) {
+              previewUrl = url;
+              _notifyWebPreviewUrl(url, ready: true, platform: plat);
+            } else {
+              // Último recurso: restaurar si Debug perdió la URL.
+              ensurePreviewUrlAlive();
+              try {
+                DebugConsoleService().setCompilationProgress(
+                  1.0,
+                  'Aplicación ejecutándose',
+                );
+              } catch (_) {}
+            }
           } else {
             try {
               DebugConsoleService().setCompilationProgress(
@@ -307,6 +377,18 @@ class RunDebugService {
       );
 
       process.exitCode.then((exitCode) async {
+        // Si ya hay un Run más nuevo, no tocar estado global.
+        if (_currentProcess != null && !identical(_currentProcess, process)) {
+          completeOnce({
+            'success': exitCode == 0,
+            'exitCode': exitCode,
+            'output': _currentOutput ?? '',
+            'error': stderrBuffer.toString(),
+            'pid': process.pid,
+            'superseded': true,
+          });
+          return;
+        }
         // Esperar a que stdout/stderr terminen de vaciar las últimas líneas de error.
         await Future.wait([stdoutDone.future, stderrDone.future])
             .timeout(const Duration(milliseconds: 500), onTimeout: () => []);
@@ -322,7 +404,7 @@ class RunDebugService {
           }
           debug.setRunning(false);
         } catch (_) {}
-        _notifyProcessEnded();
+        _notifyProcessEnded(ended: process);
         completeOnce({
           'success': exitCode == 0,
           'exitCode': exitCode,
@@ -420,15 +502,17 @@ class RunDebugService {
       print('⚠️ Error al detener proceso: $e');
     } finally {
       _currentOutput = null;
-      _notifyProcessEnded();
+      _notifyProcessEnded(ended: process);
     }
   }
   
-  // ✅ NUEVO: Limpiar todo cuando se cambia de proyecto
+  // ✅ Limpiar todo cuando se cambia de proyecto
   static Future<void> cleanup() async {
     print('🧹 Limpiando RunDebugService...');
     await stop();
+    await killOrphanWebServers();
     _currentOutput = null;
+    _lastPreviewUrl = null;
   }
 
   // Verificar si hay un proceso ejecutándose

@@ -35,8 +35,10 @@ import '../services/agent_activity_service.dart';
 import '../services/inspector_selection_service.dart';
 import '../services/ui_builder_insert_service.dart';
 import '../services/ui_builder_edit_service.dart';
+import '../services/ui_builder_design_rules.dart';
 import '../services/html_preview_service.dart';
 import '../services/html_element_patch_service.dart';
+import '../services/run_debug_service.dart';
 import '../widgets/run_debug_toolbar.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/inspector_monitor_panel.dart';
@@ -522,9 +524,26 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   Future<void> _ensureDesignPreview(String projectPath) async {
     final isHtml = await HtmlPreviewService.instance.isHtmlProject(projectPath);
     if (!isHtml) {
-      if (HtmlPreviewService.instance.projectPath != null &&
-          HtmlPreviewService.instance.projectPath != projectPath) {
+      // Flutter u otro: apaga Preview HTML previo y limpia Runs huérfanos.
+      if (HtmlPreviewService.instance.projectPath != null) {
         await HtmlPreviewService.instance.stop();
+      }
+      // Al cambiar a un proyecto Flutter, no dejes web-servers viejos
+      // ocupando puertos ni un "Running…" fantasma sin URL.
+      if (!RunDebugService.isRunning()) {
+        await RunDebugService.killOrphanWebServers();
+        if (_debugService.isRunning &&
+            (_debugService.appUrl == null ||
+                _debugService.appUrl!.isEmpty)) {
+          _debugService.setRunning(false);
+          _debugService.setCompilationProgress(0.0, '');
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _previewAppUrl = _debugService.appUrl;
+          _previewRunning = _previewAppUrl != null && _previewAppUrl!.isNotEmpty;
+        });
       }
       return;
     }
@@ -807,14 +826,26 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       required double width,
                       required double height,
                     }) {
+                      // URL en vivo: el snapshot a veces se queda null tras
+                      // cambiar de proyecto / race de procesos huérfanos.
+                      final liveUrl = _debugService.appUrl ??
+                          _previewAppUrl ??
+                          RunDebugService.lastPreviewUrl;
+                      if (_debugService.isRunning &&
+                          (liveUrl == null || liveUrl.isEmpty)) {
+                        RunDebugService.ensurePreviewUrlAlive();
+                      }
                       return PhoneEmulator(
                         key: _previewKey,
                         width: width,
                         height: height,
                         platform: _platformService.selectedPlatform,
                         // Solo Run/Debug real — el Preview de diseño usa appUrl sin isRunning.
-                        isRunning: _debugService.isRunning,
-                        appUrl: _previewAppUrl,
+                        isRunning: _debugService.isRunning ||
+                            RunDebugService.isRunning(),
+                        appUrl: _debugService.appUrl ??
+                            _previewAppUrl ??
+                            RunDebugService.lastPreviewUrl,
                         compilationProgress: _previewProgress,
                         compilationStatus: _previewStatus,
                         previewReloadNonce: _previewNonce,
@@ -831,6 +862,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         },
                         onUiBuilderMoved: (id, left, top) {
                           unawaited(_syncUiBuilderPosition(id, left, top));
+                        },
+                        onUiBuilderReparent: (id, parentId, parentKind) {
+                          unawaited(
+                            _handleUiBuilderReparent(id, parentId, parentKind),
+                          );
                         },
                         onUiBuilderTextEdited: (id, text) {
                           unawaited(_syncUiBuilderText(id, text));
@@ -1318,7 +1354,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     }
   }
 
-  /// Drop de UI Builder → inserta HTML donde se soltó y recarga Preview.
+  /// Drop de UI Builder → inserta HTML donde se soltó (reglas FlutterFlow).
   Future<void> _handleUiBuilderDrop(
     UiBuilderComponent component, {
     Offset? globalOffset,
@@ -1346,12 +1382,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         return;
       }
 
+      final childKind = UiBuilderDesignRules.kindOf(component);
       String? parentId;
+      String? parentKind;
       String? beforeId;
       String? afterId;
-      double? dropLeft;
-      double? dropTop;
-      var placeAbsolute = false;
 
       // Preferir ancla real del punto de soltado en el WebView.
       final previewState = _previewKey.currentState;
@@ -1364,53 +1399,62 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           final anchor = await previewState.resolveUiBuilderDrop(
             nx: nx,
             ny: ny,
+            childKind: childKind,
           );
           if (anchor != null) {
             parentId = anchor['parentId']?.toString();
+            parentKind = anchor['parentKind']?.toString();
             beforeId = anchor['beforeId']?.toString();
             afterId = anchor['afterId']?.toString();
             if (parentId != null && parentId.isEmpty) parentId = null;
+            if (parentKind != null && parentKind.isEmpty) parentKind = null;
             if (beforeId != null && beforeId.isEmpty) beforeId = null;
             if (afterId != null && afterId.isEmpty) afterId = null;
-            placeAbsolute = anchor['placeAbsolute'] == true && parentId == null;
-            final x = (anchor['x'] as num?)?.toDouble();
-            final y = (anchor['y'] as num?)?.toDouble();
-            if (x != null && y != null) {
-              dropLeft = x;
-              dropTop = y;
-            }
           }
         }
       }
 
-      // Fallback: contenedor seleccionado.
+      // Fallback: contenedor seleccionado en el Inspector.
       if (parentId == null &&
           _voryxelBlockIdOf(_selectedElement) != null &&
           _isUiBuilderContainer(_selectedElement)) {
         parentId = _voryxelBlockIdOf(_selectedElement);
-        placeAbsolute = false;
+        parentKind =
+            _selectedElement?.attributes['data-voryxel']?.toLowerCase();
       }
 
-      // Si no cae dentro de un contenedor UI Builder, colocar en las coords del drop.
+      // Validar reglas de diseño (como FlutterFlow).
+      if (!UiBuilderDesignRules.canDrop(
+        childKind: childKind,
+        parentKind: parentKind,
+      )) {
+        if (mounted) {
+          AppToast.warning(
+            context,
+            UiBuilderDesignRules.rejectMessage(
+              childKind: childKind,
+              parentKind: parentKind,
+            ),
+          );
+        }
+        return;
+      }
+
       var snippet = component.htmlSnippet;
-      if (placeAbsolute && dropLeft != null && dropTop != null) {
-        snippet = _stampAbsolutePosition(
-          snippet,
-          left: dropLeft!,
-          top: dropTop!,
+      if (parentId != null && parentKind != null) {
+        snippet = UiBuilderDesignRules.prepareChildSnippet(
+          snippet: snippet,
+          childKind: childKind,
+          parentKind: parentKind,
         );
-        // Absolute → al final del body (posición visual = donde soltaste).
-        parentId = null;
-        beforeId = null;
-        afterId = null;
       }
 
       final result = await UiBuilderInsertService.insertAtAnchor(
         filePath: target,
         snippet: snippet,
         parentId: parentId,
-        beforeId: beforeId,
-        afterId: afterId,
+        beforeId: parentId == null ? beforeId : null,
+        afterId: parentId == null ? afterId : null,
       );
       final html = result.html;
       final blockId = result.blockId;
@@ -1426,16 +1470,11 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       InspectorSelectionService().setActive(true);
 
       final where = parentId != null
-          ? 'dentro de contenedor'
-          : (placeAbsolute
-              ? 'en (${dropLeft?.round()}, ${dropTop?.round()})'
-              : (beforeId != null
-                  ? 'antes de $beforeId'
-                  : (afterId != null
-                      ? 'después de $afterId'
-                      : target.split('/').last)));
+          ? 'dentro de ${parentKind ?? 'contenedor'}'
+          : (beforeId != null
+              ? 'antes de bloque'
+              : (afterId != null ? 'después de bloque' : 'en página'));
 
-      // Diseño: asegurar Preview HTML sin pasar por Run/Debug.
       final previewOk = await HtmlPreviewService.instance.ensureRunning(
         projectPath,
         quiet: true,
@@ -1447,7 +1486,6 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         _debugService.bumpPreviewReload(force: true, hard: false);
       }
 
-      // Tras reload: reactivar drag del nuevo bloque.
       await Future<void>.delayed(const Duration(milliseconds: 350));
       await _previewKey.currentState?.bindUiBuilderMove(blockId);
 
@@ -1457,7 +1495,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       if (mounted) {
         AppToast.success(
           context,
-          '${component.label} añadido · arrástralo con el mouse',
+          parentId != null
+              ? '${component.label} anidado en ${parentKind ?? 'contenedor'}'
+              : '${component.label} añadido a la página',
         );
       }
     } catch (e) {
@@ -1725,8 +1765,70 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
   bool _isUiBuilderContainer(InspectorElement? el) {
     if (el == null) return false;
+    if (el.attributes['data-voryxel-container'] == '1') return true;
     final kind = el.attributes['data-voryxel']?.toLowerCase() ?? '';
-    return kind == 'container' || kind == 'card' || kind == 'hero';
+    return UiBuilderDesignRules.acceptsChildren(kind);
+  }
+
+  Future<void> _handleUiBuilderReparent(
+    String blockId,
+    String parentId,
+    String? parentKind,
+  ) async {
+    try {
+      final target = await _resolveHtmlFileForEdit();
+      if (target == null) {
+        if (mounted) AppToast.warning(context, 'No hay HTML destino');
+        return;
+      }
+      final htmlNow = await File(target).readAsString();
+      final childInner = UiBuilderEditService.extractBlock(htmlNow, blockId);
+      String? childKind;
+      if (childInner != null) {
+        final m = RegExp(
+          r'data-voryxel\s*=\s*"([^"]+)"',
+          caseSensitive: false,
+        ).firstMatch(childInner);
+        childKind = m?.group(1)?.toLowerCase();
+      }
+      if (childKind == null ||
+          !UiBuilderDesignRules.canDrop(
+            childKind: childKind,
+            parentKind: parentKind,
+          )) {
+        if (mounted) {
+          AppToast.warning(
+            context,
+            UiBuilderDesignRules.rejectMessage(
+              childKind: childKind ?? 'elemento',
+              parentKind: parentKind,
+            ),
+          );
+        }
+        return;
+      }
+      final next = await UiBuilderEditService.reparentBlock(
+        filePath: target,
+        blockId: blockId,
+        newParentId: parentId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedFilePath = target;
+        _selectedFileContent = next;
+      });
+      _debugService.bumpPreviewReload(force: true, hard: false);
+      if (mounted) {
+        AppToast.success(
+          context,
+          'Movido dentro de ${parentKind ?? 'contenedor'}',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo anidar: $e');
+      }
+    }
   }
 
   Future<void> _moveUiBuilderBlock(String blockId, int direction) async {
@@ -1787,35 +1889,6 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         AppToast.error(context, 'No se pudo mover: $e');
       }
     }
-  }
-
-  /// Inyecta position:absolute;left;top en el style del primer tag del snippet.
-  String _stampAbsolutePosition(
-    String snippet, {
-    required double left,
-    required double top,
-  }) {
-    final pos =
-        'position:absolute;left:${left.round()}px;top:${top.round()}px;z-index:30;margin:0;';
-    final styleRe = RegExp(r'style\s*=\s*"([^"]*)"', caseSensitive: false);
-    if (styleRe.hasMatch(snippet)) {
-      return snippet.replaceFirstMapped(styleRe, (m) {
-        var style = m.group(1) ?? '';
-        style = style.replaceAll(RegExp(r'position\s*:\s*[^;]+;?'), '');
-        style = style.replaceAll(RegExp(r'left\s*:\s*[^;]+;?'), '');
-        style = style.replaceAll(RegExp(r'top\s*:\s*[^;]+;?'), '');
-        return 'style="$pos$style"';
-      });
-    }
-    return snippet.replaceFirstMapped(
-      RegExp(r'<([a-zA-Z][\w:-]*)(\s|>)'),
-      (m) {
-        final tag = m.group(1)!;
-        final after = m.group(2)!;
-        if (after == '>') return '<$tag style="$pos">';
-        return '<$tag style="$pos" ';
-      },
-    );
   }
 
   Future<void> _deleteUiBuilderBlock(String blockId) async {
@@ -2210,22 +2283,33 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       if (_platformService.selectedPlatform.toLowerCase() != 'web') {
         _platformService.setPlatform('web');
       }
+      // Feedback de carga en la barra (Stop se habilita al terminar).
+      _debugService.setRunning(true);
+      _debugService.setCompilationProgress(0.35, 'Iniciando Preview…');
       final ok = await HtmlPreviewService.instance.ensureRunning(path);
       await HtmlPreviewService.instance.refresh(hard: true);
       if (!mounted) return;
+      if (!ok) {
+        _debugService.setRunning(false);
+        _debugService.setCompilationProgress(0.0, '');
+        setState(() => _previewRunning = false);
+        AppToast.error(context, 'No se pudo cargar el Preview');
+        return;
+      }
+      final url =
+          _debugService.appUrl ?? HtmlPreviewService.instance.baseUrl;
+      _debugService.setRunning(true);
+      _debugService.setCompilationProgress(1.0, 'Ejecutando');
+      if (url != null && url.isNotEmpty) {
+        _debugService.setAppUrl(url);
+      }
       setState(() {
-        _previewAppUrl =
-            _debugService.appUrl ?? HtmlPreviewService.instance.baseUrl;
-        _previewRunning =
-            _previewAppUrl != null && _previewAppUrl!.isNotEmpty;
+        _previewAppUrl = url;
+        _previewRunning = url != null && url.isNotEmpty;
       });
       AppToast.success(
         context,
-        ok
-            ? (isDebug
-                ? 'Preview HTML listo (diseño)'
-                : 'Preview HTML listo')
-            : 'No se pudo cargar el Preview',
+        isDebug ? 'Preview HTML listo (Debug)' : 'Preview HTML en ejecución',
       );
       return;
     }
@@ -2259,12 +2343,17 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   void _handleDebug() => unawaited(_runOrRefreshPreview(isDebug: true));
 
   void _handleStop() {
-    // HTML diseño: no apagar Preview; solo limpia Run real si hubiera.
     unawaited(() async {
       if (await _isCurrentHtmlProject()) {
+        await HtmlPreviewService.instance.stop(clearDebugUrl: true);
         _debugService.setRunning(false);
+        _debugService.setCompilationProgress(0.0, '');
         if (mounted) {
-          AppToast.info(context, 'Preview de diseño sigue activo');
+          setState(() {
+            _previewRunning = false;
+            _previewAppUrl = null;
+          });
+          AppToast.info(context, 'Preview detenido');
         }
         return;
       }

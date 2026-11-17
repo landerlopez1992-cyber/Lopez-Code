@@ -66,7 +66,7 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(
         children: [
           Icon(
@@ -76,7 +76,7 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
                 ? CursorTheme.textSecondary
                 : CursorTheme.primary,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: InkWell(
               onTap: () => setState(() => _expanded = !_expanded),
@@ -85,11 +85,11 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(
                   children: [
-                    Flexible(
+                    Expanded(
                       child: Text(
                         _isRestored
-                            ? 'Checkpoint restaurado • $_fileCount archivo(s)'
-                            : 'Checkpoint • $_fileCount archivo(s) modificado(s)',
+                            ? 'Restaurado • $_fileCount arch.'
+                            : 'Checkpoint • $_fileCount arch.',
                         style: TextStyle(
                           color: CursorTheme.textPrimary,
                           fontSize: 12,
@@ -99,10 +99,12 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
                               : TextDecoration.none,
                           decorationColor: CursorTheme.textSecondary,
                         ),
+                        maxLines: 1,
+                        softWrap: false,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 4),
                     Icon(
                       _expanded
                           ? Icons.expand_less
@@ -116,7 +118,7 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
             ),
           ),
           if (widget.allowRestore) ...[
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
             _buildRestoreButton(),
           ],
         ],
@@ -141,8 +143,9 @@ class _CheckpointBannerWidgetState extends State<CheckpointBannerWidget> {
       style: TextButton.styleFrom(
         foregroundColor: CursorTheme.primary,
         disabledForegroundColor: CursorTheme.textDisabled,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        minimumSize: const Size(0, 28),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        minimumSize: Size.zero,
+        maximumSize: const Size(double.infinity, 28),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         visualDensity: VisualDensity.compact,
       ),

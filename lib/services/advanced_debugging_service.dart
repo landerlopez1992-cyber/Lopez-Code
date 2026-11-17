@@ -5,6 +5,7 @@ import 'dart:convert';
 import '../models/problem_item.dart';
 import 'debug_console_service.dart';
 import 'project_platform_support.dart';
+import 'run_debug_service.dart';
 
 /// Servicio avanzado de debugging y análisis de compilación
 /// Proporciona herramientas para ejecutar, analizar y depurar código Flutter
@@ -20,11 +21,16 @@ class AdvancedDebuggingService {
   /// Proceso Flutter actualmente en ejecución (si hay alguno).
   static Process? get activeProcess => _activeProcess;
 
-  static bool get isRunning => _activeProcess != null;
+  static bool get isRunning =>
+      _activeProcess != null || RunDebugService.isRunning();
 
   /// Hot Reload/Restart solo funcionan en debug (JIT).
+  /// Incluye Runs del agente (`RunDebugService`) y de la toolbar.
   static bool get supportsHotReload =>
-      isRunning && _activeMode == 'debug' && _appInteractive;
+      (_activeProcess != null &&
+          _activeMode == 'debug' &&
+          _appInteractive) ||
+      RunDebugService.isRunning();
 
   /// Notifica a la UI cuando el proceso realmente termina (exit o stop).
   static void setOnProcessEnded(void Function()? callback) {

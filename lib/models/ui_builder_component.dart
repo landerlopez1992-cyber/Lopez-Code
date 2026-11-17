@@ -46,9 +46,9 @@ class UiBuilderComponent {
       icon: Icons.view_agenda_outlined,
       htmlSnippet: '''
 <div data-voryxel="column" data-voryxel-container="1"
-  style="display:flex;flex-direction:column;gap:12px;margin:12px 0;padding:12px;
-  border:1px dashed #94a3b8;border-radius:10px;min-height:64px;font-family:system-ui,sans-serif;">
-  <p style="margin:0;color:#64748b;font-size:0.85rem;">Column — suelta elementos aquí</p>
+  style="display:flex;flex-direction:column;align-items:stretch;gap:12px;margin:12px 0;padding:12px;
+  border:1px dashed #94a3b8;border-radius:10px;min-height:72px;font-family:system-ui,sans-serif;">
+  <p data-voryxel-placeholder="1" style="margin:0;color:#64748b;font-size:0.85rem;text-align:center;">Column — suelta elementos aquí</p>
 </div>''',
     ),
     UiBuilderComponent(
@@ -58,9 +58,9 @@ class UiBuilderComponent {
       icon: Icons.view_week_outlined,
       htmlSnippet: '''
 <div data-voryxel="row" data-voryxel-container="1"
-  style="display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px;margin:12px 0;padding:12px;
-  border:1px dashed #94a3b8;border-radius:10px;min-height:48px;font-family:system-ui,sans-serif;">
-  <span style="color:#64748b;font-size:0.85rem;">Row</span>
+  style="display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:12px;margin:12px 0;padding:12px;
+  border:1px dashed #94a3b8;border-radius:10px;min-height:56px;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="color:#64748b;font-size:0.85rem;">Row — suelta aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -70,9 +70,9 @@ class UiBuilderComponent {
       icon: Icons.check_box_outline_blank,
       htmlSnippet: '''
 <div data-voryxel="container" data-voryxel-container="1"
-  style="margin:12px 0;padding:20px;border:2px dashed #94a3b8;border-radius:12px;
-  min-height:72px;font-family:system-ui,sans-serif;color:#64748b;">
-  Container
+  style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;margin:12px 0;padding:20px;
+  border:2px dashed #94a3b8;border-radius:12px;min-height:88px;font-family:system-ui,sans-serif;color:#64748b;">
+  <span data-voryxel-placeholder="1">Container</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -82,7 +82,7 @@ class UiBuilderComponent {
       icon: Icons.image_outlined,
       htmlSnippet: '''
 <img data-voryxel="image" src="https://picsum.photos/640/360" alt="Image"
-  style="display:block;max-width:100%;height:auto;margin:12px 0;border-radius:12px;" />''',
+  style="display:block;width:100%;max-width:100%;height:auto;margin:0;border-radius:12px;object-fit:cover;" />''',
     ),
     UiBuilderComponent(
       id: 'button',
@@ -93,7 +93,7 @@ class UiBuilderComponent {
 <a data-voryxel="button" href="#"
   style="display:inline-block;margin:8px 0;padding:12px 20px;border:none;border-radius:8px;
   background:#2563eb;color:#fff;font-size:1rem;font-weight:600;cursor:pointer;
-  font-family:system-ui,sans-serif;text-decoration:none;">
+  font-family:system-ui,sans-serif;text-decoration:none;text-align:center;">
   Button
 </a>''',
     ),
@@ -106,9 +106,9 @@ class UiBuilderComponent {
       icon: Icons.check_box_outline_blank,
       htmlSnippet: '''
 <div data-voryxel="container" data-voryxel-container="1"
-  style="margin:12px 0;padding:20px;border:2px dashed #94a3b8;border-radius:12px;
-  min-height:72px;font-family:system-ui,sans-serif;color:#64748b;">
-  Container
+  style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;margin:12px 0;padding:20px;
+  border:2px dashed #94a3b8;border-radius:12px;min-height:88px;font-family:system-ui,sans-serif;color:#64748b;">
+  <span data-voryxel-placeholder="1">Container</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -118,9 +118,9 @@ class UiBuilderComponent {
       icon: Icons.view_week_outlined,
       htmlSnippet: '''
 <div data-voryxel="row" data-voryxel-container="1"
-  style="display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px;margin:12px 0;padding:12px;
-  border:1px dashed #94a3b8;border-radius:10px;min-height:48px;font-family:system-ui,sans-serif;">
-  <span style="color:#64748b;font-size:0.85rem;">Row</span>
+  style="display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:12px;margin:12px 0;padding:12px;
+  border:1px dashed #94a3b8;border-radius:10px;min-height:56px;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="color:#64748b;font-size:0.85rem;">Row — suelta aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -130,9 +130,9 @@ class UiBuilderComponent {
       icon: Icons.view_agenda_outlined,
       htmlSnippet: '''
 <div data-voryxel="column" data-voryxel-container="1"
-  style="display:flex;flex-direction:column;gap:12px;margin:12px 0;padding:12px;
-  border:1px dashed #94a3b8;border-radius:10px;min-height:64px;font-family:system-ui,sans-serif;">
-  <p style="margin:0;color:#64748b;font-size:0.85rem;">Column</p>
+  style="display:flex;flex-direction:column;align-items:stretch;gap:12px;margin:12px 0;padding:12px;
+  border:1px dashed #94a3b8;border-radius:10px;min-height:72px;font-family:system-ui,sans-serif;">
+  <p data-voryxel-placeholder="1" style="margin:0;color:#64748b;font-size:0.85rem;text-align:center;">Column — suelta elementos aquí</p>
 </div>''',
     ),
     UiBuilderComponent(
@@ -142,12 +142,9 @@ class UiBuilderComponent {
       icon: Icons.layers_outlined,
       htmlSnippet: '''
 <div data-voryxel="stack" data-voryxel-container="1"
-  style="position:relative;margin:12px 0;min-height:140px;border-radius:12px;overflow:hidden;
-  background:#0f172a;font-family:system-ui,sans-serif;">
-  <img src="https://picsum.photos/800/200" alt="" style="display:block;width:100%;height:140px;object-fit:cover;opacity:0.55;" />
-  <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;">
-    Stack overlay
-  </div>
+  style="position:relative;display:block;margin:12px 0;min-height:140px;border-radius:12px;overflow:hidden;
+  border:1px dashed #94a3b8;background:#f8fafc;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:0.85rem;">Stack — suelta aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -157,10 +154,10 @@ class UiBuilderComponent {
       icon: Icons.crop_landscape,
       htmlSnippet: '''
 <div data-voryxel="card" data-voryxel-container="1"
-  style="margin:16px 0;padding:20px;max-width:360px;background:#fff;border:1px solid #e5e7eb;
-  border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,0.08);font-family:system-ui,sans-serif;">
-  <h3 style="margin:0 0 8px;font-size:1.15rem;color:#111;">Card</h3>
-  <p style="margin:0;color:#555;line-height:1.45;">Contenido de la tarjeta.</p>
+  style="display:flex;flex-direction:column;gap:10px;margin:16px 0;padding:20px;max-width:360px;width:100%;
+  background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,0.08);
+  font-family:system-ui,sans-serif;box-sizing:border-box;">
+  <span data-voryxel-placeholder="1" style="color:#64748b;font-size:0.85rem;">Card — suelta elementos aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -169,10 +166,10 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.view_list,
       htmlSnippet: '''
-<ul data-voryxel="listview" style="list-style:none;margin:12px 0;padding:0;font-family:system-ui,sans-serif;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-  <li style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:#fff;">Ítem 1</li>
-  <li style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:#fff;">Ítem 2</li>
-  <li style="padding:12px 14px;background:#fff;">Ítem 3</li>
+<ul data-voryxel="listview" data-voryxel-container="1"
+  style="list-style:none;margin:12px 0;padding:8px;min-height:64px;font-family:system-ui,sans-serif;
+  border:1px dashed #94a3b8;border-radius:10px;overflow:hidden;">
+  <li data-voryxel-placeholder="1" style="padding:12px 14px;color:#64748b;font-size:0.85rem;">ListView — suelta ítems aquí</li>
 </ul>''',
     ),
     UiBuilderComponent(
@@ -181,12 +178,10 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.grid_view,
       htmlSnippet: '''
-<div data-voryxel="gridview"
-  style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0;font-family:system-ui,sans-serif;">
-  <div style="padding:24px;border-radius:10px;background:#e2e8f0;text-align:center;">A</div>
-  <div style="padding:24px;border-radius:10px;background:#e2e8f0;text-align:center;">B</div>
-  <div style="padding:24px;border-radius:10px;background:#e2e8f0;text-align:center;">C</div>
-  <div style="padding:24px;border-radius:10px;background:#e2e8f0;text-align:center;">D</div>
+<div data-voryxel="gridview" data-voryxel-container="1"
+  style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0;padding:8px;
+  min-height:96px;border:1px dashed #94a3b8;border-radius:10px;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="grid-column:1/-1;color:#64748b;font-size:0.85rem;text-align:center;padding:24px 0;">GridView — suelta aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -195,7 +190,7 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.swap_vert,
       htmlSnippet: '''
-<div data-voryxel="spacer" style="height:32px;" aria-hidden="true"></div>''',
+<div data-voryxel="spacer" style="flex:1;min-height:24px;height:32px;" aria-hidden="true"></div>''',
     ),
     UiBuilderComponent(
       id: 'divider',
@@ -203,7 +198,7 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.horizontal_rule,
       htmlSnippet: '''
-<hr data-voryxel="divider" style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;" />''',
+<hr data-voryxel="divider" style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;width:100%;" />''',
     ),
     UiBuilderComponent(
       id: 'vertical_divider',
@@ -220,11 +215,9 @@ class UiBuilderComponent {
       icon: Icons.wrap_text,
       htmlSnippet: '''
 <div data-voryxel="wrap" data-voryxel-container="1"
-  style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;padding:12px;border:1px dashed #94a3b8;
-  border-radius:10px;font-family:system-ui,sans-serif;">
-  <span style="padding:6px 10px;border-radius:999px;background:#e2e8f0;">Chip</span>
-  <span style="padding:6px 10px;border-radius:999px;background:#e2e8f0;">Chip</span>
-  <span style="padding:6px 10px;border-radius:999px;background:#e2e8f0;">Chip</span>
+  style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0;padding:12px;border:1px dashed #94a3b8;
+  border-radius:10px;min-height:48px;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="color:#64748b;font-size:0.85rem;">Wrap — suelta aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -233,9 +226,10 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.open_in_full,
       htmlSnippet: '''
-<details data-voryxel="expandable" style="margin:12px 0;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;font-family:system-ui,sans-serif;background:#fff;">
+<details data-voryxel="expandable" data-voryxel-container="1"
+  style="margin:12px 0;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;font-family:system-ui,sans-serif;background:#fff;">
   <summary style="cursor:pointer;font-weight:600;color:#111;">Expandable</summary>
-  <p style="margin:10px 0 0;color:#555;line-height:1.45;">Contenido oculto que se revela al expandir.</p>
+  <div data-voryxel-placeholder="1" style="margin:10px 0 0;color:#64748b;font-size:0.85rem;">Suelta contenido aquí</div>
 </details>''',
     ),
     UiBuilderComponent(
@@ -244,13 +238,13 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.tab,
       htmlSnippet: '''
-<div data-voryxel="tabbar" style="margin:12px 0;font-family:system-ui,sans-serif;">
+<div data-voryxel="tabbar" data-voryxel-container="1" style="margin:12px 0;font-family:system-ui,sans-serif;">
   <div style="display:flex;gap:0;border-bottom:1px solid #e5e7eb;">
     <button type="button" style="padding:10px 16px;border:none;background:transparent;border-bottom:2px solid #2563eb;color:#2563eb;font-weight:600;cursor:pointer;">Tab 1</button>
     <button type="button" style="padding:10px 16px;border:none;background:transparent;color:#64748b;cursor:pointer;">Tab 2</button>
     <button type="button" style="padding:10px 16px;border:none;background:transparent;color:#64748b;cursor:pointer;">Tab 3</button>
   </div>
-  <div style="padding:16px;color:#333;">Contenido de la pestaña</div>
+  <div data-voryxel-placeholder="1" style="padding:16px;color:#64748b;font-size:0.85rem;">Suelta contenido de pestaña aquí</div>
 </div>''',
     ),
     UiBuilderComponent(
@@ -259,11 +253,10 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.view_carousel_outlined,
       htmlSnippet: '''
-<div data-voryxel="pageview"
-  style="margin:12px 0;display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:8px;font-family:system-ui,sans-serif;">
-  <div style="flex:0 0 85%;scroll-snap-align:center;padding:28px;border-radius:14px;background:#1e3a8a;color:#fff;">Página 1</div>
-  <div style="flex:0 0 85%;scroll-snap-align:center;padding:28px;border-radius:14px;background:#0f766e;color:#fff;">Página 2</div>
-  <div style="flex:0 0 85%;scroll-snap-align:center;padding:28px;border-radius:14px;background:#7c2d12;color:#fff;">Página 3</div>
+<div data-voryxel="pageview" data-voryxel-container="1"
+  style="margin:12px 0;display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:8px;min-height:120px;
+  border:1px dashed #94a3b8;border-radius:12px;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="color:#64748b;font-size:0.85rem;padding:28px;">PageView — suelta páginas aquí</span>
 </div>''',
     ),
     UiBuilderComponent(
@@ -272,11 +265,10 @@ class UiBuilderComponent {
       category: 'Layout',
       icon: Icons.view_carousel,
       htmlSnippet: '''
-<div data-voryxel="carousel"
-  style="margin:12px 0;display:flex;gap:10px;overflow-x:auto;padding:4px 0 12px;font-family:system-ui,sans-serif;">
-  <img src="https://picsum.photos/280/160?1" alt="" style="flex:0 0 auto;width:280px;height:160px;object-fit:cover;border-radius:12px;" />
-  <img src="https://picsum.photos/280/160?2" alt="" style="flex:0 0 auto;width:280px;height:160px;object-fit:cover;border-radius:12px;" />
-  <img src="https://picsum.photos/280/160?3" alt="" style="flex:0 0 auto;width:280px;height:160px;object-fit:cover;border-radius:12px;" />
+<div data-voryxel="carousel" data-voryxel-container="1"
+  style="margin:12px 0;display:flex;gap:10px;overflow-x:auto;padding:8px;min-height:100px;
+  border:1px dashed #94a3b8;border-radius:12px;font-family:system-ui,sans-serif;">
+  <span data-voryxel-placeholder="1" style="color:#64748b;font-size:0.85rem;padding:24px;">Carousel — suelta imágenes aquí</span>
 </div>''',
     ),
 

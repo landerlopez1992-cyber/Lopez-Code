@@ -27,6 +27,9 @@ class PhoneEmulator extends StatefulWidget {
   final bool previewReloadHard;
   /// UI Builder: al soltar/mover un bloque con el mouse.
   final void Function(String blockId, double left, double top)? onUiBuilderMoved;
+  /// UI Builder: reparentar bloque dentro de otro contenedor.
+  final void Function(String blockId, String parentId, String? parentKind)?
+      onUiBuilderReparent;
   /// UI Builder: texto editado inline (doble clic) en bloque data-voryxel-id.
   final void Function(String blockId, String text)? onUiBuilderTextEdited;
   /// Texto editado en cualquier elemento (Inspector / doble clic).
@@ -53,6 +56,7 @@ class PhoneEmulator extends StatefulWidget {
     this.previewReloadNonce = 0,
     this.previewReloadHard = true,
     this.onUiBuilderMoved,
+    this.onUiBuilderReparent,
     this.onUiBuilderTextEdited,
     this.onInspectorTextEdited,
   });
@@ -172,6 +176,17 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         widget.onUiBuilderMoved?.call(id, left, top);
         return;
       }
+      if (type == 'reparent') {
+        final id = data['id']?.toString();
+        final parentId = data['parentId']?.toString();
+        if (id == null || parentId == null || parentId.isEmpty) return;
+        widget.onUiBuilderReparent?.call(
+          id,
+          parentId,
+          data['parentKind']?.toString(),
+        );
+        return;
+      }
       if (type == 'textEdited') {
         final id = data['id']?.toString();
         final text = data['text']?.toString();
@@ -200,13 +215,14 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         if (!document.getElementById('__voryxel_body_pos')) {
           var s = document.createElement('style');
           s.id = '__voryxel_body_pos';
-          s.textContent = 'body{position:relative;min-height:100vh;} [data-voryxel-id]{cursor:move;} [data-voryxel-id].__voryxel-dragging{opacity:0.9;outline:2px dashed #3B82F6;z-index:9999 !important;}';
+          s.textContent = 'body{position:relative;min-height:100vh;} [data-voryxel-id]{cursor:move;} [data-voryxel-id].__voryxel-dragging{opacity:0.85;outline:2px dashed #3B82F6;} .__voryxel-drop-target{outline:2px solid #22c55e !important;outline-offset:2px;background-image:linear-gradient(0deg,rgba(34,197,94,0.08),rgba(34,197,94,0.08)) !important;} [data-voryxel-container="1"]{min-height:48px;}';
           document.documentElement.appendChild(s);
         }
 
-        window.__voryxelResolveDrop = function(nx, ny) {
+        window.__voryxelResolveDrop = function(nx, ny, childKind) {
           var x = Math.max(0, Math.min(1, nx)) * (window.innerWidth || 1);
           var y = Math.max(0, Math.min(1, ny)) * (window.innerHeight || 1);
+          childKind = (childKind || '').toLowerCase();
           function isTopLevel(n) {
             var p = n.parentElement;
             while (p && p !== document.body) {
@@ -215,23 +231,37 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
             }
             return true;
           }
+          function kindOf(n) {
+            return ((n && n.getAttribute) ? (n.getAttribute('data-voryxel') || '') : '').toLowerCase();
+          }
           function isContainer(n) {
             if (!n || !n.getAttribute) return false;
-            var kind = (n.getAttribute('data-voryxel') || '').toLowerCase();
+            if (n.getAttribute('data-voryxel-container') === '1') return true;
+            var kind = kindOf(n);
             return kind === 'container' || kind === 'card' || kind === 'hero' ||
               kind === 'column' || kind === 'row' || kind === 'stack' ||
-              kind === 'wrap' || kind === 'form' || n.getAttribute('data-voryxel-container') === '1';
+              kind === 'wrap' || kind === 'form' || kind === 'listview' ||
+              kind === 'gridview' || kind === 'expandable' || kind === 'tabbar' ||
+              kind === 'pageview' || kind === 'carousel' || kind === 'drawer' ||
+              kind === 'navbar';
           }
+          // Resaltar contenedores válidos mientras se resuelve el drop.
+          try {
+            var prev = document.querySelectorAll('.__voryxel-drop-target');
+            for (var pi = 0; pi < prev.length; pi++) prev[pi].classList.remove('__voryxel-drop-target');
+          } catch (e0) {}
           var nodes = Array.prototype.slice.call(document.querySelectorAll('[data-voryxel-id]'));
           var top = nodes.filter(isTopLevel);
-          var parentId = null, beforeId = null, afterId = null;
+          var parentId = null, parentKind = null, beforeId = null, afterId = null;
           var el = null;
           try { el = document.elementFromPoint(x, y); } catch (e) {}
           var cur = el;
           while (cur && cur !== document.body && cur !== document.documentElement) {
             try {
-              if (isContainer(cur)) {
+              if (isContainer(cur) && cur.getAttribute('data-voryxel-id')) {
                 parentId = cur.getAttribute('data-voryxel-id');
+                parentKind = kindOf(cur);
+                try { cur.classList.add('__voryxel-drop-target'); } catch (e3) {}
                 break;
               }
             } catch (e2) {}
@@ -246,10 +276,14 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
             }
           }
           return JSON.stringify({
-            parentId: parentId, beforeId: beforeId, afterId: afterId,
+            parentId: parentId,
+            parentKind: parentKind,
+            beforeId: beforeId,
+            afterId: afterId,
+            childKind: childKind,
             x: Math.round(x + (window.scrollX || 0)),
             y: Math.round(y + (window.scrollY || 0)),
-            placeAbsolute: !parentId
+            placeAbsolute: false
           });
         };
 
@@ -301,43 +335,68 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
               window.__voryxelDragging = true;
               primed = false;
               el.classList.add('__voryxel-dragging');
-              var cs = window.getComputedStyle(el);
-              if (cs.position !== 'absolute' && cs.position !== 'fixed') {
-                var rect = el.getBoundingClientRect();
-                el.style.position = 'absolute';
-                el.style.left = (rect.left + (window.scrollX || 0)) + 'px';
-                el.style.top = (rect.top + (window.scrollY || 0)) + 'px';
-                el.style.margin = '0';
-                el.style.zIndex = '9999';
-                el.style.width = rect.width + 'px';
-              }
-              ol = parseFloat(el.style.left) || 0;
-              ot = parseFloat(el.style.top) || 0;
+              // Layout flow (FlutterFlow): no sacar a absolute; solo preview con translate.
+              ol = 0; ot = 0;
               sx = e.clientX; sy = e.clientY;
             }
             try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
-            el.style.left = (ol + e.clientX - sx) + 'px';
-            el.style.top = (ot + e.clientY - sy) + 'px';
+            el.style.transform = 'translate(' + (e.clientX - sx) + 'px,' + (e.clientY - sy) + 'px)';
           }, true);
 
-          document.addEventListener('mouseup', function() {
+          document.addEventListener('mouseup', function(e) {
             primed = false;
             if (!dragging) return;
             dragging = false;
             window.__voryxelDragging = false;
             el = el || currentEl();
-            if (el) el.classList.remove('__voryxel-dragging');
+            if (el) {
+              el.classList.remove('__voryxel-dragging');
+              el.style.transform = '';
+            }
+            // Reparent si se suelta sobre otro contenedor válido.
             try {
-              if (el && typeof UiBuilderChannel !== 'undefined') {
-                UiBuilderChannel.postMessage(JSON.stringify({
-                  type: 'moved',
-                  id: window.__voryxelMoveId,
-                  left: parseFloat(el.style.left) || 0,
-                  top: parseFloat(el.style.top) || 0
-                }));
+              var dropX = e && e.clientX != null ? e.clientX : 0;
+              var dropY = e && e.clientY != null ? e.clientY : 0;
+              var hit = null;
+              try { hit = document.elementFromPoint(dropX, dropY); } catch (e4) {}
+              var targetParent = null;
+              var cur = hit;
+              while (cur && cur !== document.body) {
+                if (cur !== el && isContainer(cur) && cur.getAttribute('data-voryxel-id')) {
+                  targetParent = cur; break;
+                }
+                cur = cur.parentElement;
+              }
+              // No persistir absolute; el reorden se hace con Subir/Bajar.
+              if (el && typeof UiBuilderChannel !== 'undefined' && targetParent) {
+                var ownParent = el.parentElement;
+                while (ownParent && ownParent !== document.body) {
+                  if (ownParent.getAttribute && ownParent.getAttribute('data-voryxel-id')) break;
+                  ownParent = ownParent.parentElement;
+                }
+                var tid = targetParent.getAttribute('data-voryxel-id');
+                var oid = ownParent && ownParent.getAttribute ? ownParent.getAttribute('data-voryxel-id') : null;
+                if (tid && tid !== oid) {
+                  UiBuilderChannel.postMessage(JSON.stringify({
+                    type: 'reparent',
+                    id: window.__voryxelMoveId,
+                    parentId: tid,
+                    parentKind: (targetParent.getAttribute('data-voryxel') || '')
+                  }));
+                }
               }
             } catch (e3) {}
           }, true);
+        }
+
+        function isContainer(n) {
+          if (!n || !n.getAttribute) return false;
+          if (n.getAttribute('data-voryxel-container') === '1') return true;
+          var kind = (n.getAttribute('data-voryxel') || '').toLowerCase();
+          return kind === 'container' || kind === 'card' || kind === 'hero' ||
+            kind === 'column' || kind === 'row' || kind === 'stack' ||
+            kind === 'wrap' || kind === 'form' || kind === 'listview' ||
+            kind === 'gridview' || kind === 'expandable';
         }
 
         window.__voryxelBindMove = function(id) {
@@ -346,27 +405,9 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           if (el) el.style.cursor = 'move';
         };
 
+        // Subir/Bajar: el host reordena el HTML en flow (no absolute).
         window.__voryxelNudge = function(id, dy) {
-          var el = document.querySelector('[data-voryxel-id="' + id + '"]');
-          if (!el) return JSON.stringify({ ok: false });
-          var cs = window.getComputedStyle(el);
-          if (cs.position !== 'absolute' && cs.position !== 'fixed') {
-            var rect = el.getBoundingClientRect();
-            el.style.position = 'absolute';
-            el.style.left = (rect.left + (window.scrollX || 0)) + 'px';
-            el.style.top = (rect.top + (window.scrollY || 0)) + 'px';
-            el.style.margin = '0';
-            el.style.zIndex = '40';
-            el.style.width = rect.width + 'px';
-          }
-          var top = (parseFloat(el.style.top) || 0) + dy;
-          if (top < 0) top = 0;
-          el.style.top = top + 'px';
-          return JSON.stringify({
-            ok: true,
-            left: parseFloat(el.style.left) || 0,
-            top: top
-          });
+          return JSON.stringify({ ok: false });
         };
 
         // Doble clic texto (una sola vez).
@@ -448,12 +489,14 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
   Future<Map<String, dynamic>?> resolveUiBuilderDrop({
     required double nx,
     required double ny,
+    String? childKind,
   }) async {
     if (!_webViewInitialized) return null;
     try {
       await _injectUiBuilderHelpers();
+      final kindArg = jsonEncode(childKind ?? '');
       final raw = await _webViewController.runJavaScriptReturningResult(
-        'window.__voryxelResolveDrop(${nx.toStringAsFixed(4)}, ${ny.toStringAsFixed(4)})',
+        'window.__voryxelResolveDrop(${nx.toStringAsFixed(4)}, ${ny.toStringAsFixed(4)}, $kindArg)',
       );
       final text = raw?.toString() ?? '';
       // WKWebView a veces envuelve el string entre comillas.
@@ -687,6 +730,9 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         var currentHoveredElement = null;
         var currentSelectedElement = null;
         var lastHoverSentAt = 0;
+        var lastClickKey = '';
+        var lastClickLayerIdx = 0;
+        var lastLayersAtPoint = [];
 
         function isOverlay(el) {
           if (!el || !el.id) return false;
@@ -829,22 +875,74 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           return rect;
         }
 
-        function updateLabel(element, rect, selected) {
+        function layerKindName(el) {
+          if (!el || !el.tagName) return 'nodo';
+          try {
+            var vk = (el.getAttribute && el.getAttribute('data-voryxel')) || '';
+            vk = String(vk).toLowerCase();
+            if (vk) {
+              if (vk === 'container' || vk === 'column' || vk === 'row' ||
+                  vk === 'stack' || vk === 'card' || vk === 'wrap') return vk;
+              if (vk === 'button' || vk === 'base_button') return 'botón';
+              if (vk === 'text' || vk === 'heading' || vk === 'richtext') return 'texto';
+              if (vk === 'image' || vk === 'circle_image') return 'imagen';
+              return vk;
+            }
+          } catch (e0) {}
+          var tag = (el.tagName || '').toLowerCase();
+          var role = (el.getAttribute && el.getAttribute('role')) || '';
+          if (tag === 'button' || role === 'button') return 'botón';
+          if (tag === 'a') return 'enlace';
+          if (tag === 'img') return 'imagen';
+          if (tag === 'p' || tag === 'span' || tag === 'h1' || tag === 'h2' ||
+              tag === 'h3' || tag === 'h4' || tag === 'label') return 'texto';
+          if (tag === 'div' || tag === 'section' || tag === 'main') return 'contenedor';
+          return tag;
+        }
+
+        function shortLayerLabel(el) {
+          var kind = layerKindName(el);
+          var text = (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) ||
+                     (el.innerText || el.textContent || '');
+          text = (text || '').trim().replace(/\s+/g, ' ').substring(0, 18);
+          return text ? (kind + ' "' + text + '"') : kind;
+        }
+
+        function updateLabel(element, rect, selected, layers) {
           if (!element || !rect) {
             labelDiv.style.display = 'none';
             return;
           }
-          var tag = (element.tagName || 'node').toLowerCase();
-          var text = (element.getAttribute && (element.getAttribute('aria-label') || element.getAttribute('title'))) ||
-                     (element.innerText || element.textContent || '');
-          text = (text || '').trim().replace(/\s+/g, ' ').substring(0, 28);
           var size = Math.round(rect.width) + '×' + Math.round(rect.height);
-          labelDiv.textContent = (selected ? '✓ ' : '') + tag + (text ? ' "' + text + '"' : '') + '  ' + size;
+          var path = '';
+          if (layers && layers.length > 1) {
+            // layers: pequeño→grande; mostrar padre › … › hijo (máx 3).
+            var names = [];
+            var take = Math.min(3, layers.length);
+            for (var li = take - 1; li >= 0; li--) {
+              var L = layers[li];
+              var kind = (L && L.attributes && L.attributes['data-voryxel']) ||
+                         (L && L.tagName ? String(L.tagName).toLowerCase() : 'nodo');
+              kind = String(kind).toLowerCase();
+              if (kind === 'button' || kind === 'base_button') kind = 'botón';
+              if (kind === 'text' || kind === 'heading') kind = 'texto';
+              if (kind === 'image') kind = 'imagen';
+              if (kind === 'a') kind = 'enlace';
+              if (kind === 'div' || kind === 'section') kind = 'contenedor';
+              var tx = (L && L.textContent) ? String(L.textContent).trim().replace(/\s+/g, ' ').substring(0, 14) : '';
+              names.push(tx ? (kind + ' "' + tx + '"') : kind);
+            }
+            path = names.join(' › ');
+          } else {
+            path = shortLayerLabel(element);
+          }
+          labelDiv.textContent = (selected ? '✓ ' : '') + path + '  ' + size;
           labelDiv.style.borderColor = selected ? 'rgba(34,197,94,0.55)' : 'rgba(59,130,246,0.55)';
+          labelDiv.style.maxWidth = '320px';
           var left = rect.left;
           var top = rect.top - 26;
           if (top < 4) top = rect.bottom + 6;
-          if (left + 200 > window.innerWidth) left = Math.max(4, window.innerWidth - 210);
+          if (left + 280 > window.innerWidth) left = Math.max(4, window.innerWidth - 290);
           labelDiv.style.left = left + 'px';
           labelDiv.style.top = top + 'px';
           labelDiv.style.display = 'block';
@@ -980,14 +1078,15 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         function hoverElement(element, x, y) {
           if (!element || element === document.body || element === document.documentElement) return;
           currentHoveredElement = element;
+          var layers = (typeof x === 'number' && typeof y === 'number')
+            ? collectLayersAt(x, y)
+            : [];
+          lastLayersAtPoint = layers;
           var rect = updateBox(element, highlightDiv);
-          updateLabel(element, rect, false);
+          updateLabel(element, rect, false, layers);
           var now = Date.now();
           if (now - lastHoverSentAt > 80) {
             lastHoverSentAt = now;
-            var layers = (typeof x === 'number' && typeof y === 'number')
-              ? collectLayersAt(x, y)
-              : [];
             post('elementHovered', element, layers);
           }
         }
@@ -1003,21 +1102,72 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           return el;
         }
 
-        function selectElement(element, x, y) {
+        function liveNodeFromLayerInfo(info) {
+          if (!info || !info.boundingRect) return null;
+          var r = info.boundingRect;
+          var stack = [];
+          try {
+            stack = document.elementsFromPoint(r.x + r.width / 2, r.y + r.height / 2) || [];
+          } catch (e5) {}
+          for (var i = 0; i < stack.length; i++) {
+            var el = stack[i];
+            if (!el || isOverlay(el) || isBoring(el)) continue;
+            var er = el.getBoundingClientRect();
+            if (Math.abs(er.x - r.x) < 2 && Math.abs(er.y - r.y) < 2 &&
+                Math.abs(er.width - r.width) < 2 && Math.abs(er.height - r.height) < 2) {
+              return el;
+            }
+            var tag = (el.tagName || '').toLowerCase();
+            if (tag === String(info.tagName || '').toLowerCase() &&
+                Math.abs(er.width - r.width) < 4 && Math.abs(er.height - r.height) < 4) {
+              return el;
+            }
+          }
+          return null;
+        }
+
+        function selectElement(element, x, y, opts) {
           if (!element || element === document.body || element === document.documentElement) return;
-          // Preferir ancestro con id real del UI Builder; NO inventar vb_…
-          // (rompería el guardado en HTML: "No se encontró el bloque").
-          element = nearestVoryxel(element);
+          opts = opts || {};
+          var layers = (typeof x === 'number' && typeof y === 'number')
+            ? collectLayersAt(x, y)
+            : (lastLayersAtPoint || []);
+          lastLayersAtPoint = layers;
+
+          // Alt/⌥+clic o segundo clic en el mismo punto → subir de capa (padre).
+          var clickKey = Math.round(x || 0) + ',' + Math.round(y || 0);
+          var cycleUp = !!(opts.altKey || opts.metaKey);
+          if (!cycleUp && clickKey === lastClickKey && currentSelectedElement) {
+            cycleUp = true;
+          }
+          if (cycleUp && layers.length > 1) {
+            var idx = lastClickLayerIdx + 1;
+            if (idx >= layers.length) idx = 0;
+            lastClickLayerIdx = idx;
+            var picked = liveNodeFromLayerInfo(layers[idx]);
+            if (picked) element = picked;
+          } else {
+            lastClickLayerIdx = 0;
+          }
+          lastClickKey = clickKey;
+
+          // Si el nodo clicado ya tiene data-voryxel-id, editar ESE bloque.
+          // Si no, subir al ancestro UI Builder para poder persistir.
+          try {
+            if (!(element.getAttribute && element.getAttribute('data-voryxel-id'))) {
+              element = nearestVoryxel(element);
+            }
+          } catch (e6) {
+            element = nearestVoryxel(element);
+          }
+
           currentSelectedElement = element;
           currentHoveredElement = element;
           window.__inspectorLastSelected = element;
           window.__inspectorSelectedEl = element;
           var rect = updateBox(element, selectedDiv);
           updateBox(element, highlightDiv);
-          updateLabel(element, rect, true);
-          var layers = (typeof x === 'number' && typeof y === 'number')
-            ? collectLayersAt(x, y)
-            : [];
+          updateLabel(element, rect, true, layers);
           post('elementSelected', element, layers);
         }
 
@@ -1057,7 +1207,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           if (!e.relatedTarget) {
             if (currentSelectedElement) {
               var rect = updateBox(currentSelectedElement, selectedDiv);
-              updateLabel(currentSelectedElement, rect, true);
+              updateLabel(currentSelectedElement, rect, true, lastLayersAtPoint);
               highlightDiv.style.display = 'none';
             } else {
               highlightDiv.style.display = 'none';
@@ -1082,7 +1232,11 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           if (!window.__inspectorActive) return;
           if (window.__voryxelDragging) return stopEvent(e);
           var el = pickInspectable(e.clientX, e.clientY, e.target);
-          if (el) selectElement(el, e.clientX, e.clientY);
+          if (el) {
+            selectElement(el, e.clientX, e.clientY, {
+              altKey: !!(e.altKey || e.metaKey)
+            });
+          }
           return stopEvent(e);
         };
 
@@ -1876,14 +2030,16 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         statusLower.contains('lanzand') ||
         statusLower.contains('prepar') ||
         statusLower.contains('waiting') ||
-        statusLower.contains('syncing');
+        statusLower.contains('syncing') ||
+        statusLower.contains('running');
+    final hasUrl = widget.appUrl != null && widget.appUrl!.isNotEmpty;
+    // Si está Running pero aún no hay URL → progreso, no el placeholder HTML.
     final isBuilding = widget.isRunning &&
-        widget.compilationProgress < 1.0 &&
-        (widget.appUrl == null ||
-            widget.appUrl!.isEmpty ||
+        (!hasUrl ||
+            widget.compilationProgress < 1.0 ||
             stillLaunching ||
             widget.compilationProgress < 0.95);
-    if (isBuilding) {
+    if (isBuilding && !hasUrl) {
       print(
         '⏳ PRIORIDAD build: Compilando (${widget.compilationProgress}) '
         '· ${widget.compilationStatus}',
@@ -1894,7 +2050,6 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     // WebView: Web full-bleed O Android/iOS Preview dentro del marco.
     // NUNCA llamar _loadAppUrl desde build(): cada notify del Output
     // reconstruía y disparaba GET / en bucle (scroll temblequeaba).
-    final hasUrl = widget.appUrl != null && widget.appUrl!.isNotEmpty;
     // Diseño HTML o Run: con URL basta para mostrar el WebView.
     if (hasUrl &&
         (isWeb || isMobilePreview || isAndroid || isIOS)) {
@@ -2132,7 +2287,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'Abre un proyecto HTML o cambia a Web · Hot Restart',
+                      'Pulsa Run (Web) o abre un proyecto HTML',
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       style: TextStyle(

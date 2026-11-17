@@ -92,19 +92,33 @@ class InspectorElement {
     final text = textContent?.trim() ?? '';
     final role = attributes['role']?.trim() ?? '';
     final tag = tagName.toLowerCase();
+    final voryxel = attributes['data-voryxel']?.toLowerCase() ?? '';
     final isSemantics =
         tag.contains('semantics') || (id?.startsWith('flt-semantic') ?? false);
 
     String kind;
-    if (role == 'button' || tag == 'button') {
+    if (voryxel.isNotEmpty) {
+      kind = switch (voryxel) {
+        'button' || 'base_button' || 'icon_button' => 'botón',
+        'text' || 'heading' || 'richtext' || 'base_text' => 'texto',
+        'image' || 'circle_image' || 'base_image' => 'imagen',
+        'container' || 'column' || 'row' || 'stack' || 'card' || 'wrap' =>
+          voryxel,
+        _ => voryxel,
+      };
+    } else if (role == 'button' || tag == 'button') {
       kind = 'botón';
+    } else if (tag == 'a') {
+      kind = 'enlace';
+    } else if (tag == 'img') {
+      kind = 'imagen';
     } else if (role == 'text' || role == 'statictext') {
       kind = 'texto';
     } else if (text.isNotEmpty && text.length <= 3 && isSemantics) {
       kind = 'control';
     } else if (isSemantics) {
       kind = 'capa';
-    } else if (tag == 'div' || tag == 'span') {
+    } else if (tag == 'div' || tag == 'span' || tag == 'section') {
       kind = 'contenedor';
     } else {
       kind = tag;

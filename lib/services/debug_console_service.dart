@@ -413,12 +413,9 @@ class DebugConsoleService extends ChangeNotifier {
       }
       changed = true;
     }
-    // Diseño nunca debe parecer "compilando / running".
-    if (active) {
-      if (_isRunning) {
-        _isRunning = false;
-        changed = true;
-      }
+    // Preview de diseño no cancela una sesión Run activa (Stop del toolbar).
+    // Solo limpia la barra de "compilando" si no hay Run en curso.
+    if (active && !_isRunning) {
       if (_compilationProgress != 0.0 || _compilationStatus.isNotEmpty) {
         _compilationProgress = 0.0;
         _compilationStatus = '';

@@ -166,6 +166,47 @@ class UiBuilderEditService {
     return (html: next, newBlockId: newId);
   }
 
+  /// Mueve un bloque existente dentro de otro contenedor (reparent).
+  static Future<String> reparentBlock({
+    required String filePath,
+    required String blockId,
+    required String newParentId,
+  }) async {
+    if (blockId == newParentId) {
+      throw StateError('No se puede meter un bloque dentro de sí mismo');
+    }
+    final file = File(filePath);
+    var html = await file.readAsString();
+    final blocks = _collectBlocks(html);
+    final sourceIdx = blocks.indexWhere((b) => b.id == blockId);
+    if (sourceIdx < 0) {
+      throw StateError('No se encontró el bloque $blockId');
+    }
+    final source = blocks[sourceIdx];
+    // Evitar meter un padre dentro de un hijo.
+    if (source.inner.contains('voryxel-ui:START:$newParentId')) {
+      throw StateError('Destino inválido: el contenedor está dentro del bloque');
+    }
+    final stamped = source.full.trim();
+    html = html.replaceRange(source.start, source.end, '');
+    var found = false;
+    html = html.replaceAllMapped(_blockRe, (m) {
+      if (m.group(1) != newParentId) return m.group(0)!;
+      found = true;
+      var inner = (m.group(2) ?? '').trimRight();
+      inner = _stripPlaceholders(inner);
+      inner = _insertBeforeRootClose(inner, '\n$stamped\n');
+      return '<!-- voryxel-ui:START:$newParentId -->\n'
+          '$inner\n'
+          '<!-- voryxel-ui:END:$newParentId -->';
+    });
+    if (!found) {
+      throw StateError('No se encontró el contenedor $newParentId');
+    }
+    await file.writeAsString(html);
+    return html;
+  }
+
   /// Elimina placeholders de contenedores vacíos (texto "Container", etc.).
   static String _stripPlaceholders(String html) {
     var out = html;

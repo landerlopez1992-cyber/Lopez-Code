@@ -130,6 +130,15 @@ class UiBuilderDesignRules {
     final parent = parentKind.toLowerCase();
     if (!acceptsChildren(parent)) return false;
 
+    // V.Divider solo tiene sentido en Row (como FlutterFlow).
+    if (child == 'vertical_divider') {
+      return parent == 'row';
+    }
+    // Spacer: Column o Row.
+    if (child == 'spacer') {
+      return parent == 'column' || parent == 'row' || parent == 'wrap';
+    }
+
     // Reglas especiales FlutterFlow-like.
     switch (parent) {
       case 'navbar':
@@ -168,8 +177,11 @@ class UiBuilderDesignRules {
             child == 'container' ||
             child == 'hero' ||
             child == 'text';
+      case 'stack':
+        // Stack acepta casi todo; el hijo se centra / superpone.
+        return true;
       default:
-        // Column/Row/Stack/Container/Card/Wrap/Grid/Hero: casi todo.
+        // Column/Row/Container/Card/Wrap/Grid/Hero: casi todo.
         return true;
     }
   }
@@ -212,12 +224,19 @@ class UiBuilderDesignRules {
     );
 
     if (child == 'image' || child == 'circle_image') {
-      html = _mergeStyle(
-        html,
-        parent == 'row'
-            ? 'max-width:160px;height:auto;margin:0;display:block;border-radius:8px;'
-            : 'width:100%;max-width:100%;height:auto;margin:0;display:block;border-radius:8px;',
-      );
+      if (parent == 'stack') {
+        html = _mergeStyle(
+          html,
+          'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:80%;max-width:100%;height:auto;margin:0;display:block;border-radius:8px;',
+        );
+      } else {
+        html = _mergeStyle(
+          html,
+          parent == 'row'
+              ? 'max-width:160px;height:auto;margin:0;display:block;border-radius:8px;'
+              : 'width:100%;max-width:100%;height:auto;margin:0;display:block;border-radius:8px;',
+        );
+      }
     }
     if (child == 'button' || child == 'base_button') {
       html = _mergeStyle(
