@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../services/project_service.dart';
 import '../services/file_service.dart';
 import '../services/agent_activity_service.dart';
+import '../services/screen_discovery_service.dart';
 import 'cursor_theme.dart';
 import 'app_toast.dart';
 
@@ -14,6 +15,8 @@ class ProjectExplorer extends StatefulWidget {
   final Function(String)? onFileDelete;
   final Function(String)? onFileViewCode;
   final Function(String)? onFileCopy;
+  /// Clic en una pantalla detectada (estilo FlutterFlow).
+  final Function(String path)? onScreenSelected;
   /// Callback opcional para pedir abrir/seleccionar proyecto (empty state).
   final VoidCallback? onRequestOpenProject;
   final String mode; // 'explorer' o 'search'
@@ -27,6 +30,7 @@ class ProjectExplorer extends StatefulWidget {
     this.onFileDelete,
     this.onFileViewCode,
     this.onFileCopy,
+    this.onScreenSelected,
     this.onRequestOpenProject,
     this.mode = 'explorer',
     this.agentActivePath,
@@ -56,6 +60,8 @@ class _ProjectExplorerState extends State<ProjectExplorer>
   /// Filtro en vivo del árbol (nombres de archivo/carpeta).
   String _treeFilter = '';
   List<Map<String, String>> _treeFilterHits = [];
+  bool _screensExpanded = true;
+  bool _filesExpanded = true;
 
   @override
   void initState() {
@@ -903,6 +909,297 @@ class _ProjectExplorerState extends State<ProjectExplorer>
     return result;
   }
 
+  List<ProjectScreen> get _discoveredScreens {
+    final all = ScreenDiscoveryService.fromTree(
+      _projectTree,
+      projectPath: _projectPath,
+    );
+    if (_treeFilter.isEmpty) return all;
+    final q = _treeFilter.toLowerCase();
+    return all
+        .where(
+          (s) =>
+              s.displayName.toLowerCase().contains(q) ||
+              s.path.toLowerCase().contains(q),
+        )
+        .toList();
+  }
+
+  void _openScreen(ProjectScreen screen) {
+    setState(() => _selectedPath = screen.path);
+    if (widget.onScreenSelected != null) {
+      widget.onScreenSelected!(screen.path);
+    } else {
+      widget.onFileSelected?.call(screen.path);
+    }
+  }
+
+  Future<void> _createNewScreen() async {
+    if (_projectPath == null) return;
+    final title = await _promptName(
+      title: 'Nueva pantalla',
+      label: 'Nombre (ej. Perfil, Checkout)',
+    );
+    if (title == null) return;
+
+    final screens = ScreenDiscoveryService.fromTree(
+      _projectTree,
+      projectPath: _projectPath,
+    );
+    final hasPubspec =
+        await File('$_projectPath/pubspec.yaml').exists();
+    final preferHtml = !hasPubspec &&
+        (screens.isEmpty ||
+            screens.any((s) => s.kind == ProjectScreenKind.html));
+    final fileName = ScreenDiscoveryService.fileSlug(
+      title,
+      extension: preferHtml ? 'html' : 'dart',
+    );
+
+    String path;
+    String contents;
+    if (preferHtml) {
+      path = '$_projectPath/$fileName'.replaceAll('//', '/');
+      contents = '''<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>$title</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    h1 { font-weight: 600; letter-spacing: -0.02em; }
+  </style>
+</head>
+<body>
+  <h1>$title</h1>
+</body>
+</html>
+''';
+    } else {
+      final screensDir = Directory('$_projectPath/lib/screens');
+      if (!await screensDir.exists()) {
+        await screensDir.create(recursive: true);
+      }
+      final classBase = ScreenDiscoveryService.prettyName(
+        fileName,
+        stripExt: '.dart',
+      ).replaceAll(' ', '');
+      final className =
+          classBase.isEmpty ? 'NuevaPantalla' : '${classBase}Screen';
+      path = '${screensDir.path}/$fileName'.replaceAll('//', '/');
+      contents = '''import 'package:flutter/material.dart';
+
+class $className extends StatelessWidget {
+  const $className({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('$title')),
+      body: const Center(child: Text('$title')),
+    );
+  }
+}
+''';
+    }
+
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        throw Exception('Ya existe: $fileName');
+      }
+      await file.create(recursive: true);
+      await file.writeAsString(contents);
+      await _loadProject();
+      if (!mounted) return;
+      setState(() => _selectedPath = path);
+      _openScreen(
+        ProjectScreen(
+          path: path,
+          displayName: title,
+          kind: preferHtml
+              ? ProjectScreenKind.html
+              : ProjectScreenKind.flutter,
+        ),
+      );
+      AppToast.info(context, 'Pantalla creada: $title');
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo crear la pantalla: $e');
+      }
+    }
+  }
+
+  Widget _buildSectionHeader({
+    required String title,
+    required bool expanded,
+    required VoidCallback onToggle,
+    Widget? trailing,
+  }) {
+    return InkWell(
+      onTap: onToggle,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 4, 4),
+        child: Row(
+          children: [
+            Icon(
+              expanded
+                  ? Icons.keyboard_arrow_down
+                  : Icons.keyboard_arrow_right,
+              size: 16,
+              color: CursorTheme.textSecondary,
+            ),
+            const SizedBox(width: 2),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: CursorTheme.textSecondary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
+            if (trailing != null) trailing,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScreensSection() {
+    final screens = _discoveredScreens;
+    if (screens.isEmpty && _treeFilter.isNotEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionHeader(
+          title: 'PANTALLAS',
+          expanded: _screensExpanded,
+          onToggle: () =>
+              setState(() => _screensExpanded = !_screensExpanded),
+          trailing: IconButton(
+            icon: const Icon(Icons.add, size: 15),
+            color: CursorTheme.textSecondary,
+            tooltip: 'Nueva pantalla',
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+            splashRadius: 14,
+            onPressed: _createNewScreen,
+          ),
+        ),
+        if (_screensExpanded) ...[
+          if (screens.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(28, 2, 12, 8),
+              child: Text(
+                'No hay pantallas aún.\nUsa + para crear una.',
+                style: TextStyle(
+                  color: CursorTheme.textDisabled,
+                  fontSize: 11,
+                  height: 1.35,
+                ),
+              ),
+            )
+          else
+            ...screens.map((screen) {
+              final selected = _samePath(_selectedPath, screen.path);
+              final isAgent = _matchesAgentFile(screen.path);
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _openScreen(screen),
+                  onDoubleTap: () =>
+                      widget.onFileDoubleClick?.call(screen.path),
+                  child: AnimatedBuilder(
+                    animation: _agentPulse,
+                    builder: (context, _) {
+                      Color? bg;
+                      if (isAgent) {
+                        bg = Color.lerp(
+                          const Color(0xFF1A3A5C),
+                          CursorTheme.primary.withOpacity(0.55),
+                          _agentPulse.value,
+                        );
+                      } else if (selected) {
+                        bg = CursorTheme.explorerItemSelected;
+                      }
+                      return Container(
+                        key: isAgent ? _agentRowKey : null,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        color: bg,
+                        child: Row(
+                          children: [
+                            Icon(
+                              screen.kind == ProjectScreenKind.html
+                                  ? Icons.web_asset
+                                  : Icons.phone_iphone_outlined,
+                              size: 15,
+                              color: selected
+                                  ? Colors.white
+                                  : (screen.kind == ProjectScreenKind.html
+                                      ? Colors.orange
+                                      : const Color(0xFF54C5F8)),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                screen.displayName,
+                                style: TextStyle(
+                                  color: selected
+                                      ? Colors.white
+                                      : CursorTheme.textPrimary,
+                                  fontSize: 12.5,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Text(
+                              screen.kind == ProjectScreenKind.html
+                                  ? 'HTML'
+                                  : 'UI',
+                              style: TextStyle(
+                                color: CursorTheme.textDisabled,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              );
+            }),
+        ],
+      ],
+    );
+  }
+
   Future<void> _createNewFile(String parentDir) async {
     final name = await _promptName(
       title: 'Nuevo archivo',
@@ -1396,16 +1693,24 @@ class _ProjectExplorerState extends State<ProjectExplorer>
             ),
           ),
         ),
-        // Tree o resultados del filtro
+        // Pantallas + árbol (o resultados del filtro)
         Expanded(
           child: _treeFilter.isEmpty
               ? ListView(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  padding: const EdgeInsets.symmetric(vertical: 4),
                   children: [
-                    _buildTreeItem(_projectTree!, 0),
+                    _buildScreensSection(),
+                    _buildSectionHeader(
+                      title: 'ARCHIVOS',
+                      expanded: _filesExpanded,
+                      onToggle: () => setState(
+                        () => _filesExpanded = !_filesExpanded,
+                      ),
+                    ),
+                    if (_filesExpanded) _buildTreeItem(_projectTree!, 0),
                   ],
                 )
-              : _treeFilterHits.isEmpty
+              : (_treeFilterHits.isEmpty && _discoveredScreens.isEmpty)
                   ? const Center(
                       child: Text(
                         'Sin coincidencias',
@@ -1415,10 +1720,17 @@ class _ProjectExplorerState extends State<ProjectExplorer>
                         ),
                       ),
                     )
-                  : ListView.builder(
+                  : ListView(
                       padding: const EdgeInsets.symmetric(vertical: 4),
-                      itemCount: _treeFilterHits.length,
-                      itemBuilder: (context, index) {
+                      children: [
+                        _buildScreensSection(),
+                        if (_treeFilterHits.isNotEmpty) ...[
+                          _buildSectionHeader(
+                            title: 'ARCHIVOS',
+                            expanded: true,
+                            onToggle: () {},
+                          ),
+                          ...List.generate(_treeFilterHits.length, (index) {
                         final hit = _treeFilterHits[index];
                         final name = hit['name']!;
                         final path = hit['path']!;
@@ -1498,7 +1810,9 @@ class _ProjectExplorerState extends State<ProjectExplorer>
                             ),
                           ),
                         );
-                      },
+                          }),
+                        ],
+                      ],
                     ),
         ),
       ],

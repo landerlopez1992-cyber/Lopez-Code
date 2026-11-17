@@ -222,6 +222,7 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
     return Container(
       height: isVertical ? null : height,
       constraints: isVertical ? const BoxConstraints.expand() : null,
+      clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
         color: CursorTheme.surface,
         border: isVertical
@@ -305,61 +306,76 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
   }
 
   Widget _buildHeader() {
-    return Container(
-      height: 36,
-      decoration: BoxDecoration(
-        color: CursorTheme.background,
-        border: Border(
-          bottom: BorderSide(
-            color: CursorTheme.border,
-            width: 1,
+    // TabBar default = 46+indicator ≈ 48; header era 36 → BOTTOM OVERFLOWED BY 12.
+    // Tab(height: 34) + indicatorWeight 2 = 36 exacto.
+    const tabH = 34.0;
+    const indicatorW = 2.0;
+    return SizedBox(
+      height: tabH + indicatorW,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: CursorTheme.background,
+          border: Border(
+            bottom: BorderSide(
+              color: CursorTheme.border,
+              width: 1,
+            ),
           ),
         ),
-      ),
-      child: Row(
-        children: [
-          // Tabs
-          Expanded(
-            child: TabBar(
-              controller: _tabController,
-              indicatorColor: CursorTheme.primary,
-              labelColor: CursorTheme.textPrimary,
-              unselectedLabelColor: CursorTheme.textSecondary,
-              labelStyle: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 11,
-              ),
-              isScrollable: false,
-              tabs: [
-                Tooltip(
-                  message: 'Errores/warnings de flutter analyze',
-                  child: _buildTab(
+        child: Row(
+          children: [
+            Expanded(
+              child: TabBar(
+                controller: _tabController,
+                indicatorColor: CursorTheme.primary,
+                indicatorWeight: indicatorW,
+                labelColor: CursorTheme.textPrimary,
+                unselectedLabelColor: CursorTheme.textSecondary,
+                labelPadding: EdgeInsets.zero,
+                labelStyle: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  height: 1.0,
+                ),
+                unselectedLabelStyle: const TextStyle(
+                  fontSize: 11,
+                  height: 1.0,
+                ),
+                isScrollable: false,
+                tabs: [
+                  _buildTab(
                     'Problems',
                     _resolvedProblemItems.length,
                     Colors.red,
+                    height: tabH,
+                    tooltip: 'Errores/warnings de flutter analyze',
                   ),
-                ),
-                const Tooltip(
-                  message: 'Log crudo completo: flutter tool, build, dependencias',
-                  child: Tab(text: 'Output'),
-                ),
-                const Tooltip(
-                  message:
-                      'Trazas en vivo de la app: print, excepciones, carga, hot reload',
-                  child: Tab(text: 'Debug Console'),
-                ),
-                const Tooltip(
-                  message: 'Shell interactiva (zsh) en el proyecto',
-                  child: Tab(text: 'Terminal'),
-                ),
-              ],
+                  const Tab(
+                    height: tabH,
+                    child: Tooltip(
+                      message:
+                          'Log crudo completo: flutter tool, build, dependencias',
+                      child: Text('Output'),
+                    ),
+                  ),
+                  const Tab(
+                    height: tabH,
+                    child: Tooltip(
+                      message:
+                          'Trazas en vivo: print, excepciones, carga, hot reload',
+                      child: Text('Debug Console'),
+                    ),
+                  ),
+                  const Tab(
+                    height: tabH,
+                    child: Tooltip(
+                      message: 'Shell interactiva (zsh) en el proyecto',
+                      child: Text('Terminal'),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          
-          // Botones de acción (más pequeños para evitar overflow)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -375,11 +391,9 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
                               line.toLowerCase().contains('failed') ||
                               line.toLowerCase().contains('exception')) ??
                           false)))
-                IconButton(
-                  icon: const Icon(Icons.smart_toy, size: 14),
+                _headerIconButton(
+                  icon: Icons.smart_toy,
                   color: CursorTheme.primary,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                   onPressed: _sendActiveTabToChat,
                   tooltip: _selectedTabIndex == 0
                       ? 'Precargar errores en el Chat IA'
@@ -388,34 +402,26 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
 
               // Copiar pestaña activa al portapapeles (pegar en el agente)
               if (_selectedTabIndex != 3 && _activeTabHasContent)
-                IconButton(
-                  icon: const Icon(Icons.content_copy, size: 14),
-                  color: CursorTheme.textSecondary,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                _headerIconButton(
+                  icon: Icons.content_copy,
                   onPressed: _copyActiveTabToClipboard,
                   tooltip: 'Copiar pestaña actual',
                 ),
 
               if (widget.onRefreshAnalyze != null)
-                IconButton(
-                  icon: const Icon(Icons.refresh, size: 14),
-                  color: CursorTheme.textSecondary,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                _headerIconButton(
+                  icon: Icons.refresh,
                   onPressed: widget.onRefreshAnalyze,
                   tooltip: 'flutter analyze',
                 ),
-              
+
               // Botón de búsqueda / filtro (no aplica a Terminal)
               if (_selectedTabIndex != 3)
-                IconButton(
-                  icon: const Icon(Icons.search, size: 14),
+                _headerIconButton(
+                  icon: Icons.search,
                   color: _filterVisible
                       ? CursorTheme.primary
                       : CursorTheme.textSecondary,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                   onPressed: () {
                     setState(() {
                       _filterVisible = !_filterVisible;
@@ -424,17 +430,16 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
                       }
                     });
                   },
-                  tooltip: _filterVisible ? 'Ocultar filtro' : 'Buscar / filtrar',
+                  tooltip:
+                      _filterVisible ? 'Ocultar filtro' : 'Buscar / filtrar',
                 ),
 
               if (_selectedTabIndex != 3)
-                IconButton(
-                  icon: const Icon(Icons.filter_list, size: 14),
+                _headerIconButton(
+                  icon: Icons.filter_list,
                   color: _filterController.text.isNotEmpty
                       ? CursorTheme.primary
                       : CursorTheme.textSecondary,
-                  padding: const EdgeInsets.all(4),
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                   onPressed: () {
                     setState(() {
                       _filterVisible = true;
@@ -444,60 +449,90 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
                 ),
 
               // Limpiar pestaña activa
-              IconButton(
-                icon: const Icon(Icons.clear_all, size: 14),
-                color: CursorTheme.textSecondary,
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              _headerIconButton(
+                icon: Icons.clear_all,
                 onPressed: _clearActiveTab,
                 tooltip: 'Limpiar pestaña actual',
               ),
             ],
           ),
         ],
+        ),
       ),
     );
   }
 
-  Widget _buildTab(String label, int count, Color badgeColor) {
-    return Tab(
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
+  /// Iconos del header (36px): IconButton M3 pide 40–48 → overflow.
+  Widget _headerIconButton({
+    required IconData icon,
+    required VoidCallback? onPressed,
+    required String tooltip,
+    Color color = CursorTheme.textSecondary,
+  }) {
+    return IconButton(
+      icon: Icon(icon, size: 14),
+      color: color,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        minimumSize: const Size(28, 28),
+        maximumSize: const Size(28, 28),
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+
+  Widget _buildTab(
+    String label,
+    int count,
+    Color badgeColor, {
+    double height = 34,
+    String? tooltip,
+  }) {
+    final labelRow = FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+          if (count > 0) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: badgeColor.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: badgeColor.withOpacity(0.5),
+                  width: 1,
+                ),
+              ),
               child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+                count.toString(),
+                style: TextStyle(
+                  color: badgeColor,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-            if (count > 0) ...[
-              const SizedBox(width: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  color: badgeColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: badgeColor.withOpacity(0.5),
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  count.toString(),
-                  style: TextStyle(
-                    color: badgeColor,
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
           ],
-        ),
+        ],
       ),
+    );
+    return Tab(
+      height: height,
+      child: tooltip == null
+          ? labelRow
+          : Tooltip(message: tooltip, child: labelRow),
     );
   }
 
@@ -722,35 +757,64 @@ class _DebugConsolePanelState extends State<DebugConsolePanel>
             .toList();
 
     if (filteredProblems.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Sin problemas de análisis',
-              style: TextStyle(
-                color: CursorTheme.textSecondary,
-                fontSize: 12,
+      // Panel bajo: TextButton Material (~48px) provocaba BOTTOM OVERFLOWED ~16px.
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight.isFinite
+                    ? constraints.maxHeight
+                    : 0,
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Sin problemas de análisis',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: CursorTheme.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Solo errores/warnings de flutter analyze (no el log de run)',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: CursorTheme.textDisabled,
+                        fontSize: 10,
+                      ),
+                    ),
+                    if (widget.onRefreshAnalyze != null) ...[
+                      const SizedBox(height: 6),
+                      TextButton.icon(
+                        onPressed: widget.onRefreshAnalyze,
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          minimumSize: Size.zero,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                        ),
+                        icon: const Icon(Icons.analytics_outlined, size: 14),
+                        label: const Text(
+                          'Run flutter analyze',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Solo errores/warnings de flutter analyze (no el log de run)',
-              style: TextStyle(
-                color: CursorTheme.textDisabled,
-                fontSize: 10,
-              ),
-            ),
-            if (widget.onRefreshAnalyze != null) ...[
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: widget.onRefreshAnalyze,
-                icon: const Icon(Icons.analytics_outlined, size: 14),
-                label: const Text('Run flutter analyze', style: TextStyle(fontSize: 11)),
-              ),
-            ],
-          ],
-        ),
+          );
+        },
       );
     }
 

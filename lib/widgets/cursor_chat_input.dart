@@ -643,22 +643,18 @@ class _CursorChatInputState extends State<CursorChatInput> {
             
             const SizedBox(height: 8),
             
-            // Controles ABAJO (como Cursor) - Row flexible para evitar overflow
+            // Controles en una sola fila sin scroll (FittedBox compacta si no caben).
             Row(
               children: [
-                // Controles izquierda (flexibles)
-                Flexible(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Selector Agent / Ask (estilo Cursor)
                         _buildModeSelector(),
-
-                        const SizedBox(width: 8),
-
-                        // Selector de modelo (estilo Cursor - pill button)
+                        const SizedBox(width: 4),
                         Material(
                           color: Colors.transparent,
                           child: InkWell(
@@ -666,12 +662,15 @@ class _CursorChatInputState extends State<CursorChatInput> {
                               _closeOverlay();
                               _showModelSelector();
                             },
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(14),
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 5,
+                              ),
                               decoration: BoxDecoration(
                                 color: CursorTheme.background.withOpacity(0.5),
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(14),
                                 border: Border.all(
                                   color: CursorTheme.border.withOpacity(0.3),
                                   width: 1,
@@ -682,33 +681,33 @@ class _CursorChatInputState extends State<CursorChatInput> {
                                 children: [
                                   Icon(
                                     Icons.psychology_outlined,
-                                    size: 14,
-                                    color: CursorTheme.textSecondary.withOpacity(0.8),
+                                    size: 13,
+                                    color: CursorTheme.textSecondary
+                                        .withOpacity(0.8),
                                   ),
-                                  const SizedBox(width: 6),
+                                  const SizedBox(width: 4),
                                   Text(
                                     _getModelDisplayName(_currentModel),
                                     style: TextStyle(
-                                      color: CursorTheme.textSecondary.withOpacity(0.9),
+                                      color: CursorTheme.textSecondary
+                                          .withOpacity(0.9),
                                       fontSize: 11,
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 2),
                                   Icon(
                                     Icons.keyboard_arrow_down,
-                                    size: 14,
-                                    color: CursorTheme.textSecondary.withOpacity(0.6),
+                                    size: 13,
+                                    color: CursorTheme.textSecondary
+                                        .withOpacity(0.6),
                                   ),
                                 ],
                               ),
                             ),
                           ),
                         ),
-                        
-                        const SizedBox(width: 8),
-                        
-                        // Toggle Auto (estilo Cursor - pill button)
+                        const SizedBox(width: 4),
                         Material(
                           color: Colors.transparent,
                           child: InkWell(
@@ -718,14 +717,17 @@ class _CursorChatInputState extends State<CursorChatInput> {
                               });
                               await SettingsService.saveAutoMode(_autoMode);
                             },
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(14),
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 5,
+                              ),
                               decoration: BoxDecoration(
-                                color: _autoMode 
+                                color: _autoMode
                                     ? CursorTheme.primary.withOpacity(0.2)
                                     : CursorTheme.background.withOpacity(0.5),
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(14),
                                 border: Border.all(
                                   color: _autoMode
                                       ? CursorTheme.primary.withOpacity(0.5)
@@ -741,28 +743,27 @@ class _CursorChatInputState extends State<CursorChatInput> {
                                     style: TextStyle(
                                       color: _autoMode
                                           ? CursorTheme.primary
-                                          : CursorTheme.textSecondary.withOpacity(0.9),
+                                          : CursorTheme.textSecondary
+                                              .withOpacity(0.9),
                                       fontSize: 11,
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 2),
                                   Icon(
                                     Icons.keyboard_arrow_down,
-                                    size: 14,
+                                    size: 13,
                                     color: _autoMode
                                         ? CursorTheme.primary.withOpacity(0.8)
-                                        : CursorTheme.textSecondary.withOpacity(0.6),
+                                        : CursorTheme.textSecondary
+                                            .withOpacity(0.6),
                                   ),
                                 ],
                               ),
                             ),
                           ),
                         ),
-                        
-                        const SizedBox(width: 4),
-
-                        // @ → inserta "@" y abre el menú de contexto (Docs incluido)
+                        const SizedBox(width: 2),
                         _CompactIconButton(
                           tooltip: 'Add context (@)',
                           onTap: _insertAtMention,
@@ -770,7 +771,7 @@ class _CursorChatInputState extends State<CursorChatInput> {
                             '@',
                             style: TextStyle(
                               color: CursorTheme.textSecondary.withOpacity(0.85),
-                              fontSize: 14,
+                              fontSize: 13,
                               fontWeight: FontWeight.w600,
                               height: 1,
                             ),
@@ -782,7 +783,7 @@ class _CursorChatInputState extends State<CursorChatInput> {
                             onTap: widget.onAttachImage!,
                             child: Icon(
                               Icons.image_outlined,
-                              size: 15,
+                              size: 14,
                               color: CursorTheme.textSecondary.withOpacity(0.85),
                             ),
                           ),
@@ -792,7 +793,7 @@ class _CursorChatInputState extends State<CursorChatInput> {
                             onTap: widget.onAttachFile!,
                             child: Icon(
                               Icons.insert_drive_file_outlined,
-                              size: 15,
+                              size: 14,
                               color: CursorTheme.textSecondary.withOpacity(0.85),
                             ),
                           ),
@@ -804,7 +805,7 @@ class _CursorChatInputState extends State<CursorChatInput> {
                           },
                           child: Icon(
                             Icons.menu_book_outlined,
-                            size: 15,
+                            size: 14,
                             color: CursorTheme.textSecondary.withOpacity(0.85),
                           ),
                         ),
@@ -812,17 +813,14 @@ class _CursorChatInputState extends State<CursorChatInput> {
                     ),
                   ),
                 ),
-                
-                const SizedBox(width: 6),
-                
-                // Botón enviar/stop (estilo Cursor) - compacto
+                const SizedBox(width: 4),
                 Material(
-                  color: widget.isLoading 
+                  color: widget.isLoading
                       ? Colors.red.withOpacity(0.9)
                       : CursorTheme.primary,
                   borderRadius: BorderRadius.circular(6),
                   child: InkWell(
-                    onTap: widget.isLoading 
+                    onTap: widget.isLoading
                         ? (widget.onStop ?? () {})
                         : widget.onSend,
                     borderRadius: BorderRadius.circular(6),
@@ -858,12 +856,12 @@ class _CursorChatInputState extends State<CursorChatInput> {
               },
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
           decoration: BoxDecoration(
             color: isAgent
                 ? CursorTheme.primary.withOpacity(0.15)
                 : CursorTheme.background.withOpacity(0.5),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: isAgent
                   ? CursorTheme.primary.withOpacity(0.45)
@@ -876,12 +874,12 @@ class _CursorChatInputState extends State<CursorChatInput> {
             children: [
               Icon(
                 isAgent ? Icons.smart_toy_outlined : Icons.chat_bubble_outline,
-                size: 14,
+                size: 13,
                 color: isAgent
                     ? CursorTheme.primary
                     : CursorTheme.textSecondary.withOpacity(0.8),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
               Text(
                 isAgent ? 'Agent' : 'Ask',
                 style: TextStyle(
@@ -902,21 +900,23 @@ class _CursorChatInputState extends State<CursorChatInput> {
   String _getModelDisplayName(String model) {
     switch (model) {
       case 'gpt-4o-mini':
-        return 'GPT-4o Mini';
+        return '4o mini';
       case 'gpt-4o':
-        return 'GPT-4o';
+        return '4o';
       case 'gpt-4.1':
         return 'GPT-4.1';
+      case 'gpt-4.1-mini':
+        return '4.1 mini';
       case 'o4-mini':
         return 'o4-mini';
       case 'gpt-4-turbo':
-        return 'GPT-4 Turbo';
+        return '4 Turbo';
       case 'gpt-4':
         return 'GPT-4';
       case 'gpt-3.5-turbo':
-        return 'GPT-3.5 Turbo';
+        return '3.5';
       default:
-        return model;
+        return model.length > 14 ? '${model.substring(0, 12)}…' : model;
     }
   }
 }

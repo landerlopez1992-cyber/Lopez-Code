@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'screens/auth/auth_gate.dart';
+import 'widgets/app_splash_screen.dart';
 import 'widgets/cursor_theme.dart';
 import 'services/auth_service.dart';
 import 'services/permission_service.dart';
@@ -9,7 +12,16 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Lopez → Voryxel: recuperar API Key del plist del bundle anterior.
   await SettingsService.migrateLegacyMacPrefsIfNeeded();
-  await AuthService.instance.initialize();
+  // NO await Auth aquí: si Firebase se cuelga, la ventana queda negra
+  // (runApp nunca corre). Init en paralelo con timeout.
+  unawaited(
+    AuthService.instance.initialize().timeout(
+      const Duration(seconds: 8),
+      onTimeout: () {
+        debugPrint('⚠️ Auth init timeout — continuando sin bloquear UI');
+      },
+    ),
+  );
   runApp(const MyApp());
 }
 
@@ -35,55 +47,23 @@ class AppInitializer extends StatefulWidget {
 }
 
 class _AppInitializerState extends State<AppInitializer> {
-  bool _isCheckingPermissions = true;
+  bool _showSplash = true;
 
-  @override
-  void initState() {
-    super.initState();
-    _checkPermissions();
-  }
-
-  Future<void> _checkPermissions() async {
-    // Esperar un momento para que la UI se cargue
-    await Future.delayed(const Duration(milliseconds: 500));
-    
+  Future<void> _whileSplash() async {
+    // Permisos en paralelo mientras corre la barra (~4–6 s).
+    await Future<void>.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
-    
-    // Verificar y solicitar permisos
     await PermissionService.checkAndRequestPermissions(context);
-    
-    if (mounted) {
-      setState(() {
-        _isCheckingPermissions = false;
-      });
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Mientras se verifican permisos, mostrar pantalla de carga
-    if (_isCheckingPermissions) {
-      return Scaffold(
-        backgroundColor: CursorTheme.background,
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min, // ✅ FIX: Evita altura infinita
-            children: [
-              const CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF007ACC)),
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'Verificando permisos...',
-                style: TextStyle(
-                  color: CursorTheme.textSecondary,
-                  fontSize: 14,
-                ),
-              ),
-            ],
-          ),
-        ),
+    if (_showSplash) {
+      return AppSplashScreen(
+        whileLoading: _whileSplash,
+        onFinished: () {
+          if (mounted) setState(() => _showSplash = false);
+        },
       );
     }
 

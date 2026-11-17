@@ -72,7 +72,9 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
       left: finalLeft,
       top: finalTop,
         child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
+          // deferToChild: los taps de Run/Debug llegan a InkWell;
+          // el pan solo gana si el usuario arrastra de verdad.
+          behavior: HitTestBehavior.deferToChild,
           onPanStart: (details) {
             setState(() {
               _isDragging = true;
@@ -106,6 +108,7 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
             color: Colors.transparent,
           child: Container(
             constraints: const BoxConstraints(maxHeight: 32, maxWidth: 600),
+            clipBehavior: Clip.hardEdge,
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               decoration: BoxDecoration(
                 color: CursorTheme.surface,
@@ -128,11 +131,13 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
               animation: DebugConsoleService(),
               builder: (context, _) {
                 final debug = DebugConsoleService();
+                // Diseño HTML no cuenta como "running" (Run/Debug siguen activos).
                 final running = widget.isRunning || debug.isRunning;
                 final statusLower = debug.compilationStatus.toLowerCase();
                 final progress = debug.compilationProgress;
                 final hasUrl =
                     debug.appUrl != null && debug.appUrl!.isNotEmpty;
+                final designLive = debug.isDesignPreview && hasUrl;
                 // Fases de carga (aún no "app viva" con Hot Reload).
                 final loadingPhase = statusLower.contains('instal') ||
                     statusLower.contains('iniciando') ||
@@ -227,13 +232,16 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                         ),
                       ],
                     ] else ...[
-                      // Idle / compilando: Run + Debug + Stop/Restart clásicos
+                      // Idle / Preview diseño: Run + Debug activos; Restart si hay Preview
                       _ToolbarButton(
                         icon: Icons.play_arrow,
                         label: 'Run',
                         onPressed: running ? null : widget.onRun,
                         color: Colors.green,
-                        tooltip: 'Ejecutar aplicación',
+                        tooltip: designLive
+                            ? 'Refrescar Preview HTML'
+                            : 'Ejecutar aplicación',
+                        isEnabled: !running && widget.onRun != null,
                       ),
                       const SizedBox(width: 3),
                       _ToolbarButton(
@@ -241,8 +249,10 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                         label: 'Debug',
                         onPressed: running ? null : widget.onDebug,
                         color: Colors.orange,
-                        tooltip: 'Depurar aplicación',
-                        isEnabled: widget.isDebugging && running,
+                        tooltip: designLive
+                            ? 'Refrescar Preview (diseño)'
+                            : 'Depurar aplicación',
+                        isEnabled: !running && widget.onDebug != null,
                       ),
                       const SizedBox(width: 3),
                       _ToolbarButton(
@@ -257,10 +267,15 @@ class _RunDebugToolbarState extends State<RunDebugToolbar> {
                       _ToolbarButton(
                         icon: Icons.refresh,
                         label: 'Restart',
-                        onPressed: running ? widget.onRestart : null,
+                        onPressed: (running || designLive)
+                            ? widget.onRestart
+                            : null,
                         color: Colors.blue,
-                        tooltip: 'Reiniciar aplicación',
-                        isEnabled: running,
+                        tooltip: designLive
+                            ? 'Recargar Preview HTML'
+                            : 'Reiniciar aplicación',
+                        isEnabled:
+                            (running || designLive) && widget.onRestart != null,
                       ),
                     ],
 

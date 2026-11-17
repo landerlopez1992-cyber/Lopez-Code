@@ -150,6 +150,8 @@ class UiBuilderEditService {
       if (m.group(1) != parentBlockId) return m.group(0)!;
       found = true;
       var inner = (m.group(2) ?? '').trimRight();
+      // Quitar placeholders vacíos al anidar el primer hijo.
+      inner = _stripPlaceholders(inner);
       // Insertar antes del cierre del contenedor raíz si es posible.
       inner = _insertBeforeRootClose(inner, '\n$child\n');
       return '<!-- voryxel-ui:START:$parentBlockId -->\n'
@@ -162,6 +164,59 @@ class UiBuilderEditService {
     }
     await file.writeAsString(next);
     return (html: next, newBlockId: newId);
+  }
+
+  /// Elimina placeholders de contenedores vacíos (texto "Container", etc.).
+  static String _stripPlaceholders(String html) {
+    var out = html;
+    // Marcados explícitos.
+    out = out.replaceAll(
+      RegExp(
+        r'<[^>]*data-voryxel-placeholder\s*=\s*"1"[^>]*>[\s\S]*?</[^>]+>',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    out = out.replaceAll(
+      RegExp(
+        r'<[^>]*data-voryxel-placeholder\s*=\s*"1"[^>]*/\s*>',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    // Texto suelto típico dentro del root (sin otros bloques voryxel).
+    if (!out.contains('voryxel-ui:START:') &&
+        !RegExp(r'data-voryxel-id\s*=', caseSensitive: false).hasMatch(out)) {
+      out = out.replaceAllMapped(
+        RegExp(
+          r'(<(div|section|ul|details)([^>]*data-voryxel[^>]*)>)([\s\S]*?)(</\2>)',
+          caseSensitive: false,
+        ),
+        (m) {
+          final open = m.group(1)!;
+          final close = m.group(5)!;
+          var body = m.group(4) ?? '';
+          body = body.replaceAll(
+            RegExp(
+              r'<(p|span)[^>]*>\s*(Container|Column|Row|Wrap|Card|'
+              r'Column — suelta elementos aquí|Row — suelta aquí|'
+              r'Suelta elementos aquí)\s*</\1>',
+              caseSensitive: false,
+            ),
+            '',
+          );
+          // Solo texto "Container" directo en el nodo.
+          if (RegExp(
+            r'^\s*(Container|Column|Row|Wrap)\s*$',
+            caseSensitive: false,
+          ).hasMatch(body)) {
+            body = '';
+          }
+          return '$open$body$close';
+        },
+      );
+    }
+    return out;
   }
 
   /// Mueve el bloque una posición hacia arriba (`-1`) o abajo (`+1`).
@@ -221,6 +276,7 @@ class UiBuilderEditService {
     String? fontSize,
     String? borderRadius,
     String? border,
+    String? opacity,
     String? textAlign,
     String? href,
     String? src,
@@ -242,6 +298,7 @@ class UiBuilderEditService {
         fontSize != null ||
         borderRadius != null ||
         border != null ||
+        opacity != null ||
         textAlign != null ||
         left != null ||
         top != null ||
@@ -254,11 +311,17 @@ class UiBuilderEditService {
       if (text != null) {
         inner = _replacePrimaryText(inner, text);
       }
-      if (href != null) {
-        inner = _setAttr(inner, 'href', href);
-      }
       if (src != null) {
         inner = _setAttr(inner, 'src', src);
+      }
+      if (href != null) {
+        // Imagen: envolver en <a> para navegar; botón/enlace: href directo.
+        if (RegExp(r'<img\b', caseSensitive: false).hasMatch(inner) &&
+            !RegExp(r'<a\b', caseSensitive: false).hasMatch(inner)) {
+          inner = _wrapImageWithLink(inner, href);
+        } else {
+          inner = _setAttr(inner, 'href', href);
+        }
       }
       if (placeholder != null) {
         inner = _setAttr(inner, 'placeholder', placeholder);
@@ -275,6 +338,7 @@ class UiBuilderEditService {
           fontSize: fontSize,
           borderRadius: borderRadius,
           border: border,
+          opacity: opacity,
           textAlign: textAlign,
           left: left,
           top: top,
@@ -311,6 +375,23 @@ class UiBuilderEditService {
         if (after == '>') return '<$tag $name="$escaped">';
         return '<$tag $name="$escaped" ';
       },
+    );
+  }
+
+  /// Envuelve un `<img>` suelto en `<a href="...">` para navegación.
+  static String _wrapImageWithLink(String html, String href) {
+    final trimmed = href.trim();
+    if (trimmed.isEmpty) return html;
+    final escaped = trimmed.replaceAll('"', '&quot;');
+    // Guardar también en data-href del img (el Inspector selecciona el img).
+    var withData = _setAttr(html, 'data-href', trimmed);
+    final imgRe = RegExp(r'<img\b[^>]*?/?>', caseSensitive: false);
+    final m = imgRe.firstMatch(withData);
+    if (m == null) return withData;
+    final img = m.group(0)!;
+    return withData.replaceFirst(
+      img,
+      '<a href="$escaped" style="display:inline-block;cursor:pointer;text-decoration:none;border:0;">$img</a>',
     );
   }
 
@@ -377,6 +458,7 @@ class UiBuilderEditService {
     String? fontSize,
     String? borderRadius,
     String? border,
+    String? opacity,
     String? textAlign,
     String? left,
     String? top,
@@ -406,6 +488,7 @@ class UiBuilderEditService {
     style = _setCss(style, 'font-size', fontSize);
     style = _setCss(style, 'border-radius', borderRadius);
     style = _setCss(style, 'border', border);
+    style = _setCss(style, 'opacity', opacity);
     style = _setCss(style, 'text-align', textAlign);
     if (absolute == true) {
       style = _setCss(style, 'position', 'absolute');

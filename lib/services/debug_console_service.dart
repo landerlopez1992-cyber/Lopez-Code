@@ -20,8 +20,10 @@ class DebugConsoleService extends ChangeNotifier {
   List<ProblemItem> _problemItems = [];
   bool _isVisible = true; // Visible por defecto
   bool _isRunning = false;
+  /// Preview de diseño HTML (armar UI) — NO es Run/Debug.
+  bool _isDesignPreview = false;
   bool _isAnalyzing = false;
-  String? _appUrl; // URL de la app ejecutándose (para web)
+  String? _appUrl; // URL del Preview (diseño o Run)
   String? _vmServiceUri; // URI del VM Service (para Inspector nativo)
   double _compilationProgress = 0.0; // Progreso de compilación (0.0 - 1.0)
   String _compilationStatus = ''; // Estado actual de compilación
@@ -45,6 +47,10 @@ class DebugConsoleService extends ChangeNotifier {
 
   bool get isVisible => _isVisible;
   bool get isRunning => _isRunning;
+  /// True cuando hay Preview HTML de diseño (sin Run/Debug).
+  bool get isDesignPreview => _isDesignPreview;
+  /// Hay algo que mostrar en el WebView (diseño o Run).
+  bool get hasPreviewUrl => _appUrl != null && _appUrl!.isNotEmpty;
   bool get isAnalyzing => _isAnalyzing;
   String? get appUrl => _appUrl;
   String? get vmServiceUri => _vmServiceUri;
@@ -392,14 +398,47 @@ class DebugConsoleService extends ChangeNotifier {
     }
   }
 
-  /// Marca el proceso como terminado (usado por stop / exit real).
+  /// Activa/desactiva Preview de diseño (armar) sin marcar Run/Debug.
+  void setDesignPreview(bool active, {String? url}) {
+    var changed = false;
+    if (_isDesignPreview != active) {
+      _isDesignPreview = active;
+      changed = true;
+    }
+    if (url != null && _appUrl != url) {
+      if (url.isEmpty) {
+        _appUrl = null;
+      } else if (isPreviewAppUrl(url)) {
+        _appUrl = url;
+      }
+      changed = true;
+    }
+    // Diseño nunca debe parecer "compilando / running".
+    if (active) {
+      if (_isRunning) {
+        _isRunning = false;
+        changed = true;
+      }
+      if (_compilationProgress != 0.0 || _compilationStatus.isNotEmpty) {
+        _compilationProgress = 0.0;
+        _compilationStatus = '';
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Marca el proceso Run/Debug como terminado (NO apaga Preview de diseño).
   void notifyProcessEnded() {
     _isRunning = false;
-    _appUrl = null;
     _vmServiceUri = null;
     _compilationProgress = 0.0;
     _compilationStatus = '';
-    addDebugConsole('🛑 Proceso Flutter terminado');
+    // Conservar URL si sigue el Preview de diseño HTML.
+    if (!_isDesignPreview) {
+      _appUrl = null;
+    }
+    addDebugConsole('🛑 Proceso Run/Debug terminado');
     notifyListeners();
   }
 
@@ -407,7 +446,7 @@ class DebugConsoleService extends ChangeNotifier {
   /// El Stop del toolbar / ChatScreen debe llamar esto (además de limpiar
   /// cualquier Process local) para evitar zombies.
   Future<void> requestStop() async {
-    addDebugConsole('🛑 Deteniendo proceso Flutter...');
+    addDebugConsole('🛑 Deteniendo Run/Debug…');
     await AdvancedDebuggingService.stop();
     await RunDebugService.stop();
     notifyProcessEnded();
@@ -459,8 +498,8 @@ class DebugConsoleService extends ChangeNotifier {
         await Future<void>.delayed(const Duration(milliseconds: 400));
         return true;
       }
-      // HTML / preview sin flutter run: soft refresh (no reinicio total).
-      if (hasPreview && _isRunning) {
+      // HTML diseño o Run: soft refresh del WebView.
+      if (hasPreview && (_isRunning || _isDesignPreview)) {
         bumpPreviewReload(force: true, hard: false);
         addDebugConsole(
           '⚡ Hot Reload → Preview soft refresh (HTML)',
@@ -495,7 +534,7 @@ class DebugConsoleService extends ChangeNotifier {
         await Future<void>.delayed(const Duration(milliseconds: 350));
         return true;
       }
-      if (hasPreview && _isRunning) {
+      if (hasPreview && (_isRunning || _isDesignPreview)) {
         bumpPreviewReload(force: true, hard: true);
         addDebugConsole(
           '🔄 Hot Restart → Preview hard reload (HTML, estado limpio)',

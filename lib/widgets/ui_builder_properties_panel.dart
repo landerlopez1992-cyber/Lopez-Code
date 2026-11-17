@@ -127,7 +127,9 @@ class _UiBuilderPropertiesPanelState extends State<UiBuilderPropertiesPanel> {
     _radiusCtrl =
         TextEditingController(text: _simplifySize(styles['borderRadius']));
     _borderCtrl = TextEditingController(text: (styles['border'] ?? '').trim());
-    _hrefCtrl = TextEditingController(text: attrs['href'] ?? '');
+    _hrefCtrl = TextEditingController(
+      text: attrs['href'] ?? attrs['data-href'] ?? '',
+    );
     _srcCtrl = TextEditingController(text: attrs['src'] ?? '');
     _placeholderCtrl =
         TextEditingController(text: attrs['placeholder'] ?? '');
@@ -152,7 +154,7 @@ class _UiBuilderPropertiesPanelState extends State<UiBuilderPropertiesPanel> {
       _fontSizeCtrl.text = _simplifySize(styles['fontSize']);
       _radiusCtrl.text = _simplifySize(styles['borderRadius']);
       _borderCtrl.text = (styles['border'] ?? '').trim();
-      _hrefCtrl.text = attrs['href'] ?? '';
+      _hrefCtrl.text = attrs['href'] ?? attrs['data-href'] ?? '';
       _srcCtrl.text = attrs['src'] ?? '';
       _placeholderCtrl.text = attrs['placeholder'] ?? '';
       _align = styles['textAlign']?.trim();
@@ -205,7 +207,9 @@ class _UiBuilderPropertiesPanelState extends State<UiBuilderPropertiesPanel> {
         borderRadius: _emptyToNull(_radiusCtrl.text),
         border: _emptyToNull(_borderCtrl.text),
         textAlign: alignOverride ?? _align,
-        href: _isLinkOrButton ? _emptyToNull(_hrefCtrl.text) : null,
+        href: (_isLinkOrButton || _isImage)
+            ? _emptyToNull(_hrefCtrl.text)
+            : null,
         src: _isMedia ? _emptyToNull(_srcCtrl.text) : null,
         placeholder: _isInput ? _emptyToNull(_placeholderCtrl.text) : null,
       );
@@ -367,6 +371,16 @@ class _UiBuilderPropertiesPanelState extends State<UiBuilderPropertiesPanel> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: CursorTheme.textPrimary,
                       side: const BorderSide(color: CursorTheme.border),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _field('Al hacer clic → ir a (href)', _hrefCtrl),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Ej: login.html · montanas.html · #destinos · https://…',
+                    style: TextStyle(
+                      color: CursorTheme.textSecondary.withValues(alpha: 0.85),
+                      fontSize: 10,
                     ),
                   ),
                   const SizedBox(height: 8),

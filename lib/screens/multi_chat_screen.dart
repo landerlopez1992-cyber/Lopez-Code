@@ -13,7 +13,6 @@ import '../widgets/project_explorer.dart';
 import '../widgets/global_search_panel.dart';
 import '../widgets/git_scm_panel.dart';
 import '../widgets/ui_builder_panel.dart';
-import '../widgets/ui_builder_properties_panel.dart';
 import 'git_settings_screen.dart';
 import '../widgets/debug_console_panel.dart';
 import '../widgets/phone_emulator.dart';
@@ -36,6 +35,8 @@ import '../services/agent_activity_service.dart';
 import '../services/inspector_selection_service.dart';
 import '../services/ui_builder_insert_service.dart';
 import '../services/ui_builder_edit_service.dart';
+import '../services/html_preview_service.dart';
+import '../services/html_element_patch_service.dart';
 import '../widgets/run_debug_toolbar.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/inspector_monitor_panel.dart';
@@ -251,6 +252,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   /// Vista del sidebar: explorer | git | search | ui_builder
   String _sidebarView = 'explorer';
   bool _emulatorVisible = true; // Emulador visible por defecto
+  bool _chatVisible = true; // Bandeja del agente (derecha)
   double _emulatorScale =
       1.0; // Escala del emulador fija a 100% para mantener consistencia
   bool _inspectorMode = false; // Modo inspector activo/desactivo
@@ -268,6 +270,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   Offset? _uiBuilderPointerGlobal;
   final GlobalKey<PhoneEmulatorState> _previewKey =
       GlobalKey<PhoneEmulatorState>();
+  bool _designPreviewRetryScheduled = false;
 
   String? _lastProjectPath; // Para detectar cambios
   final DebugConsoleService _debugService = DebugConsoleService();
@@ -295,6 +298,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     _debugService.addListener(_onDebugServiceChanged);
     _platformService.addListener(_onPlatformChanged);
     _agentActivity.addListener(_onAgentActivityChanged);
+    InspectorSelectionService().addListener(_onInspectorSelectionChanged);
     // Notificar UI cuando flutter run termina de verdad (stop / exit)
     AdvancedDebuggingService.setOnProcessEnded(() {
       _debugService.notifyProcessEnded();
@@ -316,7 +320,17 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     _debugService.removeListener(_onDebugServiceChanged);
     _platformService.removeListener(_onPlatformChanged);
     _agentActivity.removeListener(_onAgentActivityChanged);
+    InspectorSelectionService().removeListener(_onInspectorSelectionChanged);
+    unawaited(HtmlPreviewService.instance.stop());
     super.dispose();
+  }
+
+  void _onInspectorSelectionChanged() {
+    if (!mounted) return;
+    final sel = InspectorSelectionService().selected;
+    setState(() {
+      _selectedElement = sel;
+    });
   }
 
   /// El agente cambió de actividad → banner + (si hay archivo) Code/pulso.
@@ -370,8 +384,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       }
     }
 
+    // WebView activo con URL de diseño O de Run (diseño ≠ isRunning).
+    final previewLive = running || (url != null && url.isNotEmpty);
     final previewChanged = url != _previewAppUrl ||
-        running != _previewRunning ||
+        previewLive != _previewRunning ||
         progress != _previewProgress ||
         status != _previewStatus ||
         nonce != _previewNonce ||
@@ -388,7 +404,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
     setState(() {
       _previewAppUrl = url;
-      _previewRunning = running;
+      _previewRunning = previewLive;
       _previewProgress = progress;
       _previewStatus = status;
       _previewNonce = nonce;
@@ -452,6 +468,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       print('   1. El usuario no seleccionó un proyecto');
       print('   2. El proyecto no se guardó correctamente');
       print('   3. Hubo un error al guardar el proyecto');
+
+      await HtmlPreviewService.instance.stop();
       
       setState(() {
         _currentProjectPath = null;
@@ -494,8 +512,44 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       _currentProjectPath = projectPath;
       _lastProjectPath = projectPath;
     });
+
+    // HTML: Preview de diseño automático (sin Run). Run/Debug = probar runtime.
+    unawaited(_ensureDesignPreview(projectPath));
     
     await _loadChatsForProject(projectPath);
+  }
+
+  Future<void> _ensureDesignPreview(String projectPath) async {
+    final isHtml = await HtmlPreviewService.instance.isHtmlProject(projectPath);
+    if (!isHtml) {
+      if (HtmlPreviewService.instance.projectPath != null &&
+          HtmlPreviewService.instance.projectPath != projectPath) {
+        await HtmlPreviewService.instance.stop();
+      }
+      return;
+    }
+
+    // HTML estático → Preview web a pantalla completa (evita “hueco” Android).
+    if (_platformService.selectedPlatform.toLowerCase() != 'web') {
+      _platformService.setPlatform('web');
+    }
+
+    var ok = await HtmlPreviewService.instance.ensureRunning(projectPath);
+    if (!ok) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      ok = await HtmlPreviewService.instance.ensureRunning(projectPath);
+    }
+    if (!mounted) return;
+    setState(() {
+      _previewAppUrl = _debugService.appUrl ??
+          HtmlPreviewService.instance.baseUrl;
+      _previewRunning = _previewAppUrl != null && _previewAppUrl!.isNotEmpty;
+    });
+    if (_previewAppUrl != null && _previewAppUrl!.isNotEmpty) {
+      _debugService.setAppUrl(_previewAppUrl);
+      _debugService.setDesignPreview(true, url: _previewAppUrl);
+      _debugService.bumpPreviewReload(force: true, hard: true);
+    }
   }
 
   Future<void> _loadChatsForProject(String projectPath) async {
@@ -708,10 +762,35 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                   return const SizedBox.shrink();
                 }
 
-                const monitorW = 240.0;
-                final showMonitor = _inspectorMode;
+                const monitorW = 268.0;
+                // Editar elemento solo si hay selección (se oculta al desmarcar).
+                final hasEditTarget = _inspectorMode &&
+                    (_selectedElement != null ||
+                        InspectorSelectionService().selected != null);
+                final showMonitor = hasEditTarget;
                 final previewW =
                     showMonitor ? math.max(160.0, w - monitorW - 12) : w;
+
+                // Si el Preview quedó vacío con proyecto HTML, rearrancar diseño.
+                final path = _currentProjectPath;
+                if (!_designPreviewRetryScheduled &&
+                    path != null &&
+                    path.isNotEmpty &&
+                    (_previewAppUrl == null || _previewAppUrl!.isEmpty)) {
+                  _designPreviewRetryScheduled = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) async {
+                    if (!mounted) return;
+                    try {
+                      if (_previewAppUrl != null &&
+                          _previewAppUrl!.isNotEmpty) {
+                        return;
+                      }
+                      await _ensureDesignPreview(path);
+                    } finally {
+                      _designPreviewRetryScheduled = false;
+                    }
+                  });
+                }
 
                 // Solo plataforma: el Preview NO debe rebuild-ear con cada
                 // línea de Output (provoca parpadeo / scroll roto en WebView).
@@ -733,7 +812,8 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         width: width,
                         height: height,
                         platform: _platformService.selectedPlatform,
-                        isRunning: _previewRunning,
+                        // Solo Run/Debug real — el Preview de diseño usa appUrl sin isRunning.
+                        isRunning: _debugService.isRunning,
                         appUrl: _previewAppUrl,
                         compilationProgress: _previewProgress,
                         compilationStatus: _previewStatus,
@@ -754,6 +834,21 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         },
                         onUiBuilderTextEdited: (id, text) {
                           unawaited(_syncUiBuilderText(id, text));
+                        },
+                        onInspectorTextEdited: ({
+                          required newText,
+                          oldText,
+                          tagName,
+                          blockId,
+                        }) {
+                          unawaited(
+                            _applyInspectorTextEdit(
+                              newText: newText,
+                              oldText: oldText,
+                              tagName: tagName,
+                              blockId: blockId,
+                            ),
+                          );
                         },
                         child: null,
                       );
@@ -874,11 +969,73 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
                     if (!showMonitor) return dropPreview;
 
+                    final editBlockId = _voryxelBlockIdOf(
+                      _selectedElement ??
+                          InspectorSelectionService().selected,
+                    );
+
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Expanded(child: dropPreview),
-                        const InspectorMonitorPanel(width: monitorW),
+                        // Se “sube” / aparece al seleccionar; se oculta al limpiar.
+                        _SlidingEditPanel(
+                          width: monitorW,
+                          child: InspectorMonitorPanel(
+                            width: monitorW,
+                            onClearSelection: () {
+                              setState(() => _selectedElement = null);
+                              InspectorSelectionService().clearSelection();
+                            },
+                            onApplyProps: ({
+                              text,
+                              width,
+                              height,
+                              color,
+                              backgroundColor,
+                              fontSize,
+                              borderRadius,
+                              opacity,
+                              href,
+                              src,
+                              tagName,
+                              blockId,
+                              oldText,
+                              persist = true,
+                              announce = false,
+                            }) {
+                              return _applyInspectorProps(
+                                text: text,
+                                oldText: oldText,
+                                width: width,
+                                height: height,
+                                color: color,
+                                backgroundColor: backgroundColor,
+                                fontSize: fontSize,
+                                borderRadius: borderRadius,
+                                opacity: opacity,
+                                href: href,
+                                src: src,
+                                tagName: tagName,
+                                blockId: blockId ?? editBlockId,
+                                persist: persist,
+                                announce: announce,
+                              );
+                            },
+                            onDelete: editBlockId == null
+                                ? null
+                                : () => _deleteUiBuilderBlock(editBlockId),
+                            onDuplicate: editBlockId == null
+                                ? null
+                                : () => _duplicateUiBuilderBlock(editBlockId),
+                            onMoveUp: editBlockId == null
+                                ? null
+                                : () => _moveUiBuilderBlock(editBlockId, -1),
+                            onMoveDown: editBlockId == null
+                                ? null
+                                : () => _moveUiBuilderBlock(editBlockId, 1),
+                          ),
+                        ),
                       ],
                     );
                   },
@@ -1004,7 +1161,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               const SizedBox(height: 16),
               Text(
                 'Para ver código:\n'
-                '• Haz clic derecho en un archivo y selecciona "Ver código"\n'
+                '• Haz clic en un archivo del explorador\n'
                 '• O activa el inspector y selecciona un elemento en la app',
                 style: TextStyle(
                   color: CursorTheme.textSecondary,
@@ -1192,6 +1349,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       String? parentId;
       String? beforeId;
       String? afterId;
+      double? dropLeft;
+      double? dropTop;
+      var placeAbsolute = false;
 
       // Preferir ancla real del punto de soltado en el WebView.
       final previewState = _previewKey.currentState;
@@ -1212,6 +1372,13 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
             if (parentId != null && parentId.isEmpty) parentId = null;
             if (beforeId != null && beforeId.isEmpty) beforeId = null;
             if (afterId != null && afterId.isEmpty) afterId = null;
+            placeAbsolute = anchor['placeAbsolute'] == true && parentId == null;
+            final x = (anchor['x'] as num?)?.toDouble();
+            final y = (anchor['y'] as num?)?.toDouble();
+            if (x != null && y != null) {
+              dropLeft = x;
+              dropTop = y;
+            }
           }
         }
       }
@@ -1221,11 +1388,26 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           _voryxelBlockIdOf(_selectedElement) != null &&
           _isUiBuilderContainer(_selectedElement)) {
         parentId = _voryxelBlockIdOf(_selectedElement);
+        placeAbsolute = false;
+      }
+
+      // Si no cae dentro de un contenedor UI Builder, colocar en las coords del drop.
+      var snippet = component.htmlSnippet;
+      if (placeAbsolute && dropLeft != null && dropTop != null) {
+        snippet = _stampAbsolutePosition(
+          snippet,
+          left: dropLeft!,
+          top: dropTop!,
+        );
+        // Absolute → al final del body (posición visual = donde soltaste).
+        parentId = null;
+        beforeId = null;
+        afterId = null;
       }
 
       final result = await UiBuilderInsertService.insertAtAnchor(
         filePath: target,
-        snippet: component.htmlSnippet,
+        snippet: snippet,
         parentId: parentId,
         beforeId: beforeId,
         afterId: afterId,
@@ -1243,32 +1425,39 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
       });
       InspectorSelectionService().setActive(true);
 
-      final previewLive = _debugService.isRunning &&
-          (_debugService.appUrl?.isNotEmpty ?? false);
       final where = parentId != null
           ? 'dentro de contenedor'
-          : (beforeId != null
-              ? 'antes de $beforeId'
-              : (afterId != null ? 'después de $afterId' : target.split('/').last));
+          : (placeAbsolute
+              ? 'en (${dropLeft?.round()}, ${dropTop?.round()})'
+              : (beforeId != null
+                  ? 'antes de $beforeId'
+                  : (afterId != null
+                      ? 'después de $afterId'
+                      : target.split('/').last)));
 
-      if (!previewLive) {
-        _debugService.addOutput(
-          '🧩 UI Builder: ${component.label} → $where '
-          '($blockId) · arrancando Preview…',
-        );
-        AppToast.info(
-          context,
-          '${component.label} guardado · arrancando Preview…',
-        );
-        _handleRun();
-      } else {
+      // Diseño: asegurar Preview HTML sin pasar por Run/Debug.
+      final previewOk = await HtmlPreviewService.instance.ensureRunning(
+        projectPath,
+        quiet: true,
+      );
+      if (previewOk) {
+        await HtmlPreviewService.instance.refresh(hard: false);
+      } else if (_debugService.isRunning &&
+          (_debugService.appUrl?.isNotEmpty ?? false)) {
         _debugService.bumpPreviewReload(force: true, hard: false);
-        _debugService.addOutput(
-          '🧩 UI Builder: ${component.label} → $where ($blockId)',
-        );
+      }
+
+      // Tras reload: reactivar drag del nuevo bloque.
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await _previewKey.currentState?.bindUiBuilderMove(blockId);
+
+      _debugService.addOutput(
+        '🧩 UI Builder: ${component.label} → $where ($blockId)',
+      );
+      if (mounted) {
         AppToast.success(
           context,
-          '${component.label} añadido donde soltaste · clic para editar',
+          '${component.label} añadido · arrástralo con el mouse',
         );
       }
     } catch (e) {
@@ -1304,21 +1493,117 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   }
 
   Future<void> _syncUiBuilderText(String blockId, String text) async {
+    await _applyInspectorTextEdit(
+      newText: text,
+      blockId: blockId,
+    );
+  }
+
+  Future<void> _applyInspectorTextEdit({
+    required String newText,
+    String? oldText,
+    String? tagName,
+    String? blockId,
+  }) async {
+    await _applyInspectorProps(
+      text: newText,
+      oldText: oldText,
+      tagName: tagName,
+      blockId: blockId,
+    );
+  }
+
+  Future<void> _applyInspectorProps({
+    String? text,
+    String? oldText,
+    String? width,
+    String? height,
+    String? color,
+    String? backgroundColor,
+    String? fontSize,
+    String? borderRadius,
+    String? opacity,
+    String? href,
+    String? src,
+    String? tagName,
+    String? blockId,
+    bool persist = true,
+    bool announce = false,
+  }) async {
+    // 1) Preview en vivo (siempre).
+    unawaited(
+      _previewKey.currentState?.patchSelectedProps(
+            text: text,
+            width: width,
+            height: height,
+            color: color,
+            backgroundColor: backgroundColor,
+            fontSize: fontSize,
+            borderRadius: borderRadius,
+            opacity: opacity,
+            href: href,
+            src: src,
+          ) ??
+          Future<void>.value(),
+    );
+
+    if (!persist) return;
+
+    // 2) Persistencia SÍ O SÍ en el HTML del proyecto.
     try {
       final target = await _resolveHtmlFileForEdit();
-      if (target == null) return;
-      final next = await UiBuilderEditService.updateBlock(
+      if (target == null) {
+        if (mounted) {
+          AppToast.error(context, 'No hay archivo HTML para guardar');
+        }
+        return;
+      }
+
+      final selected = InspectorSelectionService().selected ?? _selectedElement;
+      final effectiveBlockId =
+          (blockId != null && blockId.isNotEmpty)
+              ? blockId
+              : _voryxelBlockIdOf(selected);
+
+      final next = await HtmlElementPatchService.apply(
         filePath: target,
-        blockId: blockId,
-        text: text,
+        blockId: effectiveBlockId,
+        tagName: tagName ?? selected?.tagName,
+        elementId: selected?.id,
+        className: selected?.className,
+        oldText: oldText ?? selected?.textContent,
+        newText: text,
+        oldSrc: selected?.attributes['src'],
+        src: src,
+        href: href,
+        width: width,
+        height: height,
+        color: color,
+        backgroundColor: backgroundColor,
+        fontSize: fontSize,
+        borderRadius: borderRadius,
+        opacity: opacity,
       );
+
       if (!mounted) return;
-      setState(() {
-        _selectedFilePath = target;
-        _selectedFileContent = next;
-      });
+      // El DOM ya se parcheó en vivo: no bumpPreviewReload.
+      // En slides (announce=false) no hacemos setState para no reconstruir
+      // todo el IDE y que el Preview no pestañee.
+      _selectedFilePath = target;
+      _selectedFileContent = next;
+      if (announce) {
+        setState(() {});
+        AppToast.success(context, 'Guardado en ${target.split('/').last}');
+      }
     } catch (e) {
-      print('⚠️ sync text: $e');
+      print('⚠️ apply props: $e');
+      // Solo avisar en "Guardar" explícito; el slider no debe spamear toasts.
+      if (announce && mounted) {
+        AppToast.error(
+          context,
+          'No se pudo guardar en el código',
+        );
+      }
     }
   }
 
@@ -1332,6 +1617,22 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   Future<String?> _resolveHtmlFileForEdit() async {
     final projectPath = _currentProjectPath;
     if (projectPath == null) return null;
+
+    // Preferir el HTML que el Preview está mostrando.
+    final url = _debugService.appUrl ?? _previewAppUrl;
+    if (url != null && url.isNotEmpty) {
+      try {
+        final uri = Uri.parse(url);
+        var page = uri.pathSegments.isEmpty
+            ? 'index.html'
+            : uri.pathSegments.last;
+        if (page.isEmpty || page == '/') page = 'index.html';
+        if (!page.toLowerCase().endsWith('.html')) page = 'index.html';
+        final candidate = '$projectPath/$page';
+        if (await File(candidate).exists()) return candidate;
+      } catch (_) {}
+    }
+
     return UiBuilderInsertService.resolveTargetHtmlPath(
       projectPath: projectPath,
       selectedFilePath: _selectedFilePath,
@@ -1430,6 +1731,23 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
 
   Future<void> _moveUiBuilderBlock(String blockId, int direction) async {
     try {
+      // 1) Mover en vivo en el Preview (ajusta top).
+      final nudged = await _previewKey.currentState?.nudgeUiBuilderBlock(
+        blockId,
+        direction: direction,
+      );
+      if (nudged != null) {
+        await _syncUiBuilderPosition(blockId, nudged.left, nudged.top);
+        if (mounted) {
+          AppToast.info(
+            context,
+            direction < 0 ? 'Movido arriba' : 'Movido abajo',
+          );
+        }
+        return;
+      }
+
+      // 2) Fallback: reordenar bloques en el HTML.
       final target = await _resolveHtmlFileForEdit();
       if (target == null) {
         if (mounted) {
@@ -1437,11 +1755,23 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         }
         return;
       }
+      final before = await File(target).readAsString();
       final next = await UiBuilderEditService.moveBlock(
         filePath: target,
         blockId: blockId,
         direction: direction,
       );
+      if (next == before) {
+        if (mounted) {
+          AppToast.info(
+            context,
+            direction < 0
+                ? 'Ya está arriba del todo'
+                : 'Ya está abajo del todo',
+          );
+        }
+        return;
+      }
       if (!mounted) return;
       setState(() {
         _selectedFilePath = target;
@@ -1457,6 +1787,35 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         AppToast.error(context, 'No se pudo mover: $e');
       }
     }
+  }
+
+  /// Inyecta position:absolute;left;top en el style del primer tag del snippet.
+  String _stampAbsolutePosition(
+    String snippet, {
+    required double left,
+    required double top,
+  }) {
+    final pos =
+        'position:absolute;left:${left.round()}px;top:${top.round()}px;z-index:30;margin:0;';
+    final styleRe = RegExp(r'style\s*=\s*"([^"]*)"', caseSensitive: false);
+    if (styleRe.hasMatch(snippet)) {
+      return snippet.replaceFirstMapped(styleRe, (m) {
+        var style = m.group(1) ?? '';
+        style = style.replaceAll(RegExp(r'position\s*:\s*[^;]+;?'), '');
+        style = style.replaceAll(RegExp(r'left\s*:\s*[^;]+;?'), '');
+        style = style.replaceAll(RegExp(r'top\s*:\s*[^;]+;?'), '');
+        return 'style="$pos$style"';
+      });
+    }
+    return snippet.replaceFirstMapped(
+      RegExp(r'<([a-zA-Z][\w:-]*)(\s|>)'),
+      (m) {
+        final tag = m.group(1)!;
+        final after = m.group(2)!;
+        if (after == '>') return '<$tag style="$pos">';
+        return '<$tag style="$pos" ';
+      },
+    );
   }
 
   Future<void> _deleteUiBuilderBlock(String blockId) async {
@@ -1520,6 +1879,27 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     );
   }
   
+  /// Clic en sección Pantallas (estilo FlutterFlow): Preview + código en 2º plano.
+  Future<void> _handleScreenSelected(String path) async {
+    final isHtml = path.toLowerCase().endsWith('.html');
+    await _handleFileViewCode(path, switchToCodeTab: !isHtml);
+    if (!mounted) return;
+    if (isHtml) {
+      setState(() => _selectedTab = 0);
+      final project = _currentProjectPath;
+      if (project != null && project.isNotEmpty) {
+        final rel = path
+            .replaceAll('\\', '/')
+            .replaceFirst('${project.replaceAll('\\', '/')}/', '');
+        unawaited(
+          HtmlPreviewService.instance.ensureRunning(project, page: rel),
+        );
+      } else {
+        unawaited(HtmlPreviewService.instance.showHtmlFile(path));
+      }
+    }
+  }
+
   /// Carga un archivo en la pestaña Code.
   /// [switchToCodeTab]=false → lo deja listo en segundo plano (Preview sigue).
   Future<void> _handleFileViewCode(
@@ -1544,6 +1924,10 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
           _selectedTab = 1;
         }
       });
+      // HTML del proyecto → el Preview navega a esa página (sin Run).
+      if (path.toLowerCase().endsWith('.html')) {
+        unawaited(HtmlPreviewService.instance.showHtmlFile(path));
+      }
     } catch (e) {
       print('❌ Error al leer archivo: $e');
       if (mounted) {
@@ -1804,111 +2188,180 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
     return chatKey.currentState;
   }
 
-  /// Handler para Run - delega al ChatScreen activo
-  void _handleRun() {
-    final state = _getActiveChatScreenState();
-    if (state != null) {
-      try {
-        (state as dynamic).handleRun();
-      } catch (e) {
-        print('❌ Error en _handleRun: $e');
-      }
-    }
+  Future<bool> _isCurrentHtmlProject() async {
+    final path =
+        _currentProjectPath ?? await ProjectService.getProjectPath();
+    if (path == null || path.isEmpty) return false;
+    return HtmlPreviewService.instance.isHtmlProject(path);
   }
 
-  /// Handler para Debug - delega al ChatScreen activo
-  void _handleDebug() {
+  /// HTML: refresca Preview de diseño. Flutter/etc: delega al ChatScreen.
+  Future<void> _runOrRefreshPreview({required bool isDebug}) async {
+    final path =
+        _currentProjectPath ?? await ProjectService.getProjectPath();
+    if (path == null || path.isEmpty) {
+      if (mounted) {
+        AppToast.warning(context, 'No hay proyecto cargado');
+      }
+      return;
+    }
+
+    if (await HtmlPreviewService.instance.isHtmlProject(path)) {
+      if (_platformService.selectedPlatform.toLowerCase() != 'web') {
+        _platformService.setPlatform('web');
+      }
+      final ok = await HtmlPreviewService.instance.ensureRunning(path);
+      await HtmlPreviewService.instance.refresh(hard: true);
+      if (!mounted) return;
+      setState(() {
+        _previewAppUrl =
+            _debugService.appUrl ?? HtmlPreviewService.instance.baseUrl;
+        _previewRunning =
+            _previewAppUrl != null && _previewAppUrl!.isNotEmpty;
+      });
+      AppToast.success(
+        context,
+        ok
+            ? (isDebug
+                ? 'Preview HTML listo (diseño)'
+                : 'Preview HTML listo')
+            : 'No se pudo cargar el Preview',
+      );
+      return;
+    }
+
     final state = _getActiveChatScreenState();
-    if (state != null) {
-      try {
+    if (state == null) {
+      if (mounted) {
+        AppToast.warning(
+          context,
+          'Espera a que cargue el chat o abre un Agent',
+        );
+      }
+      return;
+    }
+    try {
+      if (isDebug) {
         (state as dynamic).handleDebug();
-      } catch (e) {
-        print('❌ Error en _handleDebug: $e');
+      } else {
+        (state as dynamic).handleRun();
+      }
+    } catch (e) {
+      print('❌ Error Run/Debug: $e');
+      if (mounted) {
+        AppToast.error(context, 'Error al ejecutar: $e');
       }
     }
   }
 
-  /// Handler para Stop - delega al ChatScreen activo
+  void _handleRun() => unawaited(_runOrRefreshPreview(isDebug: false));
+
+  void _handleDebug() => unawaited(_runOrRefreshPreview(isDebug: true));
+
   void _handleStop() {
-    final state = _getActiveChatScreenState();
-    if (state != null) {
-      try {
-        (state as dynamic).handleStop();
-      } catch (e) {
-        print('❌ Error en _handleStop: $e');
+    // HTML diseño: no apagar Preview; solo limpia Run real si hubiera.
+    unawaited(() async {
+      if (await _isCurrentHtmlProject()) {
+        _debugService.setRunning(false);
+        if (mounted) {
+          AppToast.info(context, 'Preview de diseño sigue activo');
+        }
+        return;
       }
-    }
+      final state = _getActiveChatScreenState();
+      if (state != null) {
+        try {
+          (state as dynamic).handleStop();
+        } catch (e) {
+          print('❌ Error en _handleStop: $e');
+        }
+      } else {
+        await _debugService.requestStop();
+      }
+    }());
   }
 
-  /// Handler para Restart - delega al ChatScreen activo
   void _handleRestart() {
-    final state = _getActiveChatScreenState();
-    if (state != null) {
-      try {
-        (state as dynamic).handleRestart();
-      } catch (e) {
-        print('❌ Error en _handleRestart: $e');
+    unawaited(() async {
+      if (await _isCurrentHtmlProject()) {
+        await _runOrRefreshPreview(isDebug: false);
+        return;
       }
-    }
+      final state = _getActiveChatScreenState();
+      if (state != null) {
+        try {
+          (state as dynamic).handleRestart();
+        } catch (e) {
+          print('❌ Error en _handleRestart: $e');
+        }
+      } else {
+        await _runOrRefreshPreview(isDebug: false);
+      }
+    }());
   }
 
-  /// ⚡ Hot Reload — aplica código en caliente (sin reiniciar estado).
+  /// ⚡ Hot Reload — Preview HTML o Flutter en caliente.
   void _handleHotReload() {
     if (!mounted) return;
-    final isHtmlPreview = _debugService.isRunning &&
-        _debugService.appUrl != null &&
-        _debugService.appUrl!.isNotEmpty &&
-        !AdvancedDebuggingService.supportsHotReload;
+    final designLive = _debugService.isDesignPreview &&
+        (_debugService.appUrl?.isNotEmpty ?? false);
     AppToast.show(
       context,
-      message: isHtmlPreview
+      message: designLive
           ? '⚡ Hot Reload — refrescando Preview…'
           : '⚡ Hot Reload — aplicando código…',
       icon: Icons.bolt,
       loading: true,
       duration: const Duration(milliseconds: 1200),
     );
-    final state = _getActiveChatScreenState();
-    if (state != null) {
-      try {
-        (state as dynamic).handleHotReload();
-      } catch (e) {
-        print('❌ Error en _handleHotReload: $e');
-        // Fallback directo al servicio si el chat no expone el método.
-        unawaited(_debugService.requestHotReload());
+    unawaited(() async {
+      if (await _isCurrentHtmlProject() || designLive) {
+        await HtmlPreviewService.instance.refresh(hard: false);
+        return;
       }
-    } else {
-      unawaited(_debugService.requestHotReload());
-    }
+      final state = _getActiveChatScreenState();
+      if (state != null) {
+        try {
+          (state as dynamic).handleHotReload();
+        } catch (e) {
+          unawaited(_debugService.requestHotReload());
+        }
+      } else {
+        await _debugService.requestHotReload();
+      }
+    }());
   }
 
-  /// 🔄 Hot Restart — reinicia la app / Preview desde cero.
+  /// 🔄 Hot Restart — recarga Preview / reinicia app.
   void _handleHotRestart() {
     if (!mounted) return;
-    final isHtmlPreview = _debugService.isRunning &&
-        _debugService.appUrl != null &&
-        _debugService.appUrl!.isNotEmpty &&
-        !AdvancedDebuggingService.supportsHotReload;
+    final designLive = _debugService.isDesignPreview &&
+        (_debugService.appUrl?.isNotEmpty ?? false);
     AppToast.show(
       context,
-      message: isHtmlPreview
-          ? '🔄 Hot Restart — recarga el Preview (no deshace ediciones)'
+      message: designLive
+          ? '🔄 Hot Restart — recarga el Preview'
           : '🔄 Hot Restart — reiniciando app…',
       icon: Icons.restart_alt,
       loading: true,
       duration: const Duration(milliseconds: 1800),
     );
-    final state = _getActiveChatScreenState();
-    if (state != null) {
-      try {
-        (state as dynamic).handleHotRestart();
-      } catch (e) {
-        print('❌ Error en _handleHotRestart: $e');
-        unawaited(_debugService.requestHotRestart());
+    unawaited(() async {
+      if (await _isCurrentHtmlProject() || designLive) {
+        await _runOrRefreshPreview(isDebug: false);
+        return;
       }
-    } else {
-      unawaited(_debugService.requestHotRestart());
-    }
+      final state = _getActiveChatScreenState();
+      if (state != null) {
+        try {
+          (state as dynamic).handleHotRestart();
+        } catch (e) {
+          unawaited(_debugService.requestHotRestart());
+        }
+      } else {
+        await _debugService.requestHotRestart();
+      }
+    }());
   }
 
   /// Obtiene el estado de running/debugging del ChatScreen activo
@@ -2074,6 +2527,29 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
         ),
         actions: [
           const Center(child: _CreditBalanceWidget()),
+          // Toggle chat del agente
+          IconButton(
+            icon: Icon(
+              _chatVisible
+                  ? Icons.chat_bubble
+                  : Icons.chat_bubble_outline,
+              size: 18,
+            ),
+            color: _chatVisible
+                ? CursorTheme.primary
+                : CursorTheme.textSecondary,
+            onPressed: () {
+              setState(() {
+                _chatVisible = !_chatVisible;
+                if (_chatVisible && _chatPanelWidth < 220) {
+                  _chatPanelWidth = 320;
+                }
+              });
+            },
+            tooltip: _chatVisible
+                ? 'Ocultar chat del agente'
+                : 'Mostrar chat del agente',
+          ),
           // Toggle Emulador
           AnimatedBuilder(
             animation: _platformService,
@@ -2178,8 +2654,9 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
               final maxChat =
                   (remaining - softMinCenter).clamp(0.0, remaining);
               final minChat = maxChat >= softMinChat ? softMinChat : 0.0;
-              final finalChatWidth =
-                  _chatPanelWidth.clamp(minChat, maxChat);
+              final finalChatWidth = _chatVisible
+                  ? _chatPanelWidth.clamp(minChat, maxChat)
+                  : 0.0;
 
               return Row(
                 children: [
@@ -2222,98 +2699,17 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                   // UI Builder | Search | Git | Explorador
                   if (_sidebarView == 'ui_builder')
                     Expanded(
-                      child: Column(
-                        children: [
-                          Expanded(
-                            flex: _voryxelBlockIdOf(_selectedElement) != null
-                                ? 3
-                                : 1,
-                            child: UiBuilderPanel(
-                              enabled: _currentProjectPath != null,
-                              hint: _currentProjectPath == null
-                                  ? 'Abre un proyecto web (HTML) primero'
-                                  : (_debugService.isRunning
-                                      ? (_isUiBuilderContainer(_selectedElement)
-                                          ? 'Contenedor seleccionado · suelta dentro'
-                                          : 'Arrastra al Preview · clic para editar')
-                                      : 'Al soltar se inicia el Preview (Run)'),
-                            ),
-                          ),
-                          if (_voryxelBlockIdOf(_selectedElement) != null)
-                            Expanded(
-                              flex: 2,
-                              child: UiBuilderPropertiesPanel(
-                                key: ValueKey(
-                                  _voryxelBlockIdOf(_selectedElement),
-                                ),
-                                element: _selectedElement!,
-                                blockId: _voryxelBlockIdOf(_selectedElement)!,
-                                projectPath: _currentProjectPath,
-                                onApply: ({
-                                  text,
-                                  color,
-                                  backgroundColor,
-                                  padding,
-                                  margin,
-                                  width,
-                                  height,
-                                  fontSize,
-                                  borderRadius,
-                                  border,
-                                  textAlign,
-                                  href,
-                                  src,
-                                  placeholder,
-                                }) {
-                                  return _applyUiBuilderProps(
-                                    blockId:
-                                        _voryxelBlockIdOf(_selectedElement)!,
-                                    text: text,
-                                    color: color,
-                                    backgroundColor: backgroundColor,
-                                    padding: padding,
-                                    margin: margin,
-                                    width: width,
-                                    height: height,
-                                    fontSize: fontSize,
-                                    borderRadius: borderRadius,
-                                    border: border,
-                                    textAlign: textAlign,
-                                    href: href,
-                                    src: src,
-                                    placeholder: placeholder,
-                                  );
-                                },
-                                onDelete: () {
-                                  return _deleteUiBuilderBlock(
-                                    _voryxelBlockIdOf(_selectedElement)!,
-                                  );
-                                },
-                                onDuplicate: () {
-                                  return _duplicateUiBuilderBlock(
-                                    _voryxelBlockIdOf(_selectedElement)!,
-                                  );
-                                },
-                                onMoveUp: () {
-                                  return _moveUiBuilderBlock(
-                                    _voryxelBlockIdOf(_selectedElement)!,
-                                    -1,
-                                  );
-                                },
-                                onMoveDown: () {
-                                  return _moveUiBuilderBlock(
-                                    _voryxelBlockIdOf(_selectedElement)!,
-                                    1,
-                                  );
-                                },
-                                onClearSelection: () {
-                                  setState(() => _selectedElement = null);
-                                  InspectorSelectionService()
-                                      .clearSelection();
-                                },
-                              ),
-                            ),
-                        ],
+                      // Solo catálogo (arrastrar). Editar = panel “Editar elemento”.
+                      child: UiBuilderPanel(
+                        enabled: _currentProjectPath != null,
+                        hint: _currentProjectPath == null
+                            ? 'Abre un proyecto web (HTML) primero'
+                            : (_previewRunning ||
+                                    HtmlPreviewService.instance.isLive
+                                ? (_isUiBuilderContainer(_selectedElement)
+                                    ? 'Contenedor seleccionado · suelta dentro'
+                                    : 'Arrastra al Preview · clic para editar')
+                                : 'El Preview carga al abrir el proyecto HTML'),
                       ),
                     )
                   else if (_sidebarView == 'git')
@@ -2344,12 +2740,12 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         mode: 'explorer',
                         agentActivePath: _agentActivePath,
                         onFileSelected: (path) {
-                          print('📁 Archivo seleccionado: $path');
-                        },
-                        onFileDoubleClick: (path) {
-                          print('📁 Doble clic en: $path');
                           _handleFileViewCode(path);
                         },
+                        onFileDoubleClick: (path) {
+                          _handleFileViewCode(path);
+                        },
+                        onScreenSelected: _handleScreenSelected,
                         onFileDelete: (path) {
                           // CRUD real lo hace ProjectExplorer; sync UI si el archivo abierto se borró.
                           if (_selectedFilePath == path) {
@@ -2420,12 +2816,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                             ),
                 ),
               ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min, // ✅ FIX: Evitar altura infinita en web
+              child: Column(
                   children: [
                   // Pestañas Preview/Code
                   Container(
@@ -2909,7 +3300,6 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                   ),
                 ],
                 ),
-              ),
             ),
                     ),
                   // Logo central cuando Preview/Code está oculto
@@ -2942,6 +3332,43 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                         ),
                       ),
                     ),
+                  // Chat oculto: rail fino para reabrirlo
+                  if (!_chatVisible)
+                    Material(
+                      color: CursorTheme.explorerBackground,
+                      child: InkWell(
+                        onTap: () {
+                          setState(() {
+                            _chatVisible = true;
+                            if (_chatPanelWidth < 220) {
+                              _chatPanelWidth = 320;
+                            }
+                          });
+                        },
+                        child: Container(
+                          width: 28,
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              left: BorderSide(
+                                color: CursorTheme.border,
+                                width: 1,
+                              ),
+                            ),
+                          ),
+                          child: const Center(
+                            child: Tooltip(
+                              message: 'Mostrar chat del agente',
+                              child: Icon(
+                                Icons.chat_bubble_outline,
+                                size: 14,
+                                color: CursorTheme.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_chatVisible) ...[
                   // Divisor: arrastrar ←→ ajusta el ancho del chat (Code/Preview
                   // crece automáticamente al ser Expanded).
           _buildVerticalResizeHandle(
@@ -3170,6 +3597,28 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                                   ),
                                 ),
                               ),
+                              // Ocultar bandeja de chat (libera espacio)
+                              Tooltip(
+                                message: 'Ocultar chat',
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () {
+                                      setState(() => _chatVisible = false);
+                                    },
+                                    child: Container(
+                                      height: 36,
+                                      width: 32,
+                                      alignment: Alignment.center,
+                                      child: Icon(
+                                        Icons.keyboard_double_arrow_right,
+                                        size: 16,
+                                        color: CursorTheme.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -3244,6 +3693,7 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
                       ], // ✅ Cierre de children del Column (del chat)
                     ), // ✅ Cierre de Column (del chat)
                   ), // ✅ Cierre de SizedBox (panel de chat)
+                  ], // chat visible
                 ], // ✅ Cierre de children del Row principal
               );
             },
@@ -3296,5 +3746,34 @@ class _MultiChatScreenState extends State<MultiChatScreen> {
   }
 }
 
-// ✅ ELIMINADOS: Diálogos no funcionales (_GitDialog, _SupabaseDialog, _FirebaseDialog)
-// Solo mostraban "próximamente disponible" sin funcionalidad real
+/// Panel “Editar elemento”: entra desde abajo al seleccionar.
+class _SlidingEditPanel extends StatelessWidget {
+  final double width;
+  final Widget child;
+
+  const _SlidingEditPanel({
+    required this.width,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, _) {
+        return Opacity(
+          opacity: t.clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 72), // sube desde abajo
+            child: SizedBox(
+              width: width,
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}

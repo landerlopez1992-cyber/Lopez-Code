@@ -27,8 +27,15 @@ class PhoneEmulator extends StatefulWidget {
   final bool previewReloadHard;
   /// UI Builder: al soltar/mover un bloque con el mouse.
   final void Function(String blockId, double left, double top)? onUiBuilderMoved;
-  /// UI Builder: texto editado inline (doble clic).
+  /// UI Builder: texto editado inline (doble clic) en bloque data-voryxel-id.
   final void Function(String blockId, String text)? onUiBuilderTextEdited;
+  /// Texto editado en cualquier elemento (Inspector / doble clic).
+  final void Function({
+    required String newText,
+    String? oldText,
+    String? tagName,
+    String? blockId,
+  })? onInspectorTextEdited;
 
   const PhoneEmulator({
     super.key,
@@ -47,6 +54,7 @@ class PhoneEmulator extends StatefulWidget {
     this.previewReloadHard = true,
     this.onUiBuilderMoved,
     this.onUiBuilderTextEdited,
+    this.onInspectorTextEdited,
   });
 
   @override
@@ -76,7 +84,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     InspectorSelectionService().addListener(_onInspectorSelectionChanged);
     _initializeWebView();
     // Si ya hay una URL disponible al inicializar, cargarla (una sola vez).
-    if (widget.appUrl != null && widget.appUrl!.isNotEmpty && widget.isRunning) {
+    if (widget.appUrl != null && widget.appUrl!.isNotEmpty) {
       _initialLoadScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _loadAppUrl();
@@ -167,15 +175,24 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
       if (type == 'textEdited') {
         final id = data['id']?.toString();
         final text = data['text']?.toString();
-        if (id == null || text == null) return;
-        widget.onUiBuilderTextEdited?.call(id, text);
+        if (text == null) return;
+        if (widget.onInspectorTextEdited != null) {
+          widget.onInspectorTextEdited!(
+            newText: text,
+            oldText: data['oldText']?.toString(),
+            tagName: data['tag']?.toString(),
+            blockId: (id != null && id.isNotEmpty) ? id : null,
+          );
+        } else if (id != null && id.isNotEmpty) {
+          widget.onUiBuilderTextEdited?.call(id, text);
+        }
       }
     } catch (e) {
       print('⚠️ UiBuilderChannel: $e');
     }
   }
 
-  /// Helpers JS: drop ancla + arrastrar para reposicionar.
+  /// Helpers JS: drop en coordenadas + arrastrar (document-level, no lo bloquea el Inspector).
   Future<void> _injectUiBuilderHelpers() async {
     const script = r'''
       (function() {
@@ -183,7 +200,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         if (!document.getElementById('__voryxel_body_pos')) {
           var s = document.createElement('style');
           s.id = '__voryxel_body_pos';
-          s.textContent = 'body{position:relative;min-height:100vh;} [data-voryxel-id].__voryxel-dragging{opacity:0.85;outline:2px dashed #3B82F6;}';
+          s.textContent = 'body{position:relative;min-height:100vh;} [data-voryxel-id]{cursor:move;} [data-voryxel-id].__voryxel-dragging{opacity:0.9;outline:2px dashed #3B82F6;z-index:9999 !important;}';
           document.documentElement.appendChild(s);
         }
 
@@ -198,6 +215,13 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
             }
             return true;
           }
+          function isContainer(n) {
+            if (!n || !n.getAttribute) return false;
+            var kind = (n.getAttribute('data-voryxel') || '').toLowerCase();
+            return kind === 'container' || kind === 'card' || kind === 'hero' ||
+              kind === 'column' || kind === 'row' || kind === 'stack' ||
+              kind === 'wrap' || kind === 'form' || n.getAttribute('data-voryxel-container') === '1';
+          }
           var nodes = Array.prototype.slice.call(document.querySelectorAll('[data-voryxel-id]'));
           var top = nodes.filter(isTopLevel);
           var parentId = null, beforeId = null, afterId = null;
@@ -206,8 +230,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           var cur = el;
           while (cur && cur !== document.body && cur !== document.documentElement) {
             try {
-              var kind = cur.getAttribute && cur.getAttribute('data-voryxel');
-              if (kind === 'container' || kind === 'card' || kind === 'hero') {
+              if (isContainer(cur)) {
                 parentId = cur.getAttribute('data-voryxel-id');
                 break;
               }
@@ -224,115 +247,165 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           }
           return JSON.stringify({
             parentId: parentId, beforeId: beforeId, afterId: afterId,
-            x: Math.round(x), y: Math.round(y)
+            x: Math.round(x + (window.scrollX || 0)),
+            y: Math.round(y + (window.scrollY || 0)),
+            placeAbsolute: !parentId
           });
         };
 
-        window.__voryxelBindMove = function(id) {
-          var el = document.querySelector('[data-voryxel-id="' + id + '"]');
-          if (!el) return;
-          if (el.__voryxelMoveBound) return;
-          el.__voryxelMoveBound = true;
-          var dragging = false, primed = false, sx = 0, sy = 0, ol = 0, ot = 0;
-          el.style.cursor = 'move';
-          el.addEventListener('mousedown', function(e) {
-            if (!window.__inspectorActive) return;
+        // Drag a nivel document: el Inspector ya no se traga el mousedown.
+        if (!window.__voryxelMoveInstalled) {
+          window.__voryxelMoveInstalled = true;
+          window.__voryxelMoveId = null;
+          window.__voryxelDragging = false;
+          var primed = false, dragging = false, sx = 0, sy = 0, ol = 0, ot = 0, el = null;
+
+          function currentEl() {
+            var id = window.__voryxelMoveId;
+            if (!id) return null;
+            return document.querySelector('[data-voryxel-id="' + id + '"]');
+          }
+
+          document.addEventListener('mousedown', function(e) {
             if (e.button !== 0) return;
+            var t = e.target;
+            var hit = null;
+            while (t && t !== document.body) {
+              if (t.getAttribute && t.getAttribute('data-voryxel-id')) {
+                hit = t; break;
+              }
+              t = t.parentElement;
+            }
+            if (!hit) return;
+            var id = hit.getAttribute('data-voryxel-id');
+            // Preferir el seleccionado; si no, el que se clickeó.
+            if (window.__voryxelMoveId && window.__voryxelMoveId !== id) {
+              // Si hay uno seleccionado y clickeas otro, no arrastrar el viejo.
+              if (!window.__inspectorActive) return;
+            }
+            window.__voryxelMoveId = id;
+            el = hit;
             primed = true;
+            dragging = false;
             sx = e.clientX; sy = e.clientY;
           }, true);
-          window.addEventListener('mousemove', function(e) {
+
+          document.addEventListener('mousemove', function(e) {
             if (!primed && !dragging) return;
+            el = el || currentEl();
+            if (!el) return;
             var dx = e.clientX - sx, dy = e.clientY - sy;
             if (!dragging) {
-              if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+              if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
               dragging = true;
+              window.__voryxelDragging = true;
               primed = false;
               el.classList.add('__voryxel-dragging');
               var cs = window.getComputedStyle(el);
-              if (cs.position !== 'absolute') {
+              if (cs.position !== 'absolute' && cs.position !== 'fixed') {
                 var rect = el.getBoundingClientRect();
                 el.style.position = 'absolute';
-                el.style.left = (rect.left + window.scrollX) + 'px';
-                el.style.top = (rect.top + window.scrollY) + 'px';
+                el.style.left = (rect.left + (window.scrollX || 0)) + 'px';
+                el.style.top = (rect.top + (window.scrollY || 0)) + 'px';
                 el.style.margin = '0';
-                el.style.zIndex = '40';
+                el.style.zIndex = '9999';
                 el.style.width = rect.width + 'px';
               }
               ol = parseFloat(el.style.left) || 0;
               ot = parseFloat(el.style.top) || 0;
               sx = e.clientX; sy = e.clientY;
-              try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
             }
+            try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
             el.style.left = (ol + e.clientX - sx) + 'px';
             el.style.top = (ot + e.clientY - sy) + 'px';
           }, true);
-          window.addEventListener('mouseup', function() {
+
+          document.addEventListener('mouseup', function() {
             primed = false;
             if (!dragging) return;
             dragging = false;
-            el.classList.remove('__voryxel-dragging');
+            window.__voryxelDragging = false;
+            el = el || currentEl();
+            if (el) el.classList.remove('__voryxel-dragging');
             try {
-              if (typeof UiBuilderChannel !== 'undefined') {
+              if (el && typeof UiBuilderChannel !== 'undefined') {
                 UiBuilderChannel.postMessage(JSON.stringify({
                   type: 'moved',
-                  id: id,
+                  id: window.__voryxelMoveId,
                   left: parseFloat(el.style.left) || 0,
                   top: parseFloat(el.style.top) || 0
                 }));
               }
             } catch (e3) {}
           }, true);
+        }
 
-          // Doble clic → editar texto inline.
-          if (!el.__voryxelTextBound) {
-            el.__voryxelTextBound = true;
-            el.addEventListener('dblclick', function(e) {
-              if (!window.__inspectorActive) return;
-              var target = e.target;
-              if (!target) return;
-              var tag = (target.tagName || '').toLowerCase();
-              var editable = {h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,p:1,span:1,a:1,button:1,li:1,strong:1,label:1};
-              if (!editable[tag]) {
-                target = el.querySelector('h1,h2,h3,h4,h5,h6,p,a,button,span,li,strong,label');
-              }
-              if (!target) return;
-              e.preventDefault(); e.stopPropagation();
-              target.setAttribute('contenteditable', 'true');
-              target.focus();
-              try {
-                var range = document.createRange();
-                range.selectNodeContents(target);
-                var sel = window.getSelection();
-                sel.removeAllRanges(); sel.addRange(range);
-              } catch (e4) {}
-              function finish() {
-                target.removeAttribute('contenteditable');
-                target.removeEventListener('blur', finish);
-                target.removeEventListener('keydown', onKey);
-                var text = (target.innerText || target.textContent || '').trim();
-                try {
-                  if (typeof UiBuilderChannel !== 'undefined') {
-                    UiBuilderChannel.postMessage(JSON.stringify({
-                      type: 'textEdited', id: id, text: text
-                    }));
-                  }
-                } catch (e5) {}
-              }
-              function onKey(ev) {
-                if (ev.key === 'Enter' && !ev.shiftKey) {
-                  ev.preventDefault();
-                  target.blur();
-                }
-                if (ev.key === 'Escape') {
-                  target.blur();
-                }
-              }
-              target.addEventListener('blur', finish);
-              target.addEventListener('keydown', onKey);
-            }, true);
-          }
+        window.__voryxelBindMove = function(id) {
+          window.__voryxelMoveId = id;
+          var el = document.querySelector('[data-voryxel-id="' + id + '"]');
+          if (el) el.style.cursor = 'move';
         };
+
+        window.__voryxelNudge = function(id, dy) {
+          var el = document.querySelector('[data-voryxel-id="' + id + '"]');
+          if (!el) return JSON.stringify({ ok: false });
+          var cs = window.getComputedStyle(el);
+          if (cs.position !== 'absolute' && cs.position !== 'fixed') {
+            var rect = el.getBoundingClientRect();
+            el.style.position = 'absolute';
+            el.style.left = (rect.left + (window.scrollX || 0)) + 'px';
+            el.style.top = (rect.top + (window.scrollY || 0)) + 'px';
+            el.style.margin = '0';
+            el.style.zIndex = '40';
+            el.style.width = rect.width + 'px';
+          }
+          var top = (parseFloat(el.style.top) || 0) + dy;
+          if (top < 0) top = 0;
+          el.style.top = top + 'px';
+          return JSON.stringify({
+            ok: true,
+            left: parseFloat(el.style.left) || 0,
+            top: top
+          });
+        };
+
+        // Doble clic texto (una sola vez).
+        if (!window.__voryxelTextInstalled) {
+          window.__voryxelTextInstalled = true;
+          document.addEventListener('dblclick', function(e) {
+            if (!window.__inspectorActive) return;
+            var root = e.target;
+            while (root && root !== document.body) {
+              if (root.getAttribute && root.getAttribute('data-voryxel-id')) break;
+              root = root.parentElement;
+            }
+            if (!root || !root.getAttribute) return;
+            var id = root.getAttribute('data-voryxel-id');
+            var target = e.target;
+            var tag = (target.tagName || '').toLowerCase();
+            var editable = {h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,p:1,span:1,a:1,button:1,li:1,strong:1,label:1};
+            if (!editable[tag]) {
+              target = root.querySelector('h1,h2,h3,h4,h5,h6,p,a,button,span,li,strong,label');
+            }
+            if (!target) return;
+            e.preventDefault(); e.stopPropagation();
+            target.setAttribute('contenteditable', 'true');
+            target.focus();
+            function finish() {
+              target.removeAttribute('contenteditable');
+              target.removeEventListener('blur', finish);
+              var text = (target.innerText || target.textContent || '').trim();
+              try {
+                if (typeof UiBuilderChannel !== 'undefined') {
+                  UiBuilderChannel.postMessage(JSON.stringify({
+                    type: 'textEdited', id: id, text: text
+                  }));
+                }
+              } catch (e5) {}
+            }
+            target.addEventListener('blur', finish);
+          }, true);
+        }
       })();
     ''';
     try {
@@ -340,6 +413,35 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     } catch (e) {
       print('⚠️ UiBuilder helpers: $e');
     }
+  }
+
+  /// Subir/Bajar visual: mueve `top` en el DOM y devuelve left/top.
+  Future<({double left, double top})?> nudgeUiBuilderBlock(
+    String blockId, {
+    required int direction,
+  }) async {
+    if (!_webViewInitialized || blockId.isEmpty) return null;
+    try {
+      await _injectUiBuilderHelpers();
+      final dy = direction < 0 ? -48.0 : 48.0;
+      final raw = await _webViewController.runJavaScriptReturningResult(
+        'window.__voryxelNudge(${jsonEncode(blockId)}, $dy)',
+      );
+      var text = raw?.toString() ?? '';
+      if (text.startsWith('"') && text.endsWith('"')) {
+        text = text.substring(1, text.length - 1).replaceAll(r'\"', '"');
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is Map && decoded['ok'] == true) {
+        return (
+          left: (decoded['left'] as num?)?.toDouble() ?? 0,
+          top: (decoded['top'] as num?)?.toDouble() ?? 0,
+        );
+      }
+    } catch (e) {
+      print('⚠️ nudgeUiBuilderBlock: $e');
+    }
+    return null;
   }
 
   /// Resuelve dónde insertar según coords normalizadas (0..1) del Preview.
@@ -382,6 +484,107 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     }
   }
 
+  /// Actualiza el texto del elemento seleccionado en el DOM (sin recargar).
+  Future<void> patchSelectedText(String text) async {
+    await patchSelectedProps(text: text);
+  }
+
+  /// Aplica props al elemento seleccionado en el DOM (sin recargar Preview).
+  Future<void> patchSelectedProps({
+    String? text,
+    String? width,
+    String? height,
+    String? color,
+    String? backgroundColor,
+    String? fontSize,
+    String? borderRadius,
+    String? opacity,
+    String? href,
+    String? src,
+  }) async {
+    if (!_webViewInitialized) return;
+    try {
+      final payload = <String, dynamic>{
+        if (text != null) 'text': text,
+        if (width != null) 'width': width,
+        if (height != null) 'height': height,
+        if (color != null) 'color': color,
+        if (backgroundColor != null) 'backgroundColor': backgroundColor,
+        if (fontSize != null) 'fontSize': fontSize,
+        if (borderRadius != null) 'borderRadius': borderRadius,
+        if (opacity != null) 'opacity': opacity,
+        if (href != null) 'href': href,
+        if (src != null) 'src': src,
+      };
+      if (payload.isEmpty) return;
+      final safe = jsonEncode(payload);
+      await _webViewController.runJavaScript('''
+        (function() {
+          var p = $safe;
+          var el = window.__inspectorSelectedEl || window.__inspectorLastSelected || null;
+          if (!el) return;
+          var tag = (el.tagName || '').toLowerCase();
+          if (typeof p.text === 'string' && tag !== 'img' && tag !== 'input') {
+            var editable = {h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,p:1,span:1,a:1,button:1,li:1,strong:1,label:1,div:1};
+            var target = editable[tag] ? el : (el.querySelector('h1,h2,h3,h4,h5,h6,p,a,button,span,li,strong,label') || el);
+            target.textContent = p.text;
+          }
+          function setStyle(k, v) {
+            if (v == null || v === '') return;
+            try { el.style[k] = v; } catch (e1) {}
+          }
+          setStyle('width', p.width);
+          setStyle('height', p.height);
+          setStyle('color', p.color);
+          setStyle('backgroundColor', p.backgroundColor);
+          setStyle('fontSize', p.fontSize);
+          setStyle('borderRadius', p.borderRadius);
+          setStyle('opacity', p.opacity);
+          if (typeof p.src === 'string' && p.src) {
+            try {
+              if (tag === 'img') el.setAttribute('src', p.src);
+              else {
+                var img = el.querySelector('img');
+                if (img) img.setAttribute('src', p.src);
+              }
+            } catch (e2) {}
+          }
+          if (typeof p.href === 'string' && p.href) {
+            try {
+              if (tag === 'a') {
+                el.setAttribute('href', p.href);
+              } else if (tag === 'img') {
+                if (el.parentElement && (el.parentElement.tagName || '').toLowerCase() === 'a') {
+                  el.parentElement.setAttribute('href', p.href);
+                } else {
+                  var a = document.createElement('a');
+                  a.setAttribute('href', p.href);
+                  el.parentNode && el.parentNode.insertBefore(a, el);
+                  a.appendChild(el);
+                }
+              } else {
+                el.setAttribute('data-href', p.href);
+                el.style.cursor = 'pointer';
+                el.onclick = function(ev) {
+                  ev.preventDefault();
+                  try { window.location.href = p.href; } catch (e3) {}
+                };
+              }
+            } catch (e4) {}
+          }
+          try {
+            var r = el.getBoundingClientRect();
+            if (window.__inspectorHighlightRect) {
+              window.__inspectorHighlightRect(r.left, r.top, r.width, r.height, true);
+            }
+          } catch (e5) {}
+        })();
+      ''');
+    } catch (e) {
+      print('⚠️ patchSelectedProps: $e');
+    }
+  }
+
   /// Inyecta el script JavaScript para el inspector de elementos
   Future<void> _injectInspectorScript() async {
     const script = r'''
@@ -390,6 +593,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           if (!window.__inspectorActive) return;
           [
             ['click', window.__inspectorClickHandler],
+            ['dblclick', window.__inspectorDblClickHandler],
             ['mousedown', window.__inspectorMouseDownHandler],
             ['mousemove', window.__inspectorMouseMoveHandler],
             ['mouseout', window.__inspectorHoverOutHandler],
@@ -580,12 +784,43 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
           return cur || fallback;
         }
 
+        function measureHighlightRect(element) {
+          var full = element.getBoundingClientRect();
+          var tag = (element.tagName || '').toLowerCase();
+          var textLike = tag === 'h1' || tag === 'h2' || tag === 'h3' ||
+            tag === 'h4' || tag === 'h5' || tag === 'h6' || tag === 'p' ||
+            tag === 'span' || tag === 'a' || tag === 'label' || tag === 'li' ||
+            tag === 'button' || tag === 'strong' || tag === 'em';
+          if (!textLike || full.height < 8) return full;
+          try {
+            var range = document.createRange();
+            range.selectNodeContents(element);
+            var cr = range.getBoundingClientRect();
+            // Si hay "hueco" (height CSS / line-box inflado), ajustar al texto real.
+            if (cr.height > 4 && cr.width > 4 && cr.height < full.height * 0.82) {
+              var top = Math.max(full.top, cr.top - 2);
+              var height = Math.min(full.height, cr.height + 6);
+              return {
+                left: full.left,
+                top: top,
+                width: full.width,
+                height: height,
+                right: full.left + full.width,
+                bottom: top + height,
+                x: full.left,
+                y: top
+              };
+            }
+          } catch (eMeas) {}
+          return full;
+        }
+
         function updateBox(element, div) {
           if (!element || element === document.body || element === document.documentElement) {
             div.style.display = 'none';
             return null;
           }
-          var rect = element.getBoundingClientRect();
+          var rect = measureHighlightRect(element);
           div.style.left = rect.left + 'px';
           div.style.top = rect.top + 'px';
           div.style.width = Math.max(0, rect.width) + 'px';
@@ -770,9 +1005,13 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
 
         function selectElement(element, x, y) {
           if (!element || element === document.body || element === document.documentElement) return;
+          // Preferir ancestro con id real del UI Builder; NO inventar vb_…
+          // (rompería el guardado en HTML: "No se encontró el bloque").
           element = nearestVoryxel(element);
           currentSelectedElement = element;
           currentHoveredElement = element;
+          window.__inspectorLastSelected = element;
+          window.__inspectorSelectedEl = element;
           var rect = updateBox(element, selectedDiv);
           updateBox(element, highlightDiv);
           updateLabel(element, rect, true);
@@ -806,6 +1045,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
 
         window.__inspectorMouseMoveHandler = function(e) {
           if (!window.__inspectorActive) return;
+          if (window.__voryxelDragging) return;
           var el = pickInspectable(e.clientX, e.clientY, e.target);
           if (el && el !== currentHoveredElement) {
             hoverElement(el, e.clientX, e.clientY);
@@ -829,14 +1069,85 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
 
         window.__inspectorMouseDownHandler = function(e) {
           if (!window.__inspectorActive) return;
+          // No bloquear drag de widgets UI Builder.
+          var t = e.target;
+          while (t && t !== document.body) {
+            if (t.getAttribute && t.getAttribute('data-voryxel-id')) return;
+            t = t.parentElement;
+          }
           stopEvent(e);
         };
 
         window.__inspectorClickHandler = function(e) {
           if (!window.__inspectorActive) return;
+          if (window.__voryxelDragging) return stopEvent(e);
           var el = pickInspectable(e.clientX, e.clientY, e.target);
           if (el) selectElement(el, e.clientX, e.clientY);
           return stopEvent(e);
+        };
+
+        // Doble clic → editar texto encima (cualquier h1–p/a/button…).
+        window.__inspectorDblClickHandler = function(e) {
+          if (!window.__inspectorActive) return;
+          var target = e.target;
+          if (!target || !target.tagName) return;
+          var tag = (target.tagName || '').toLowerCase();
+          var editable = {h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,p:1,span:1,a:1,button:1,li:1,strong:1,label:1};
+          if (!editable[tag]) {
+            var cur = target;
+            while (cur && cur !== document.body) {
+              tag = (cur.tagName || '').toLowerCase();
+              if (editable[tag]) { target = cur; break; }
+              cur = cur.parentElement;
+            }
+            if (!editable[tag]) return;
+          }
+          e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+          selectElement(target, e.clientX, e.clientY);
+          var oldText = (target.innerText || target.textContent || '').trim();
+          var blockId = '';
+          try {
+            var n = target;
+            while (n && n !== document.body) {
+              if (n.getAttribute && n.getAttribute('data-voryxel-id')) {
+                blockId = n.getAttribute('data-voryxel-id') || '';
+                break;
+              }
+              n = n.parentElement;
+            }
+          } catch (e0) {}
+          target.setAttribute('contenteditable', 'true');
+          target.focus();
+          try {
+            var range = document.createRange();
+            range.selectNodeContents(target);
+            var sel = window.getSelection();
+            sel.removeAllRanges(); sel.addRange(range);
+          } catch (e1) {}
+          function finish() {
+            target.removeAttribute('contenteditable');
+            target.removeEventListener('blur', finish);
+            target.removeEventListener('keydown', onKey);
+            var text = (target.innerText || target.textContent || '').trim();
+            try {
+              if (typeof UiBuilderChannel !== 'undefined') {
+                UiBuilderChannel.postMessage(JSON.stringify({
+                  type: 'textEdited',
+                  id: blockId,
+                  text: text,
+                  oldText: oldText,
+                  tag: (target.tagName || '').toLowerCase()
+                }));
+              }
+            } catch (e2) {}
+          }
+          function onKey(ev) {
+            if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); target.blur(); }
+            if (ev.key === 'Escape') { target.blur(); }
+          }
+          target.addEventListener('blur', finish);
+          target.addEventListener('keydown', onKey);
+          return false;
         };
 
         window.__inspectorTouchStartHandler = function(e) {
@@ -875,6 +1186,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         document.addEventListener('mouseout', window.__inspectorHoverOutHandler, true);
         document.addEventListener('mousedown', window.__inspectorMouseDownHandler, true);
         document.addEventListener('click', window.__inspectorClickHandler, true);
+        document.addEventListener('dblclick', window.__inspectorDblClickHandler, true);
         document.addEventListener('touchstart', window.__inspectorTouchStartHandler, true);
         document.addEventListener('touchmove', window.__inspectorTouchMoveHandler, true);
         document.addEventListener('touchend', window.__inspectorTouchEndHandler, true);
@@ -899,6 +1211,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
         if (!window.__inspectorActive) return;
         [
           ['click', window.__inspectorClickHandler],
+          ['dblclick', window.__inspectorDblClickHandler],
           ['mousedown', window.__inspectorMouseDownHandler],
           ['mousemove', window.__inspectorMouseMoveHandler],
           ['mouseout', window.__inspectorHoverOutHandler],
@@ -1020,7 +1333,6 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     // ⚡ soft vs 🔄 hard — botones distintos.
     if (widget.previewReloadNonce != oldWidget.previewReloadNonce &&
         widget.previewReloadNonce > 0 &&
-        widget.isRunning &&
         widget.appUrl != null &&
         widget.appUrl!.isNotEmpty) {
       if (widget.previewReloadHard) {
@@ -1041,16 +1353,14 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     // Cargar URL solo si cambió de verdad o acabó de quedar lista.
     // NUNCA recargar solo porque !_webViewInitialized: eso + logs GET
     // del http.server creaba un bucle infinito de recargas.
+    final hasUrl = widget.appUrl != null && widget.appUrl!.isNotEmpty;
     final becameReady = widget.compilationProgress >= 1.0 &&
         oldWidget.compilationProgress < 1.0 &&
-        widget.appUrl != null &&
-        widget.appUrl!.isNotEmpty &&
-        widget.isRunning;
-    final urlChanged = widget.appUrl != oldWidget.appUrl &&
-        widget.appUrl != null &&
-        widget.appUrl!.isNotEmpty &&
-        widget.isRunning;
-    if (urlChanged || becameReady) {
+        hasUrl;
+    final urlChanged = widget.appUrl != oldWidget.appUrl && hasUrl;
+    final designBecameVisible = hasUrl &&
+        (oldWidget.appUrl == null || oldWidget.appUrl!.isEmpty);
+    if (urlChanged || becameReady || designBecameVisible) {
       print(
         '🔄 PhoneEmulator: URL actualizada de "${oldWidget.appUrl}" '
         'a "${widget.appUrl}"${becameReady ? ' (app lista)' : ''}',
@@ -1149,7 +1459,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
 
       // Web/macOS: monitor rectangular sin carcasa de teléfono
       if (isWeb) {
-        if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
+        if (widget.appUrl != null && widget.appUrl!.isNotEmpty) {
           print('🌐 PhoneEmulator (Web): Mostrando WebView con URL: ${widget.appUrl}');
           return _buildWebMonitor(
             child: _buildWebViewWithInspector(),
@@ -1198,7 +1508,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
       // Si no es Android ni iOS ni Web, tratar como web (fallback)
       if (!isIOS && !isAndroid && !isWeb) {
         // Si hay una URL disponible y está ejecutándose, mostrar WebView tipo monitor
-        if (widget.isRunning && widget.appUrl != null && widget.appUrl!.isNotEmpty) {
+        if (widget.appUrl != null && widget.appUrl!.isNotEmpty) {
           print('🌐 PhoneEmulator (Fallback Web): Mostrando WebView con URL: ${widget.appUrl}');
           return _buildWebMonitor(
             child: _buildWebViewWithInspector(),
@@ -1368,16 +1678,18 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     final statusIcon = (statusH * 0.55).clamp(8.0, 12.0);
     final statusFont = (statusH * 0.55).clamp(8.0, 11.0);
 
+    // Padding del borde (6+6=12) para que el Column no pida más alto que el marco.
+    const borderW = 6.0;
     return SizedBox(
       width: frameW,
       height: frameH,
-      child: Container(
+      child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.black,
           borderRadius: BorderRadius.circular(30),
           border: Border.all(
             color: Colors.grey.shade800,
-            width: 6,
+            width: borderW,
           ),
           boxShadow: [
             BoxShadow(
@@ -1387,111 +1699,114 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
             ),
           ],
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          clipBehavior: Clip.hardEdge,
-          child: ColoredBox(
-            color: CursorTheme.surface,
-            child: Column(
-              children: [
-                SizedBox(
-                  height: statusH,
-                  width: double.infinity,
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Padding(
+          padding: const EdgeInsets.all(borderW),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            clipBehavior: Clip.hardEdge,
+            child: ColoredBox(
+              color: CursorTheme.surface,
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: statusH,
+                    width: double.infinity,
+                    child: ColoredBox(
+                      color: Colors.black,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.signal_cellular_4_bar,
+                                size: statusIcon, color: Colors.white),
+                            SizedBox(width: statusIcon * 0.3),
+                            Icon(Icons.wifi,
+                                size: statusIcon, color: Colors.white),
+                            SizedBox(width: statusIcon * 0.3),
+                            Icon(Icons.battery_full,
+                                size: statusIcon, color: Colors.white),
+                            const Spacer(),
+                            Text(
+                              '9:41',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: statusFont,
+                                fontWeight: FontWeight.w500,
+                                height: 1.0,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ColoredBox(
+                      color: CursorTheme.surface,
+                      child: ClipRect(child: _buildScreenContent()),
+                    ),
+                  ),
+                  SizedBox(
+                    height: navH,
+                    width: double.infinity,
+                    child: ColoredBox(
+                      color: Colors.black,
                       child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
-                          Icon(Icons.signal_cellular_4_bar,
-                              size: statusIcon, color: Colors.white),
-                          SizedBox(width: statusIcon * 0.3),
-                          Icon(Icons.wifi,
-                              size: statusIcon, color: Colors.white),
-                          SizedBox(width: statusIcon * 0.3),
-                          Icon(Icons.battery_full,
-                              size: statusIcon, color: Colors.white),
-                          const Spacer(),
-                          Text(
-                            '9:41',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: statusFont,
-                              fontWeight: FontWeight.w500,
-                              height: 1.0,
+                          _navCircleButton(
+                            size: sideBtn,
+                            onTap: () {
+                              if (_webViewInitialized && widget.isRunning) {
+                                _webViewController.goBack();
+                              }
+                            },
+                            child: Icon(
+                              Icons.arrow_back,
+                              size: sideIcon,
+                              color: Colors.white.withOpacity(0.85),
+                            ),
+                          ),
+                          _navCircleButton(
+                            size: homeBtn,
+                            fill: 0.15,
+                            onTap: () {
+                              if (_webViewInitialized &&
+                                  widget.appUrl != null) {
+                                _webViewController
+                                    .loadRequest(Uri.parse(widget.appUrl!));
+                              }
+                            },
+                            child: Container(
+                              width: homeDot,
+                              height: homeDot,
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                          _navCircleButton(
+                            size: sideBtn,
+                            onTap: () {
+                              if (_webViewInitialized &&
+                                  widget.appUrl != null &&
+                                  widget.appUrl!.isNotEmpty) {
+                                _webViewController.reload();
+                              }
+                            },
+                            child: Icon(
+                              Icons.more_vert,
+                              size: sideIcon,
+                              color: Colors.white.withOpacity(0.85),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                ),
-                // Área del proyecto: único sitio donde puede haber overflow real.
-                Expanded(
-                  child: ColoredBox(
-                    color: CursorTheme.surface,
-                    child: ClipRect(child: _buildScreenContent()),
-                  ),
-                ),
-                SizedBox(
-                  height: navH,
-                  width: double.infinity,
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _navCircleButton(
-                          size: sideBtn,
-                          onTap: () {
-                            if (_webViewInitialized && widget.isRunning) {
-                              _webViewController.goBack();
-                            }
-                          },
-                          child: Icon(
-                            Icons.arrow_back,
-                            size: sideIcon,
-                            color: Colors.white.withOpacity(0.85),
-                          ),
-                        ),
-                        _navCircleButton(
-                          size: homeBtn,
-                          fill: 0.15,
-                          onTap: () {
-                            if (_webViewInitialized &&
-                                widget.isRunning &&
-                                widget.appUrl != null) {
-                              _webViewController
-                                  .loadRequest(Uri.parse(widget.appUrl!));
-                            }
-                          },
-                          child: Container(
-                            width: homeDot,
-                            height: homeDot,
-                            decoration: const BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ),
-                        _navCircleButton(
-                          size: sideBtn,
-                          onTap: () {
-                            if (_webViewInitialized && widget.isRunning) {
-                              _webViewController.reload();
-                            }
-                          },
-                          child: Icon(
-                            Icons.more_vert,
-                            size: sideIcon,
-                            color: Colors.white.withOpacity(0.85),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1580,8 +1895,8 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
     // NUNCA llamar _loadAppUrl desde build(): cada notify del Output
     // reconstruía y disparaba GET / en bucle (scroll temblequeaba).
     final hasUrl = widget.appUrl != null && widget.appUrl!.isNotEmpty;
-    if (widget.isRunning &&
-        hasUrl &&
+    // Diseño HTML o Run: con URL basta para mostrar el WebView.
+    if (hasUrl &&
         (isWeb || isMobilePreview || isAndroid || isIOS)) {
       if (!_initialLoadScheduled && _lastLoadedUrl == null) {
         _initialLoadScheduled = true;
@@ -1805,7 +2120,7 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
                     ),
                     SizedBox(height: 18),
                     Text(
-                      'Presiona Run/Debug para iniciar',
+                      'Sin Preview todavía',
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       style: TextStyle(
@@ -1817,9 +2132,9 @@ class PhoneEmulatorState extends State<PhoneEmulator> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'La aplicación aparecerá aquí',
+                      'Abre un proyecto HTML o cambia a Web · Hot Restart',
                       textAlign: TextAlign.center,
-                      maxLines: 1,
+                      maxLines: 2,
                       style: TextStyle(
                         color: Color(0xB3858585),
                         fontSize: 12,

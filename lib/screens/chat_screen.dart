@@ -17,6 +17,7 @@ import '../services/project_service.dart';
 import '../services/chat_storage_service.dart';
 import '../services/advanced_debugging_service.dart';
 import '../services/project_type_detector.dart';
+import '../services/html_preview_service.dart';
 import '../services/context_builder_service.dart';
 import '../services/checkpoint_service.dart';
 import '../services/project_platform_support.dart';
@@ -1980,8 +1981,10 @@ $compact
     if (preferredPort != null) {
       await ProjectTypeDetector.killProcessOnPort(preferredPort);
     }
-    // Puerto histórico de HTML estático
-    await ProjectTypeDetector.killProcessOnPort(8000);
+    // No matar :8000 si el Preview de diseño HTML lo está usando.
+    if (!HtmlPreviewService.instance.isLive) {
+      await ProjectTypeDetector.killProcessOnPort(8000);
+    }
   }
 
   void _stopRequest() {
@@ -2262,6 +2265,27 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
       final projectType = await ProjectTypeDetector.detectProjectType(
         projectPath,
       );
+
+      // HTML: Preview de diseño vive sin Run. Run solo refresca / asegura.
+      if (projectType == ProjectType.html) {
+        final ok = await HtmlPreviewService.instance.ensureRunning(projectPath);
+        await HtmlPreviewService.instance.refresh(hard: true);
+        if (mounted) {
+          setState(() {
+            _isRunning = false;
+            _isDebugging = false;
+          });
+          if (ok) {
+            AppToast.info(
+              context,
+              'Preview de diseño (armar) — no es Run/Debug',
+            );
+          } else {
+            AppToast.error(context, 'No se pudo iniciar el Preview HTML');
+          }
+        }
+        return;
+      }
 
       if (projectType == ProjectType.unknown) {
         print(
@@ -3445,6 +3469,25 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
         projectPath,
       );
 
+      // HTML: Debug no aplica runtime; solo Preview de diseño.
+      if (projectType == ProjectType.html) {
+        final ok = await HtmlPreviewService.instance.ensureRunning(projectPath);
+        await HtmlPreviewService.instance.refresh(hard: true);
+        if (mounted) {
+          setState(() {
+            _isRunning = false;
+            _isDebugging = false;
+          });
+          if (ok) {
+            AppToast.info(
+              context,
+              'Preview de diseño — usa Run solo en apps con runtime',
+            );
+          }
+        }
+        return;
+      }
+
       if (projectType == ProjectType.unknown) {
         print(
           '❌ ChatScreen._handleDebug: TIPO DE PROYECTO DESCONOCIDO: $projectPath',
@@ -4454,13 +4497,19 @@ Si el error está dentro de .pub-cache, NO repitas flutter clean/pub get: fija l
       _startupTimeoutDebug = null;
     }
 
-    // Detener proceso Flutter real (AdvancedDebuggingService) + UI
-    await _debugService.requestStop();
+    final keepHtmlDesign = HtmlPreviewService.instance.isLive;
 
-    // Detener proceso local (runners no-Flutter) — SIGKILL + liberar :8000
+    // Detener Run/Debug real (Flutter / procesos). NO es el Preview de diseño.
+    await _debugService.requestStop();
     await _killLocalRunner();
-    _debugService.setAppUrl(null);
-    _debugService.setCompilationProgress(0.0, '');
+
+    if (keepHtmlDesign) {
+      // Restaura URL de diseño sin marcar isRunning.
+      HtmlPreviewService.instance.reattach();
+    } else if (!_debugService.isDesignPreview) {
+      _debugService.setAppUrl(null);
+      _debugService.setCompilationProgress(0.0, '');
+    }
     _debugService.setRunning(false);
 
     if (!mounted) return;
